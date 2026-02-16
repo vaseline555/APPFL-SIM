@@ -1,9 +1,9 @@
 import os
 import pathlib
 import logging
+import uuid
 from .utils import LevelFilter
 from typing import Optional
-from datetime import datetime
 try:
     from colorama import Fore, Style
 except Exception:  # pragma: no cover
@@ -14,6 +14,16 @@ except Exception:  # pragma: no cover
 
     Fore = _ColorStub()
     Style = _ColorStub()
+
+
+class _RoundAwareFormatter(logging.Formatter):
+    def __init__(self, pattern: str):
+        super().__init__(pattern)
+
+    def format(self, record: logging.LogRecord) -> str:
+        round_label = getattr(record, "round_label", "")
+        record.round_part = f" ({round_label})" if round_label else ""
+        return super().format(record)
 
 
 class ServerAgentFileLogger:
@@ -28,23 +38,38 @@ class ServerAgentFileLogger:
     def __init__(
         self, file_dir: str = "", file_name: str = "", experiment_id: str = ""
     ) -> None:
-        if file_name != "":
-            file_name += f"_Server_{experiment_id if experiment_id != '' else datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
-
-        self.logger = logging.getLogger(__name__)
+        del experiment_id
+        if file_name != "" and not file_name.endswith(".log"):
+            file_name = f"{file_name}.log"
+        logger_name = __name__ + "_" + (
+            f"{file_dir}/{file_name}".replace("/", "_") if file_name else str(uuid.uuid4())
+        )
+        self.logger = logging.getLogger(logger_name)
         self.logger.setLevel(logging.DEBUG)
 
-        info_fmt = logging.Formatter(
-            f"{Fore.BLUE}{Style.BRIGHT}appfl: ✅{Style.RESET_ALL}[%(asctime)s server]: %(message)s"
+        info_fmt = _RoundAwareFormatter(
+            f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ✅{Style.RESET_ALL}[%(asctime)s | Server%(round_part)s]: %(message)s"
         )
-        debug_fmt = logging.Formatter(
-            f"{Fore.BLUE}{Style.BRIGHT}appfl: 💡{Style.RESET_ALL}[%(asctime)s server]: %(message)s"
+        debug_fmt = _RoundAwareFormatter(
+            f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: 💡{Style.RESET_ALL}[%(asctime)s | Server%(round_part)s]: %(message)s"
         )
-        error_fmt = logging.Formatter(
-            f"{Fore.BLUE}{Style.BRIGHT}appfl: ❌{Style.RESET_ALL}[%(asctime)s server]: %(message)s"
+        error_fmt = _RoundAwareFormatter(
+            f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ❌{Style.RESET_ALL}[%(asctime)s | Server%(round_part)s]: %(message)s"
         )
-        warning_fmt = logging.Formatter(
-            f"{Fore.BLUE}{Style.BRIGHT}appfl: ❗️{Style.RESET_ALL}[%(asctime)s server]: %(message)s"
+        warning_fmt = _RoundAwareFormatter(
+            f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ❗️{Style.RESET_ALL}[%(asctime)s | Server%(round_part)s]: %(message)s"
+        )
+        info_fmt_file = _RoundAwareFormatter(
+            "appfl-sim: ✅[%(asctime)s | Server%(round_part)s]: %(message)s"
+        )
+        debug_fmt_file = _RoundAwareFormatter(
+            "appfl-sim: 💡[%(asctime)s | Server%(round_part)s]: %(message)s"
+        )
+        error_fmt_file = _RoundAwareFormatter(
+            "appfl-sim: ❌[%(asctime)s | Server%(round_part)s]: %(message)s"
+        )
+        warning_fmt_file = _RoundAwareFormatter(
+            "appfl-sim: ❗️[%(asctime)s | Server%(round_part)s]: %(message)s"
         )
 
         num_s_handlers = len(
@@ -74,19 +99,19 @@ class ServerAgentFileLogger:
         if file_dir != "" and file_name != "" and num_f_handlers == 0:
             if not os.path.exists(file_dir):
                 pathlib.Path(file_dir).mkdir(parents=True, exist_ok=True)
-            real_file_name = f"{file_dir}/{file_name}.txt"
+            real_file_name = f"{file_dir}/{file_name}"
             self.log_filepath = real_file_name
             f_handler_info = logging.FileHandler(real_file_name)
-            f_handler_info.setFormatter(info_fmt)
+            f_handler_info.setFormatter(info_fmt_file)
             f_handler_info.addFilter(LevelFilter(logging.INFO))
             f_handler_debug = logging.FileHandler(real_file_name)
-            f_handler_debug.setFormatter(debug_fmt)
+            f_handler_debug.setFormatter(debug_fmt_file)
             f_handler_debug.addFilter(LevelFilter(logging.DEBUG))
             f_handler_error = logging.FileHandler(real_file_name)
-            f_handler_error.setFormatter(error_fmt)
+            f_handler_error.setFormatter(error_fmt_file)
             f_handler_error.addFilter(LevelFilter(logging.ERROR))
             f_handler_warning = logging.FileHandler(real_file_name)
-            f_handler_warning.setFormatter(warning_fmt)
+            f_handler_warning.setFormatter(warning_fmt_file)
             f_handler_warning.addFilter(LevelFilter(logging.WARNING))
             self.logger.addHandler(f_handler_info)
             self.logger.addHandler(f_handler_debug)
@@ -94,17 +119,17 @@ class ServerAgentFileLogger:
             self.logger.addHandler(f_handler_warning)
             self.info(f"Logging to {real_file_name}")
 
-    def info(self, info: str) -> None:
-        self.logger.info(info)
+    def info(self, info: str, round_label: str = "") -> None:
+        self.logger.info(info, extra={"round_label": round_label})
 
-    def debug(self, debug: str) -> None:
-        self.logger.debug(debug)
+    def debug(self, debug: str, round_label: str = "") -> None:
+        self.logger.debug(debug, extra={"round_label": round_label})
 
-    def error(self, error: str) -> None:
-        self.logger.error(error)
+    def error(self, error: str, round_label: str = "") -> None:
+        self.logger.error(error, extra={"round_label": round_label})
 
-    def warning(self, warning: str) -> None:
-        self.logger.warning(warning)
+    def warning(self, warning: str, round_label: str = "") -> None:
+        self.logger.warning(warning, extra={"round_label": round_label})
 
     def get_log_filepath(self) -> Optional[str]:
         if hasattr(self, "log_filepath"):

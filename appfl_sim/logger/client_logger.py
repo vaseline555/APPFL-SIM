@@ -3,7 +3,6 @@ import uuid
 import logging
 import pathlib
 from .utils import LevelFilter
-from datetime import datetime
 try:
     from colorama import Fore, Style
 except Exception:  # pragma: no cover
@@ -15,6 +14,16 @@ except Exception:  # pragma: no cover
     Fore = _ColorStub()
     Style = _ColorStub()
 from typing import List, Dict, Union
+
+
+class _RoundAwareFormatter(logging.Formatter):
+    def __init__(self, pattern: str):
+        super().__init__(pattern)
+
+    def format(self, record: logging.LogRecord) -> str:
+        round_label = getattr(record, "round_label", "")
+        record.round_part = f" ({round_label})" if round_label else ""
+        return super().format(record)
 
 
 class ClientAgentFileLogger:
@@ -33,49 +42,98 @@ class ClientAgentFileLogger:
         file_dir: str = "",
         file_name: str = "",
         experiment_id: str = "",
+        title_every_n: int = 1,
+        show_titles: bool = True,
     ) -> None:
+        del experiment_id
+        self.title_every_n = int(title_every_n)
+        self.show_titles = bool(show_titles)
+        self._content_count = 0
+        self._widths: List[int] = []
+        self._round_label = ""
         if file_name != "":
-            file_name += f"_{logging_id}" if logging_id != "" else ""
-            file_name += f"_{experiment_id if experiment_id != '' else datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}"
+            if logging_id != "":
+                try:
+                    file_name = f"{file_name}_{int(logging_id):04d}"
+                except Exception:
+                    file_name = f"{file_name}_{logging_id}"
+            if not file_name.endswith(".log"):
+                file_name = f"{file_name}.log"
+
+        if logging_id == "":
+            client_label = "Client"
+        else:
+            try:
+                client_label = f"Client {int(logging_id):04d}"
+            except Exception:
+                client_label = f"Client {logging_id}"
 
         self.logger = logging.getLogger(
             __name__ + "_" + logging_id if logging_id != "" else str(uuid.uuid4())
         )
         self.logger.setLevel(logging.DEBUG)
         info_fmt = (
-            logging.Formatter(
-                f"{Fore.BLUE}{Style.BRIGHT}appfl: ✅{Style.RESET_ALL}[%(asctime)s]: %(message)s"
+            _RoundAwareFormatter(
+                f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ✅{Style.RESET_ALL}[%(asctime)s]: %(message)s"
             )
             if logging_id == ""
-            else logging.Formatter(
-                f"{Fore.BLUE}{Style.BRIGHT}appfl: ✅{Style.RESET_ALL}[%(asctime)s {logging_id}]: %(message)s"
+            else _RoundAwareFormatter(
+                f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ✅{Style.RESET_ALL}[%(asctime)s | {client_label}%(round_part)s]: %(message)s"
             )
         )
         debug_fmt = (
-            logging.Formatter(
-                f"{Fore.BLUE}{Style.BRIGHT}appfl: 💡{Style.RESET_ALL}[%(asctime)s]: %(message)s"
+            _RoundAwareFormatter(
+                f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: 💡{Style.RESET_ALL}[%(asctime)s]: %(message)s"
             )
             if logging_id == ""
-            else logging.Formatter(
-                f"{Fore.BLUE}{Style.BRIGHT}appfl: 💡{Style.RESET_ALL}[%(asctime)s {logging_id}]: %(message)s"
+            else _RoundAwareFormatter(
+                f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: 💡{Style.RESET_ALL}[%(asctime)s | {client_label}%(round_part)s]: %(message)s"
             )
         )
         error_fmt = (
-            logging.Formatter(
-                f"{Fore.BLUE}{Style.BRIGHT}appfl: ❌{Style.RESET_ALL}[%(asctime)s]: %(message)s"
+            _RoundAwareFormatter(
+                f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ❌{Style.RESET_ALL}[%(asctime)s]: %(message)s"
             )
             if logging_id == ""
-            else logging.Formatter(
-                f"{Fore.BLUE}{Style.BRIGHT}appfl: ❌{Style.RESET_ALL}[%(asctime)s {logging_id}]: %(message)s"
+            else _RoundAwareFormatter(
+                f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ❌{Style.RESET_ALL}[%(asctime)s | {client_label}%(round_part)s]: %(message)s"
             )
         )
         warning_fmt = (
-            logging.Formatter(
-                f"{Fore.BLUE}{Style.BRIGHT}appfl: ❗️{Style.RESET_ALL}[%(asctime)s]: %(message)s"
+            _RoundAwareFormatter(
+                f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ❗️{Style.RESET_ALL}[%(asctime)s]: %(message)s"
             )
             if logging_id == ""
-            else logging.Formatter(
-                f"{Fore.BLUE}{Style.BRIGHT}appfl: ❗️{Style.RESET_ALL}[%(asctime)s {logging_id}]: %(message)s"
+            else _RoundAwareFormatter(
+                f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ❗️{Style.RESET_ALL}[%(asctime)s | {client_label}%(round_part)s]: %(message)s"
+            )
+        )
+        info_fmt_file = (
+            _RoundAwareFormatter("appfl-sim: ✅[%(asctime)s]: %(message)s")
+            if logging_id == ""
+            else _RoundAwareFormatter(
+                f"appfl-sim: ✅[%(asctime)s | {client_label}%(round_part)s]: %(message)s"
+            )
+        )
+        debug_fmt_file = (
+            _RoundAwareFormatter("appfl-sim: 💡[%(asctime)s]: %(message)s")
+            if logging_id == ""
+            else _RoundAwareFormatter(
+                f"appfl-sim: 💡[%(asctime)s | {client_label}%(round_part)s]: %(message)s"
+            )
+        )
+        error_fmt_file = (
+            _RoundAwareFormatter("appfl-sim: ❌[%(asctime)s]: %(message)s")
+            if logging_id == ""
+            else _RoundAwareFormatter(
+                f"appfl-sim: ❌[%(asctime)s | {client_label}%(round_part)s]: %(message)s"
+            )
+        )
+        warning_fmt_file = (
+            _RoundAwareFormatter("appfl-sim: ❗️[%(asctime)s]: %(message)s")
+            if logging_id == ""
+            else _RoundAwareFormatter(
+                f"appfl-sim: ❗️[%(asctime)s | {client_label}%(round_part)s]: %(message)s"
             )
         )
 
@@ -107,20 +165,20 @@ class ClientAgentFileLogger:
         if file_dir != "" and file_name != "" and num_f_handlers == 0:
             if not os.path.exists(file_dir):
                 pathlib.Path(file_dir).mkdir(parents=True, exist_ok=True)
-            real_file_name = f"{file_dir}/{file_name}.txt"
+            real_file_name = f"{file_dir}/{file_name}"
             # check if the file exists
             file_exists = os.path.exists(real_file_name)
             f_handler_info = logging.FileHandler(real_file_name)
-            f_handler_info.setFormatter(info_fmt)
+            f_handler_info.setFormatter(info_fmt_file)
             f_handler_info.addFilter(LevelFilter(logging.INFO))
             f_handler_debug = logging.FileHandler(real_file_name)
-            f_handler_debug.setFormatter(debug_fmt)
+            f_handler_debug.setFormatter(debug_fmt_file)
             f_handler_debug.addFilter(LevelFilter(logging.DEBUG))
             f_handler_error = logging.FileHandler(real_file_name)
-            f_handler_error.setFormatter(error_fmt)
+            f_handler_error.setFormatter(error_fmt_file)
             f_handler_error.addFilter(LevelFilter(logging.ERROR))
             f_handler_warning = logging.FileHandler(real_file_name)
-            f_handler_warning.setFormatter(warning_fmt)
+            f_handler_warning.setFormatter(warning_fmt_file)
             f_handler_warning.addFilter(LevelFilter(logging.WARNING))
             self.logger.addHandler(f_handler_info)
             self.logger.addHandler(f_handler_debug)
@@ -131,8 +189,11 @@ class ClientAgentFileLogger:
 
     def log_title(self, titles: List) -> None:
         self.titles = titles
-        title = " ".join(["%10s" % t for t in titles])
-        self.info(title)
+        self._widths = [max(len(str(t)), 10) for t in titles]
+        if not self.show_titles:
+            return
+        title = " ".join(["%*s" % (ln, t) for ln, t in zip(self._widths, titles)])
+        self.info(title, round_label=self._round_label)
 
     def set_title(self, titles: List) -> None:
         if not hasattr(self, "titles"):
@@ -149,23 +210,41 @@ class ClientAgentFileLogger:
         else:
             if len(contents) != len(self.titles):
                 raise ValueError("Contents and titles must have the same length")
-        length = [max(len(str(t)), 10) for t in self.titles]
+        if not self._widths:
+            self._widths = [max(len(str(t)), 10) for t in self.titles]
+        if (
+            self.show_titles
+            and self.title_every_n > 0
+            and self._content_count % self.title_every_n == 0
+        ):
+            header = " ".join(
+                ["%*s" % (ln, t) for ln, t in zip(self._widths, self.titles)]
+            )
+            self.info(header)
         content = " ".join(
             [
                 "%*s" % (ln, cnt) if not isinstance(cnt, float) else "%*.4f" % (ln, cnt)
-                for ln, cnt in zip(length, contents)
+                for ln, cnt in zip(self._widths, contents)
             ]
         )
-        self.info(content)
+        self.info(content, round_label=self._round_label)
+        self._content_count += 1
 
-    def info(self, info: str) -> None:
-        self.logger.info(info)
+    def set_round_label(self, round_label: str) -> None:
+        self._round_label = str(round_label)
 
-    def debug(self, debug: str) -> None:
-        self.logger.debug(debug)
+    def info(self, info: str, round_label: str = "") -> None:
+        label = round_label if round_label else self._round_label
+        self.logger.info(info, extra={"round_label": label})
 
-    def error(self, error: str) -> None:
-        self.logger.error(error)
+    def debug(self, debug: str, round_label: str = "") -> None:
+        label = round_label if round_label else self._round_label
+        self.logger.debug(debug, extra={"round_label": label})
 
-    def warning(self, warning: str) -> None:
-        self.logger.warning(warning)
+    def error(self, error: str, round_label: str = "") -> None:
+        label = round_label if round_label else self._round_label
+        self.logger.error(error, extra={"round_label": label})
+
+    def warning(self, warning: str, round_label: str = "") -> None:
+        label = round_label if round_label else self._round_label
+        self.logger.warning(warning, extra={"round_label": label})

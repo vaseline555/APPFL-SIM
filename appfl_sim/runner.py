@@ -4,6 +4,7 @@ import copy
 import sys
 import time
 import random
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, Sequence, Tuple, List, Optional
@@ -189,22 +190,109 @@ def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
     return round_idx % max(1, int(every)) == 0 or round_idx == int(num_rounds)
 
 
-def _build_train_cfg(config: DictConfig, device: str) -> Dict:
+def _build_train_cfg(config: DictConfig, device: str, run_log_dir: str) -> Dict:
     return {
         "device": device,
-        "batch_size": int(config.batch_size),
+        "mode": "epoch",
+        "num_local_epochs": int(config.local_epochs),
+        "train_batch_size": int(config.batch_size),
+        "val_batch_size": int(config.get("eval_batch_size", config.batch_size)),
         "num_workers": int(config.num_workers),
-        "local_epochs": int(config.local_epochs),
-        "optimizer": str(config.optimizer),
+        "optim": str(config.optimizer),
         "optim_args": {
             "lr": float(config.lr),
             "weight_decay": float(config.weight_decay),
         },
         "max_grad_norm": float(config.max_grad_norm),
-        "logging_output_dirname": str(config.log_dir),
-        "logging_output_filename": str(config.log_file),
+        "logging_output_dirname": str(run_log_dir),
+        "logging_output_filename": "client",
         "experiment_id": str(config.exp_name),
+        "client_logging_enabled": True,
+        "client_log_title_every": int(config.get("client_log_title_every", 0)),
+        "client_log_show_titles": _cfg_bool(config, "client_log_show_titles", True),
+        "client_log_title_each_round": _cfg_bool(
+            config, "client_log_title_each_round", True
+        ),
+        "do_pre_validation": _cfg_bool(config, "do_pre_validation", True),
+        "do_validation": _cfg_bool(config, "do_validation", True),
     }
+
+
+def _resolve_client_logging_policy(
+    config: DictConfig,
+    num_clients: int,
+) -> Dict[str, object]:
+    scheme = str(config.get("client_logging_scheme", "auto")).strip().lower()
+    threshold = int(config.get("per_client_logging_threshold", 10))
+    warning_threshold = int(config.get("per_client_logging_warning_threshold", 50))
+    agg_scheme = str(config.get("aggregated_logging_scheme", "server_only")).strip().lower()
+
+    if scheme not in {"auto", "per_client", "aggregated"}:
+        raise ValueError(
+            "client_logging_scheme must be one of: auto, per_client, aggregated"
+        )
+    if agg_scheme != "server_only":
+        raise ValueError("aggregated_logging_scheme currently supports only: server_only")
+
+    if scheme == "aggregated":
+        effective = "aggregated"
+    elif scheme == "per_client":
+        effective = "per_client"
+    else:
+        effective = "per_client" if int(num_clients) <= threshold else "aggregated"
+
+    return {
+        "requested_scheme": scheme,
+        "effective_scheme": effective,
+        "client_logging_enabled": effective == "per_client",
+        "threshold": threshold,
+        "warning_threshold": warning_threshold,
+        "aggregated_scheme": agg_scheme,
+    }
+
+
+def _emit_logging_policy_message(
+    policy: Dict[str, object],
+    num_clients: int,
+    logger: Optional[ServerAgentFileLogger] = None,
+) -> None:
+    requested = str(policy["requested_scheme"])
+    effective = str(policy["effective_scheme"])
+    threshold = int(policy["threshold"])
+    warning_threshold = int(policy["warning_threshold"])
+    agg_scheme = str(policy["aggregated_scheme"])
+
+    def _info(msg: str) -> None:
+        if logger is not None:
+            logger.info(msg)
+        else:
+            print(msg)
+
+    def _warn(msg: str) -> None:
+        if logger is not None:
+            logger.warning(msg)
+        else:
+            print(msg)
+
+    if requested == "auto" and effective == "aggregated":
+        _info(
+            f"Client logging auto-disabled: num_clients={num_clients} > "
+            f"per_client_logging_threshold={threshold}. "
+            f"Using aggregated_logging_scheme={agg_scheme} (server-side metrics only)."
+        )
+        return
+    if requested == "aggregated":
+        _info(
+            f"Using aggregated_logging_scheme={agg_scheme} (server-side metrics only)."
+        )
+        return
+    if requested == "per_client" and int(num_clients) > warning_threshold:
+        _warn(
+            f"Per-client logging is explicitly enabled with "
+            f"num_clients={num_clients} (> {warning_threshold}). "
+            "This may produce large I/O overhead. "
+            "Suggestion: set client_logging_scheme=auto or aggregated."
+        )
 
 
 def _build_clients(
@@ -213,8 +301,11 @@ def _build_clients(
     client_datasets: Sequence,
     local_client_ids,
     device: str,
+    run_log_dir: str,
+    client_logging_enabled: bool = True,
 ):
-    train_cfg = _build_train_cfg(config, device=device)
+    train_cfg = _build_train_cfg(config, device=device, run_log_dir=run_log_dir)
+    train_cfg["client_logging_enabled"] = bool(client_logging_enabled)
     clients = []
     for cid in local_client_ids:
         train_ds, test_ds = client_datasets[int(cid)]
@@ -234,7 +325,7 @@ def _build_clients(
         client.model = copy.deepcopy(model)
         client.train_dataset = train_ds
         client.val_dataset = test_ds
-        client.client_agent_config.train_configs.trainer = "SimVanillaTrainer"
+        client.client_agent_config.train_configs.trainer = "VanillaTrainer"
         client._load_trainer()
         client.id = int(cid)
         clients.append(
@@ -298,6 +389,7 @@ def _log_round(
     config: DictConfig,
     round_idx: int,
     selected_count: int,
+    total_train_clients: int,
     stats,
     weights,
     global_eval_metrics: Optional[Dict[str, float]] = None,
@@ -307,72 +399,182 @@ def _log_round(
     logger: ServerAgentFileLogger | None = None,
     tracker=None,
 ):
-    train_loss = _weighted_mean(stats, "loss")
-    train_acc = _weighted_mean(stats, "accuracy")
-    round_metrics: Dict[str, float] = {
-        "train/loss": float(train_loss),
-        "train/accuracy": float(train_acc),
-        "train/selected_clients": float(selected_count),
+    del weights
+
+    def _entity_line(title: str, body: str) -> str:
+        return f"  {title:<18} {body}"
+
+    round_metrics: Dict[str, object] = {
+        "clients": {
+            "selected": int(selected_count),
+            "total": int(total_train_clients),
+        }
     }
-    log = (
-        f"[Round {round_idx:04d}] selected={selected_count} "
-        f"train_loss={train_loss:.4f} train_acc={train_acc:.4f}"
+    lines = [
+        "--- Round Summary ---",
+        _entity_line("Clients:", f"selected={selected_count}/{total_train_clients}"),
+    ]
+
+    if stats:
+        numeric_train_keys = sorted(
+            {
+                k
+                for values in stats.values()
+                for k, v in values.items()
+                if isinstance(v, (int, float))
+                and k != "num_examples"
+                and not k.startswith("pre_val_")
+                and not k.startswith("post_val_")
+            }
+        )
+        if numeric_train_keys:
+            train_parts = []
+            training_metrics: Dict[str, Dict[str, float]] = {}
+            for key in numeric_train_keys:
+                values = [float(v.get(key, 0.0)) for v in stats.values()]
+                avg_value = float(np.mean(values))
+                std_value = float(np.std(values))
+                training_metrics[key] = {
+                    "avg": avg_value,
+                    "std": std_value,
+                }
+                train_parts.append(f"{key}={avg_value:.4f}/{std_value:.4f}")
+            round_metrics["training"] = training_metrics
+            lines.append(_entity_line("Training:", " | ".join(train_parts)))
+
+    def _append_eval_block(
+        title: str,
+        json_key: str,
+        metrics: Optional[Dict[str, float]],
+        with_client_std: bool = False,
+    ) -> None:
+        if metrics is None:
+            return
+        parts = []
+        section_metrics: Dict[str, object] = {}
+        for key, value in sorted(metrics.items()):
+            if not isinstance(value, (int, float)):
+                continue
+            if key in {"num_clients", "num_examples"}:
+                continue
+            if key.endswith("_min") or key.endswith("_max"):
+                continue
+            if with_client_std and key in {"loss_std", "accuracy_std"}:
+                continue
+            if with_client_std and key in {"loss", "accuracy"}:
+                std_key = f"{key}_std"
+                if std_key in metrics and isinstance(metrics[std_key], (int, float)):
+                    section_metrics[key] = {
+                        "avg": float(value),
+                        "std": float(metrics[std_key]),
+                    }
+                    parts.append(f"{key}={float(value):.4f}/{float(metrics[std_key]):.4f}")
+                else:
+                    section_metrics[key] = float(value)
+                    parts.append(f"{key}={float(value):.4f}")
+            else:
+                section_metrics[key] = float(value)
+                parts.append(f"{key}={float(value):.4f}")
+        if parts:
+            lines.append(_entity_line(f"{title}:", " | ".join(parts)))
+            round_metrics[json_key] = section_metrics
+
+    def _append_federated_extrema(metrics: Optional[Dict[str, float]]) -> None:
+        if metrics is None:
+            return
+        if not (
+            "loss_min" in metrics
+            and "loss_max" in metrics
+            and "accuracy_min" in metrics
+            and "accuracy_max" in metrics
+        ):
+            return
+        lines.append(
+            _entity_line(
+                "Federated Extrema:",
+                f"accuracy[min,max]=[{float(metrics['accuracy_min']):.4f},{float(metrics['accuracy_max']):.4f}]"
+                " | "
+                f"loss[min,max]=[{float(metrics['loss_min']):.4f},{float(metrics['loss_max']):.4f}]",
+            )
+        )
+        round_metrics["fed_extrema"] = {
+            "accuracy": {
+                "min": float(metrics["accuracy_min"]),
+                "max": float(metrics["accuracy_max"]),
+            },
+            "loss": {
+                "min": float(metrics["loss_min"]),
+                "max": float(metrics["loss_max"]),
+            },
+        }
+
+    do_pre_val = _cfg_bool(config, "do_pre_validation", True)
+    do_post_val = _cfg_bool(config, "do_validation", True)
+    if do_pre_val and do_post_val and stats:
+        if all("pre_val_loss" in v and "pre_val_accuracy" in v for v in stats.values()):
+            pre_loss_vals = [float(v["pre_val_loss"]) for v in stats.values()]
+            pre_acc_vals = [float(v["pre_val_accuracy"]) for v in stats.values()]
+            round_metrics["local_pre_eval"] = {
+                "accuracy": {
+                    "avg": float(np.mean(pre_acc_vals)),
+                    "std": float(np.std(pre_acc_vals)),
+                },
+                "loss": {
+                    "avg": float(np.mean(pre_loss_vals)),
+                    "std": float(np.std(pre_loss_vals)),
+                },
+            }
+            lines.append(
+                _entity_line(
+                    "Local Pre-Eval.:",
+                    f"accuracy={np.mean(pre_acc_vals):.4f}/{np.std(pre_acc_vals):.4f} | "
+                    f"loss={np.mean(pre_loss_vals):.4f}/{np.std(pre_loss_vals):.4f}",
+                )
+            )
+        if all("post_val_loss" in v and "post_val_accuracy" in v for v in stats.values()):
+            post_loss_vals = [float(v["post_val_loss"]) for v in stats.values()]
+            post_acc_vals = [float(v["post_val_accuracy"]) for v in stats.values()]
+            round_metrics["local_post_eval"] = {
+                "accuracy": {
+                    "avg": float(np.mean(post_acc_vals)),
+                    "std": float(np.std(post_acc_vals)),
+                },
+                "loss": {
+                    "avg": float(np.mean(post_loss_vals)),
+                    "std": float(np.std(post_loss_vals)),
+                },
+            }
+            lines.append(
+                _entity_line(
+                    "Local Post-Eval.:",
+                    f"accuracy={np.mean(post_acc_vals):.4f}/{np.std(post_acc_vals):.4f} | "
+                    f"loss={np.mean(post_loss_vals):.4f}/{np.std(post_loss_vals):.4f}",
+                )
+            )
+
+    _append_eval_block(
+        "Global Eval.", "global_eval", global_eval_metrics, with_client_std=False
     )
-
-    if global_eval_metrics is not None:
-        round_metrics["eval/loss"] = float(global_eval_metrics["loss"])
-        round_metrics["eval/accuracy"] = float(global_eval_metrics["accuracy"])
-        log += (
-            f" | global_loss={global_eval_metrics['loss']:.4f}"
-            f" global_acc={global_eval_metrics['accuracy']:.4f}"
-        )
+    _append_eval_block(
+        "Federated Eval.", "fed_eval", federated_eval_metrics, with_client_std=True
+    )
+    _append_eval_block(
+        "Fed Eval In.", "fed_eval_in", federated_eval_in_metrics, with_client_std=True
+    )
+    _append_eval_block(
+        "Fed Eval Out.",
+        "fed_eval_out",
+        federated_eval_out_metrics,
+        with_client_std=True,
+    )
     if federated_eval_metrics is not None:
-        round_metrics["fed_eval/loss"] = float(federated_eval_metrics["loss"])
-        round_metrics["fed_eval/accuracy"] = float(federated_eval_metrics["accuracy"])
-        round_metrics["fed_eval/num_clients"] = float(
-            federated_eval_metrics.get("num_clients", 0)
-        )
-        log += (
-            f" | fed_eval_loss={federated_eval_metrics['loss']:.4f}"
-            f" fed_eval_acc={federated_eval_metrics['accuracy']:.4f}"
-            f" fed_eval_clients={int(federated_eval_metrics.get('num_clients', 0))}"
-        )
-    if federated_eval_in_metrics is not None:
-        round_metrics["fed_eval_in/loss"] = float(federated_eval_in_metrics["loss"])
-        round_metrics["fed_eval_in/accuracy"] = float(
-            federated_eval_in_metrics["accuracy"]
-        )
-        round_metrics["fed_eval_in/num_clients"] = float(
-            federated_eval_in_metrics.get("num_clients", 0)
-        )
-        log += (
-            f" | fed_in_loss={federated_eval_in_metrics['loss']:.4f}"
-            f" fed_in_acc={federated_eval_in_metrics['accuracy']:.4f}"
-            f" fed_in_clients={int(federated_eval_in_metrics.get('num_clients', 0))}"
-        )
-    if federated_eval_out_metrics is not None:
-        round_metrics["fed_eval_out/loss"] = float(federated_eval_out_metrics["loss"])
-        round_metrics["fed_eval_out/accuracy"] = float(
-            federated_eval_out_metrics["accuracy"]
-        )
-        round_metrics["fed_eval_out/num_clients"] = float(
-            federated_eval_out_metrics.get("num_clients", 0)
-        )
-        log += (
-            f" | fed_out_loss={federated_eval_out_metrics['loss']:.4f}"
-            f" fed_out_acc={federated_eval_out_metrics['accuracy']:.4f}"
-            f" fed_out_clients={int(federated_eval_out_metrics.get('num_clients', 0))}"
-        )
+        _append_federated_extrema(federated_eval_metrics)
+    elif federated_eval_in_metrics is not None:
+        _append_federated_extrema(federated_eval_in_metrics)
 
-    if weights:
-        min_w = min(weights.values())
-        max_w = max(weights.values())
-        round_metrics["agg/weight_min"] = float(min_w)
-        round_metrics["agg/weight_max"] = float(max_w)
-        log += f" | agg_w[min,max]=({min_w:.4f},{max_w:.4f})"
-
+    log = "\n".join(lines)
     if logger is not None:
-        logger.info(log)
+        logger.info(log, round_label=f"Round {round_idx:04d}")
     else:
         print(log)
     if tracker is not None:
@@ -380,11 +582,44 @@ def _log_round(
 
 
 def _new_server_logger(config: DictConfig, mode: str) -> ServerAgentFileLogger:
-    file_name = f"{config.log_file}_{mode}"
+    del mode
+    run_ts = str(config.get("run_timestamp", "")).strip()
+    run_dir = Path(str(config.log_dir)) / str(config.exp_name) / run_ts
     return ServerAgentFileLogger(
-        file_dir=str(config.log_dir),
-        file_name=file_name,
+        file_dir=str(run_dir),
+        file_name="server.log",
         experiment_id=str(config.exp_name),
+    )
+
+
+def _resolve_run_timestamp(config: DictConfig, preset: Optional[str] = None) -> str:
+    run_ts = str(preset if preset is not None else config.get("run_timestamp", "")).strip()
+    if run_ts == "":
+        run_ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    config.run_timestamp = run_ts
+    return run_ts
+
+
+def _start_summary_lines(
+    mode: str,
+    config: DictConfig,
+    num_clients: int,
+    train_client_count: int,
+    holdout_client_count: int,
+) -> str:
+    return "\n".join(
+        [
+            f"Start {mode.upper()} simulation",
+            f"  * Experiment: {config.exp_name}",
+            f"  * Algorithm: {config.algorithm}",
+            f"  * Dataset: {config.dataset}",
+            f"  * Rounds: {config.num_rounds}",
+            f"  * Total Clients: {num_clients}",
+            f"  * Per-round Clients: {train_client_count}",
+            f"  * Evaluation Scheme: {config.get('federated_eval_scheme', 'holdout_dataset')}",
+            f"  * Holdout Clients (evaluation): {holdout_client_count}\n" \
+                if config.get('federated_eval_scheme', 'holdout_dataset') == 'holdout_client' else ''
+        ]
     )
 
 
@@ -510,18 +745,32 @@ def _aggregate_eval_stats(stats: Dict[int, Dict]) -> Optional[Dict[str, float]]:
     if not stats:
         return None
     total_examples = sum(int(v.get("num_examples", 0)) for v in stats.values())
+    loss_vals = [float(v.get("loss", -1.0)) for v in stats.values() if "loss" in v]
+    acc_vals = [float(v.get("accuracy", -1.0)) for v in stats.values() if "accuracy" in v]
     if total_examples <= 0:
         return {
             "loss": -1.0,
             "accuracy": -1.0,
+            "loss_std": -1.0,
+            "accuracy_std": -1.0,
             "num_examples": 0,
             "num_clients": len(stats),
+            "loss_min": -1.0,
+            "loss_max": -1.0,
+            "accuracy_min": -1.0,
+            "accuracy_max": -1.0,
         }
     return {
         "loss": float(_weighted_mean(stats, "loss")),
         "accuracy": float(_weighted_mean(stats, "accuracy")),
+        "loss_std": float(np.std(loss_vals)) if loss_vals else 0.0,
+        "accuracy_std": float(np.std(acc_vals)) if acc_vals else 0.0,
         "num_examples": int(total_examples),
         "num_clients": int(len(stats)),
+        "loss_min": float(min(loss_vals)) if loss_vals else -1.0,
+        "loss_max": float(max(loss_vals)) if loss_vals else -1.0,
+        "accuracy_min": float(min(acc_vals)) if acc_vals else -1.0,
+        "accuracy_max": float(max(acc_vals)) if acc_vals else -1.0,
     }
 
 
@@ -547,7 +796,10 @@ def _collect_server_updates(rank_payloads: Dict[int, Dict]) -> Tuple[Dict, Dict,
     sample_sizes = {}
     train_stats = {}
     for cid, payload in rank_payloads.items():
-        local_states[int(cid)] = payload["state"]
+        state = payload["state"]
+        if isinstance(state, tuple):
+            state = state[0]
+        local_states[int(cid)] = state
         sample_sizes[int(cid)] = int(payload.get("num_examples", 0))
         train_stats[int(cid)] = payload.get("stats", {})
     return local_states, sample_sizes, train_stats
@@ -565,12 +817,12 @@ def _run_server_mpi(
     tracker=None,
 ):
     t0 = time.time()
-    fed_scheme = str(config.get("federated_eval_scheme", "holdout_dataset"))
-    start_msg = (
-        f"[appfl-sim] start(mpi) experiment='{config.exp_name}' algo={config.algorithm} "
-        f"dataset={config.dataset} clients={server.num_clients} rounds={config.num_rounds} "
-        f"fed_eval_scheme={fed_scheme} train_clients={len(train_client_ids)} "
-        f"holdout_eval_clients={len(holdout_client_ids)}"
+    start_msg = _start_summary_lines(
+        mode="mpi",
+        config=config,
+        num_clients=int(server.num_clients),
+        train_client_count=len(train_client_ids),
+        holdout_client_count=len(holdout_client_ids),
     )
     if logger is not None:
         logger.info(start_msg)
@@ -644,6 +896,7 @@ def _run_server_mpi(
             config,
             round_idx,
             len(selected_ids),
+            len(train_client_ids),
             train_stats,
             weights,
             global_eval_metrics=global_eval_metrics,
@@ -656,7 +909,7 @@ def _run_server_mpi(
         round_idx += 1
 
     communicator.barrier()
-    finish_msg = f"[appfl-sim] finished(mpi) in {time.time() - t0:.2f}s"
+    finish_msg = f"Finished MPI simulation in {time.time() - t0:.2f}s."
     if logger is not None:
         logger.info(finish_msg)
     else:
@@ -692,8 +945,11 @@ def _run_client_mpi(communicator, clients):
                     continue
                 client.download(global_state)
                 train_result = client.update(round_idx=round_idx)
+                state = client.upload()
+                if isinstance(state, tuple):
+                    state = state[0]
                 local_payload[int(client.id)] = {
-                    "state": client.upload(),
+                    "state": state,
                     "num_examples": int(train_result.get("num_examples", 0)),
                     "stats": train_result,
                 }
@@ -709,6 +965,8 @@ def run_serial(config) -> None:
 
     set_seed_everything(int(config.seed))
     t0 = time.time()
+    run_ts = _resolve_run_timestamp(config)
+    run_log_dir = str(Path(str(config.log_dir)) / str(config.exp_name) / run_ts)
     server_logger = _new_server_logger(config, mode="serial")
     tracker = create_experiment_tracker(config)
 
@@ -719,6 +977,10 @@ def run_serial(config) -> None:
     runtime_cfg = _merge_runtime_cfg(config, args)
     _validate_loader_output(client_datasets, runtime_cfg)
     num_clients = int(runtime_cfg["num_clients"])
+    logging_policy = _resolve_client_logging_policy(config, num_clients=num_clients)
+    _emit_logging_policy_message(
+        logging_policy, num_clients=num_clients, logger=server_logger
+    )
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
@@ -744,13 +1006,18 @@ def run_serial(config) -> None:
         client_datasets=client_datasets,
         local_client_ids=np.arange(num_clients).astype(int),
         device=resolve_rank_device(str(config.device), rank=1, world_size=2),
+        run_log_dir=run_log_dir,
+        client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
     )
 
     server_logger.info(
-        f"[appfl-sim] start(serial) experiment='{config.exp_name}' algo={config.algorithm} "
-        f"dataset={config.dataset} clients={num_clients} rounds={config.num_rounds} "
-        f"fed_eval_scheme={config.get('federated_eval_scheme', 'holdout_dataset')} "
-        f"train_clients={len(train_client_ids)} holdout_eval_clients={len(holdout_client_ids)}"
+        _start_summary_lines(
+            mode="serial",
+            config=config,
+            num_clients=num_clients,
+            train_client_count=len(train_client_ids),
+            holdout_client_count=len(holdout_client_ids),
+        )
     )
 
     for round_idx in range(1, int(config.num_rounds) + 1):
@@ -769,7 +1036,10 @@ def run_serial(config) -> None:
                 continue
             client.download(global_state)
             train_result = client.update(round_idx=round_idx)
-            updates[client.id] = client.upload()
+            state = client.upload()
+            if isinstance(state, tuple):
+                state = state[0]
+            updates[client.id] = state
             sample_sizes[client.id] = int(train_result["num_examples"])
             stats[client.id] = train_result
 
@@ -814,6 +1084,7 @@ def run_serial(config) -> None:
             config,
             round_idx,
             len(selected_ids),
+            len(train_client_ids),
             stats,
             weights,
             global_eval_metrics=global_eval_metrics,
@@ -824,7 +1095,7 @@ def run_serial(config) -> None:
             tracker=tracker,
         )
 
-    server_logger.info(f"[appfl-sim] finished(serial) in {time.time() - t0:.2f}s")
+    server_logger.info(f"Finished serial simulation in {time.time() - t0:.2f}s.")
     if tracker is not None:
         tracker.close()
 
@@ -847,6 +1118,12 @@ def run_mpi(config) -> None:
             )
         return
 
+    run_ts_root = str(config.get("run_timestamp", "")).strip() if rank == 0 else ""
+    run_ts_root = _resolve_run_timestamp(config, preset=run_ts_root) if rank == 0 else ""
+    run_ts = communicator.comm.bcast(run_ts_root, root=0)
+    _resolve_run_timestamp(config, preset=run_ts)
+    run_log_dir = str(Path(str(config.log_dir)) / str(config.exp_name) / run_ts)
+
     set_seed_everything(int(config.seed))
     _, client_datasets, server_dataset, args = _load_dataset_mpi(
         config=config, communicator=communicator, rank=rank
@@ -856,6 +1133,7 @@ def run_mpi(config) -> None:
     _validate_loader_output(client_datasets, runtime_cfg)
 
     num_clients = int(runtime_cfg["num_clients"])
+    logging_policy = _resolve_client_logging_policy(config, num_clients=num_clients)
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
@@ -873,8 +1151,11 @@ def run_mpi(config) -> None:
 
     if rank == 0:
         server_logger = _new_server_logger(config, mode="mpi")
+        _emit_logging_policy_message(
+            logging_policy, num_clients=num_clients, logger=server_logger
+        )
         server_logger.info(
-            f"[appfl-sim] mpi world_size={world_size} rank={rank} local_rank={local_rank} "
+            f"MPI context: world_size={world_size} rank={rank} local_rank={local_rank} "
             f"download_mode={_mpi_download_mode(config)}"
         )
         tracker = create_experiment_tracker(config)
@@ -910,7 +1191,7 @@ def run_mpi(config) -> None:
     )
     if _cfg_bool(config, "mpi_log_rank_mapping", False):
         print(
-            f"[appfl-sim][rank={rank}] local_rank={local_rank} "
+            f"MPI rank mapping: rank={rank} local_rank={local_rank} "
             f"client_device={client_device} num_local_clients={len(local_client_ids)}"
         )
 
@@ -920,6 +1201,8 @@ def run_mpi(config) -> None:
         client_datasets=client_datasets,
         local_client_ids=local_client_ids,
         device=client_device,
+        run_log_dir=run_log_dir,
+        client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
     )
     _run_client_mpi(communicator, clients)
 

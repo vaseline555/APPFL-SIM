@@ -78,6 +78,10 @@ data_dir: ./data
 log_dir: ./logs
 log_file: appfl-sim
 logging_backend: file
+client_logging_scheme: auto
+per_client_logging_threshold: 10
+per_client_logging_warning_threshold: 50
+aggregated_logging_scheme: server_only
 project_name: appfl-sim
 experiment_name: appfl-sim
 wandb_entity: ""

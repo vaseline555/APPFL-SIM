@@ -1,0 +1,28 @@
+backend: serial
+exp_name: mnist-iid-aggregated-log
+algorithm: fedavg
+
+dataset: MNIST
+dataset_loader: torchvision
+model_name: SimpleCNN
+
+num_clients: 20
+num_rounds: 2
+client_fraction: 1.0
+split_type: iid
+local_epochs: 1
+batch_size: 32
+
+logging_backend: file
+client_logging_scheme: aggregated
+aggregated_logging_scheme: server_only
+per_client_logging_threshold: 10
+per_client_logging_warning_threshold: 50
+
+project_name: mnist-aggregated-log
+experiment_name: mnist-iid-aggregated-log
+
+log_dir: ./logs
+data_dir: ./data
+device: cpu
+server_device: cpu

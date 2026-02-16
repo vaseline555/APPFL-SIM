@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict
 
 from omegaconf import DictConfig, OmegaConf
 
@@ -13,6 +15,8 @@ class TrackerConfig:
     backend: str
     project_name: str
     experiment_name: str
+    exp_name: str
+    run_timestamp: str
     log_dir: str
     wandb_entity: str = ""
     wandb_mode: str = "online"
@@ -26,9 +30,13 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
 
     backend = str(cfg.get("logging_backend", cfg.get("logger_backend", "file"))).lower()
     project_name = str(cfg.get("project_name", cfg.get("exp_name", "appfl-sim")))
+    exp_name = str(cfg.get("exp_name", project_name))
     experiment_name = str(
         cfg.get("experiment_name", cfg.get("exp_name", project_name))
     )
+    run_timestamp = str(cfg.get("run_timestamp", "")).strip()
+    if run_timestamp == "":
+        run_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     log_dir = str(cfg.get("log_dir", "./logs"))
     wandb_entity = str(cfg.get("wandb_entity", ""))
     wandb_mode = str(cfg.get("wandb_mode", "online")).lower()
@@ -36,6 +44,8 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
         backend=backend,
         project_name=project_name,
         experiment_name=experiment_name,
+        exp_name=exp_name,
+        run_timestamp=run_timestamp,
         log_dir=log_dir,
         wandb_entity=wandb_entity,
         wandb_mode=wandb_mode,
@@ -64,8 +74,22 @@ class ExperimentTracker:
         self._writer = None
         self._wandb = None
         self._run = None
+        self._metrics_json_path = None
+        self._metrics_records: list[dict[str, Any]] = []
 
         if self.backend in {"none", "file", "console"}:
+            run_dir = Path(cfg.log_dir) / cfg.exp_name / cfg.run_timestamp
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._metrics_json_path = run_dir / "metrics.json"
+            if self._metrics_json_path.exists():
+                try:
+                    content = json.loads(
+                        self._metrics_json_path.read_text(encoding="utf-8")
+                    )
+                    if isinstance(content, list):
+                        self._metrics_records = content
+                except Exception:
+                    self._metrics_records = []
             return
 
         if self.backend == "tensorboard":
@@ -112,21 +136,74 @@ class ExperimentTracker:
             return
 
         raise ValueError(
-            "logging_backend must be one of: file, tensorboard, wandb, none"
+            "logging_backend must be one of: none, file, console, tensorboard, wandb"
         )
 
-    def log_metrics(self, step: int, metrics: Dict[str, float]) -> None:
+    @staticmethod
+    def _to_json_compatible(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                str(k): ExperimentTracker._to_json_compatible(v)
+                for k, v in value.items()
+            }
+        if isinstance(value, (list, tuple)):
+            return [ExperimentTracker._to_json_compatible(v) for v in value]
+        if isinstance(value, (str, bool)) or value is None:
+            return value
+        if isinstance(value, int):
+            return int(value)
+        if isinstance(value, float):
+            return float(value)
+        if hasattr(value, "item"):
+            try:
+                return value.item()
+            except Exception:
+                pass
+        return str(value)
+
+    @staticmethod
+    def _flatten_numeric_metrics(metrics: Dict[str, Any], prefix: str = "") -> Dict[str, float]:
+        flat: Dict[str, float] = {}
+        for key, val in metrics.items():
+            name = f"{prefix}/{key}" if prefix else str(key)
+            if isinstance(val, dict):
+                flat.update(ExperimentTracker._flatten_numeric_metrics(val, prefix=name))
+                continue
+            if isinstance(val, (int, float)):
+                flat[name] = float(val)
+                continue
+            if hasattr(val, "item"):
+                try:
+                    scalar = val.item()
+                    if isinstance(scalar, (int, float)):
+                        flat[name] = float(scalar)
+                except Exception:
+                    continue
+        return flat
+
+    def log_metrics(self, step: int, metrics: Dict[str, Any]) -> None:
         if not metrics:
             return
         if self.backend in {"none", "file", "console"}:
+            if self._metrics_json_path is None:
+                return
+            payload = {
+                "round": int(step),
+                "metrics": self._to_json_compatible(metrics),
+            }
+            self._metrics_records.append(payload)
+            self._metrics_json_path.write_text(
+                json.dumps(self._metrics_records, indent=4, ensure_ascii=False),
+                encoding="utf-8",
+            )
             return
         if self.backend == "tensorboard" and self._writer is not None:
-            for key, val in metrics.items():
+            for key, val in self._flatten_numeric_metrics(metrics).items():
                 self._writer.add_scalar(key, float(val), global_step=int(step))
             self._writer.flush()
             return
         if self.backend == "wandb" and self._wandb is not None:
-            payload = dict(metrics)
+            payload = self._flatten_numeric_metrics(metrics)
             payload["round"] = int(step)
             self._wandb.log(payload, step=int(step))
 
@@ -139,8 +216,5 @@ class ExperimentTracker:
             self._run = None
 
 
-def create_experiment_tracker(config: DictConfig | dict) -> Optional[ExperimentTracker]:
-    tracker = ExperimentTracker(config)
-    if tracker.backend in {"none", "file", "console"}:
-        return None
-    return tracker
+def create_experiment_tracker(config: DictConfig | dict) -> ExperimentTracker:
+    return ExperimentTracker(config)

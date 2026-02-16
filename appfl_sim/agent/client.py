@@ -23,6 +23,32 @@ from appfl_sim.misc.utils import (
     run_function_from_file_source,
 )
 
+
+class _NullClientLogger:
+    """No-op logger used when client-side logging is disabled."""
+
+    def log_title(self, titles):
+        return None
+
+    def set_title(self, titles):
+        return None
+
+    def log_content(self, contents):
+        return None
+
+    def info(self, info: str):
+        return None
+
+    def debug(self, debug: str):
+        return None
+
+    def error(self, error: str):
+        return None
+
+    def warning(self, warning: str):
+        return None
+
+
 try:
     import wandb
 except Exception:  # pragma: no cover
@@ -468,6 +494,11 @@ class ClientAgent:
             kwargs["file_dir"] = "./output"
             kwargs["file_name"] = "result"
         else:
+            if not self.client_agent_config.train_configs.get(
+                "client_logging_enabled", True
+            ):
+                self.logger = _NullClientLogger()
+                return
             kwargs["file_dir"] = self.client_agent_config.train_configs.get(
                 "logging_output_dirname", "./output"
             )
@@ -476,6 +507,16 @@ class ClientAgent:
             )
         if hasattr(self.client_agent_config, "experiment_id"):
             kwargs["experiment_id"] = self.client_agent_config.experiment_id
+        kwargs["title_every_n"] = (
+            self.client_agent_config.train_configs.get("client_log_title_every", 1)
+            if hasattr(self.client_agent_config, "train_configs")
+            else 1
+        )
+        kwargs["show_titles"] = (
+            self.client_agent_config.train_configs.get("client_log_show_titles", False)
+            if hasattr(self.client_agent_config, "train_configs")
+            else False
+        )
         self.logger = ClientAgentFileLogger(**kwargs)
 
     def _load_data(self) -> None:

@@ -26,8 +26,6 @@ try:
 except Exception:  # pragma: no cover
     FedSBTrainer = None
 
-from .sim_vanilla_trainer import VanillaTrainer as SimVanillaTrainer
-
 __all__ = [
     "BaseTrainer",
     "VanillaTrainer",
@@ -35,5 +33,4 @@ __all__ = [
     "ICEADMMTrainer",
     "MonaiTrainer",
     "FedSBTrainer",
-    "SimVanillaTrainer",
 ]

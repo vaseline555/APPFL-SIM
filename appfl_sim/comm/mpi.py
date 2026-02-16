@@ -74,5 +74,5 @@ class MpiSyncCommunicator:
 
 def get_mpi_comm():
     if MPI is None:
-        raise RuntimeError("mpi4py is required. Install with: pip install 'appfl[sim]'")
+        raise RuntimeError("mpi4py is required.")
     return MPI.COMM_WORLD

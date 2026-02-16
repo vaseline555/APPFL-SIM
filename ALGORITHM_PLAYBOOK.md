@@ -1,23 +1,14 @@
 # Researcher Playbook: Add Your Own FL Algorithm
 
-This guide is for first-time contributors (including entry-level graduate students).
+For the first-time contributors.
 
 Goal:
 - Implement your FL idea in `appfl_sim` for simulation.
 - Optionally export it into `APPFL-main` in plug-and-play format.
 
-Estimated time:
-- First working prototype: 1-2 hours.
-
 ---
 
 ## 0) Before you start
-
-Run from:
-
-```bash
-cd /Users/vaseline555/Desktop/workspace/APPFL_SIM/source
-```
 
 Sanity run first:
 

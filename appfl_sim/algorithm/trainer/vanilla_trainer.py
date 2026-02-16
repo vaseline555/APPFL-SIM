@@ -45,6 +45,17 @@ logging.getLogger().handlers.clear()
 logging.getLogger().setLevel(logging.WARNING)
 
 
+def _default_classification_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Fallback accuracy metric when no metric is configured."""
+    if y_true.size == 0 or y_pred.size == 0:
+        return 0.0
+    if y_pred.ndim <= 1:
+        return 0.0
+    pred_labels = np.argmax(y_pred, axis=1)
+    true_labels = y_true.reshape(-1)
+    return float(np.mean(pred_labels == true_labels))
+
+
 class VanillaTrainer(BaseTrainer):
     """
     VanillaTrainer:
@@ -75,8 +86,44 @@ class VanillaTrainer(BaseTrainer):
             logger=logger,
             **kwargs,
         )
+        # Backward compatibility with sim-style train config keys.
+        if not hasattr(train_configs, "mode"):
+            train_configs.mode = "epoch"
+        if (
+            train_configs.mode == "epoch"
+            and not hasattr(train_configs, "num_local_epochs")
+            and hasattr(train_configs, "local_epochs")
+        ):
+            train_configs.num_local_epochs = int(train_configs.local_epochs)
+        if not hasattr(train_configs, "optim"):
+            train_configs.optim = str(
+                train_configs.get("optimizer", train_configs.get("optim", "SGD"))
+            )
+        if not hasattr(train_configs, "optim_args"):
+            train_configs.optim_args = {
+                "lr": float(train_configs.get("lr", 0.01)),
+                "weight_decay": float(train_configs.get("weight_decay", 0.0)),
+            }
+        if not hasattr(train_configs, "train_batch_size"):
+            train_configs.train_batch_size = int(
+                train_configs.get("batch_size", train_configs.get("train_batch_size", 32))
+            )
+        if not hasattr(train_configs, "val_batch_size"):
+            train_configs.val_batch_size = int(
+                train_configs.get("val_batch_size", train_configs.get("batch_size", 32))
+            )
+        if (
+            float(train_configs.get("max_grad_norm", 0.0)) > 0.0
+            and not train_configs.get("clip_grad", False)
+        ):
+            train_configs.clip_grad = True
+            train_configs.clip_value = float(train_configs.max_grad_norm)
+            train_configs.clip_norm = float(train_configs.get("clip_norm", 2.0))
+
         # Check for optimize_memory in train_configs, default to True
         self.optimize_memory = getattr(train_configs, "optimize_memory", True)
+        if self.metric is None:
+            self.metric = _default_classification_accuracy
 
         self.privacy_engine = None
         if not hasattr(self.train_configs, "device"):
@@ -127,6 +174,8 @@ class VanillaTrainer(BaseTrainer):
         """
         if "round" in kwargs:
             self.round = kwargs["round"]
+        if hasattr(self.logger, "set_round_label"):
+            self.logger.set_round_label(f"Round {int(self.round):04d}")
         self.val_results = {"round": self.round + 1}
 
         # Store the previous model state for gradient computation
@@ -154,11 +203,10 @@ class VanillaTrainer(BaseTrainer):
 
         # Set up logging title
         title = (
-            ["Round", "Time", "Train Loss", "Train Accuracy"]
+            ["Time", "Train Loss", "Train Accuracy"]
             if (not do_validation) and (not do_pre_validation)
             else (
                 [
-                    "Round",
                     "Pre Val?",
                     "Time",
                     "Train Loss",
@@ -168,7 +216,6 @@ class VanillaTrainer(BaseTrainer):
                 ]
                 if do_pre_validation
                 else [
-                    "Round",
                     "Time",
                     "Train Loss",
                     "Train Accuracy",
@@ -178,9 +225,11 @@ class VanillaTrainer(BaseTrainer):
             )
         )
         if self.train_configs.mode == "epoch":
-            title.insert(1, "Epoch")
+            title.insert(0, "Epoch")
 
-        if self.round == 0:
+        if self.train_configs.get("client_log_title_each_round", True):
+            self.logger.log_title(title)
+        elif not hasattr(self.logger, "titles"):
             self.logger.log_title(title)
         self.logger.set_title(title)
 
@@ -197,9 +246,9 @@ class VanillaTrainer(BaseTrainer):
                 val_loss, val_accuracy = self._validate()
                 self.val_results["pre_val_loss"] = val_loss
                 self.val_results["pre_val_accuracy"] = val_accuracy
-                content = [self.round, "Y", " ", " ", " ", val_loss, val_accuracy]
+                content = ["Y", "-", "-", "-", val_loss, val_accuracy]
                 if self.train_configs.mode == "epoch":
-                    content.insert(1, 0)
+                    content.insert(0, 0)
                 self.logger.log_content(content)
                 if self.enabled_wandb:
                     wandb.log(
@@ -211,12 +260,23 @@ class VanillaTrainer(BaseTrainer):
 
         # Start training
         optim_module = importlib.import_module("torch.optim")
-        assert hasattr(optim_module, self.train_configs.optim), (
-            f"Optimizer {self.train_configs.optim} not found in torch.optim"
+        optim_name = self.train_configs.get("optim", self.train_configs.get("optimizer", "SGD"))
+        assert hasattr(optim_module, optim_name), (
+            f"Optimizer {optim_name} not found in torch.optim"
         )
-        optimizer = getattr(optim_module, self.train_configs.optim)(
-            self.model.parameters(), **self.train_configs.optim_args
+        optimizer = getattr(optim_module, optim_name)(
+            self.model.parameters(),
+            **self.train_configs.get(
+                "optim_args",
+                {
+                    "lr": float(self.train_configs.get("lr", 0.01)),
+                    "weight_decay": float(self.train_configs.get("weight_decay", 0.0)),
+                },
+            ),
         )
+        total_examples = 0
+        total_loss_sum = 0.0
+        total_correct = 0
 
         if self.train_configs.get("use_dp", False) and (
             self.train_configs.get("dp_mechanism", "laplace") == "opacus"
@@ -244,6 +304,13 @@ class VanillaTrainer(BaseTrainer):
                     train_loss += loss
                     target_true.append(label)
                     target_pred.append(pred)
+                    batch_size = len(label)
+                    total_examples += batch_size
+                    total_loss_sum += float(loss) * batch_size
+                    if pred.ndim > 1:
+                        total_correct += int(
+                            np.sum(np.argmax(pred, axis=1) == label.reshape(-1))
+                        )
                 train_loss /= len(self.train_dataloader)
                 target_true, target_pred = (
                     np.concatenate(target_true),
@@ -268,11 +335,10 @@ class VanillaTrainer(BaseTrainer):
                         }
                     )
                 self.logger.log_content(
-                    [self.round, epoch, per_epoch_time, train_loss, train_accuracy]
+                    [epoch, per_epoch_time, train_loss, train_accuracy]
                     if (not do_validation) and (not do_pre_validation)
                     else (
                         [
-                            self.round,
                             epoch,
                             per_epoch_time,
                             train_loss,
@@ -282,7 +348,6 @@ class VanillaTrainer(BaseTrainer):
                         ]
                         if not do_pre_validation
                         else [
-                            self.round,
                             epoch,
                             "N",
                             per_epoch_time,
@@ -314,6 +379,13 @@ class VanillaTrainer(BaseTrainer):
                         train_loss += loss
                         target_true.append(label)
                         target_pred.append(pred)
+                        batch_size = len(label)
+                        total_examples += batch_size
+                        total_loss_sum += float(loss) * batch_size
+                        if pred.ndim > 1:
+                            total_correct += int(
+                                np.sum(np.argmax(pred, axis=1) == label.reshape(-1))
+                            )
                         step_count += 1
                         if step_count >= self.train_configs.num_local_steps:
                             break
@@ -329,6 +401,13 @@ class VanillaTrainer(BaseTrainer):
                     train_loss += loss
                     target_true.append(label)
                     target_pred.append(pred)
+                    batch_size = len(label)
+                    total_examples += batch_size
+                    total_loss_sum += float(loss) * batch_size
+                    if pred.ndim > 1:
+                        total_correct += int(
+                            np.sum(np.argmax(pred, axis=1) == label.reshape(-1))
+                        )
             train_loss /= len(self.train_dataloader)
             target_true, target_pred = (
                 np.concatenate(target_true),
@@ -350,11 +429,10 @@ class VanillaTrainer(BaseTrainer):
                     }
                 )
             self.logger.log_content(
-                [self.round, per_step_time, train_loss, train_accuracy]
+                [per_step_time, train_loss, train_accuracy]
                 if (not do_validation) and (not do_pre_validation)
                 else (
                     [
-                        self.round,
                         per_step_time,
                         train_loss,
                         train_accuracy,
@@ -363,7 +441,6 @@ class VanillaTrainer(BaseTrainer):
                     ]
                     if not do_pre_validation
                     else [
-                        self.round,
                         "N",
                         per_step_time,
                         train_loss,
@@ -509,6 +586,23 @@ class VanillaTrainer(BaseTrainer):
             if send_gradient:
                 self._compute_gradient()
 
+        result = {
+            "loss": float(total_loss_sum / max(total_examples, 1)),
+            "accuracy": float(total_correct / max(total_examples, 1)),
+            "num_examples": int(total_examples),
+        }
+        if "pre_val_loss" in self.val_results and "pre_val_accuracy" in self.val_results:
+            result["pre_val_loss"] = float(self.val_results["pre_val_loss"])
+            result["pre_val_accuracy"] = float(self.val_results["pre_val_accuracy"])
+        if "val_loss" in self.val_results and "val_accuracy" in self.val_results:
+            if isinstance(self.val_results["val_loss"], list):
+                result["post_val_loss"] = float(self.val_results["val_loss"][-1])
+                result["post_val_accuracy"] = float(self.val_results["val_accuracy"][-1])
+            else:
+                result["post_val_loss"] = float(self.val_results["val_loss"])
+                result["post_val_accuracy"] = float(self.val_results["val_accuracy"])
+        return result
+
     def get_parameters(self) -> Dict:
         if not hasattr(self, "model_state"):
             if self.optimize_memory:
@@ -540,6 +634,18 @@ class VanillaTrainer(BaseTrainer):
             assert hasattr(self.train_configs, "num_local_steps"), (
                 "Number of local steps must be specified"
             )
+
+    @torch.no_grad()
+    def evaluate(self) -> Dict[str, float]:
+        if self.val_dataloader is None:
+            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0}
+        loss, accuracy = self._validate()
+        num_examples = len(self.val_dataset) if self.val_dataset is not None else 0
+        return {
+            "loss": float(loss),
+            "accuracy": float(accuracy),
+            "num_examples": int(num_examples),
+        }
 
     def _validate(self) -> Tuple[float, float]:
         """

@@ -2,7 +2,7 @@ backend: serial
 exp_name: mnist-quickstart
 algorithm: fedavg
 dataset: MNIST
-download: true
+dataset_loader: torchvision
 model_name: SimpleCNN
 num_clients: 3
 num_rounds: 2
@@ -11,11 +11,14 @@ split_type: iid
 local_epochs: 1
 batch_size: 32
 lr: 0.01
-device: cpu
-server_device: cpu
+device: cuda:1
+server_device: cuda:0
 data_dir: ./data
 log_dir: ./logs
 
 logging_backend: file
-project_name: mnist-quickstart
-experiment_name: mnist-quickstart
+project_name: split-examples
+experiment_name: mnist-iid
+
+
+
