@@ -1,0 +1,395 @@
+from __future__ import annotations
+
+from collections import Counter
+from io import BytesIO
+from typing import Any, Dict, Iterable, List, Tuple
+
+import numpy as np
+import torch
+from PIL import Image
+
+from appfl_sim.datasets.common import (
+    TensorBackedDataset,
+    clientize_raw_dataset,
+    finalize_dataset_outputs,
+    infer_num_classes,
+    to_namespace,
+)
+
+
+def _as_text(value: Any) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(v) for v in value)
+    return str(value)
+
+
+def _normalize_labels(raw_labels: Iterable[Any]) -> torch.Tensor:
+    values = list(raw_labels)
+    if not values:
+        return torch.zeros(0, dtype=torch.long)
+
+    if all(isinstance(v, (int, np.integer)) for v in values):
+        return torch.tensor([int(v) for v in values], dtype=torch.long)
+
+    mapping = {label: i for i, label in enumerate(sorted({str(v) for v in values}))}
+    return torch.tensor([mapping[str(v)] for v in values], dtype=torch.long)
+
+
+def _pick_label_key(columns: List[str], args) -> str:
+    user_key = str(getattr(args, "external_label_key", "")).strip()
+    if user_key:
+        if user_key not in columns:
+            raise ValueError(
+                f"external_label_key='{user_key}' not found in dataset columns: {columns}"
+            )
+        return user_key
+
+    for cand in ["label", "labels", "target", "y", "class"]:
+        if cand in columns:
+            return cand
+
+    raise ValueError(
+        f"Unable to infer label column. Set external_label_key explicitly. Available columns: {columns}"
+    )
+
+
+def _pick_feature_key(columns: List[str], label_key: str, args) -> str:
+    user_key = str(getattr(args, "external_feature_key", "")).strip()
+    if user_key:
+        if user_key not in columns:
+            raise ValueError(
+                f"external_feature_key='{user_key}' not found in dataset columns: {columns}"
+            )
+        return user_key
+
+    preferred = [
+        "image",
+        "img",
+        "pixel_values",
+        "text",
+        "sentence",
+        "content",
+        "tokens",
+        "audio",
+        "waveform",
+        "x",
+        "input",
+        "input_ids",
+    ]
+    for key in preferred:
+        if key in columns and key != label_key:
+            return key
+
+    remaining = [c for c in columns if c != label_key]
+    if not remaining:
+        raise ValueError("No feature column available after removing label column.")
+    return remaining[0]
+
+
+def _tokenizer_from_args(args):
+    tokenizer = None
+    if bool(getattr(args, "use_model_tokenizer", False)) or bool(
+        getattr(args, "use_pt_model", False)
+    ):
+        try:
+            from transformers import AutoTokenizer
+
+            model_cfg = getattr(args, "model", {})
+            model_name = ""
+            if isinstance(model_cfg, dict):
+                model_name = str(model_cfg.get("name", "")).strip()
+            elif hasattr(model_cfg, "name"):
+                model_name = str(getattr(model_cfg, "name")).strip()
+            if not model_name:
+                fallback = str(getattr(args, "model_name", "")).strip()
+                model_name = fallback if "/" in fallback else ""
+
+            tokenizer_name = model_name or "bert-base-uncased"
+            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        except Exception:
+            tokenizer = None
+    return tokenizer
+
+
+def _encode_text_features(texts: List[str], args) -> Tuple[torch.Tensor, int]:
+    seq_len = int(getattr(args, "seq_len", 128))
+    tokenizer = _tokenizer_from_args(args)
+
+    if tokenizer is not None:
+        ids = tokenizer(
+            texts,
+            truncation=True,
+            padding="max_length",
+            max_length=seq_len,
+            return_tensors="pt",
+        )["input_ids"].long()
+        return ids, int(tokenizer.vocab_size)
+
+    vocab_size = int(getattr(args, "num_embeddings", 10000))
+    basic = [t.lower().strip() for txt in texts for t in txt.split()]
+    counter = Counter(basic)
+
+    vocab = {"<pad>": 0, "<unk>": 1}
+    for token, _ in counter.most_common(max(2, vocab_size - 2)):
+        vocab[token] = len(vocab)
+
+    def encode(text: str):
+        tokens = [vocab.get(tok.lower().strip(), 1) for tok in text.split()]
+        if len(tokens) < seq_len:
+            tokens += [0] * (seq_len - len(tokens))
+        return tokens[:seq_len]
+
+    ids = torch.tensor([encode(txt) for txt in texts], dtype=torch.long)
+    return ids, len(vocab)
+
+
+def _to_image_tensor(value: Any) -> torch.Tensor:
+    if isinstance(value, Image.Image):
+        arr = np.asarray(value)
+    elif isinstance(value, dict) and "bytes" in value:
+        arr = np.asarray(Image.open(BytesIO(value["bytes"])))
+    else:
+        arr = np.asarray(value)
+
+    if arr.ndim == 2:
+        arr = np.expand_dims(arr, axis=-1)
+    if arr.ndim != 3:
+        raise ValueError(f"Unsupported image shape: {arr.shape}")
+
+    if arr.shape[0] in {1, 3} and arr.shape[-1] not in {1, 3}:
+        chw = arr
+    else:
+        chw = np.transpose(arr, (2, 0, 1))
+    tensor = torch.from_numpy(chw).float()
+    if tensor.max() > 1.0:
+        tensor = tensor / 255.0
+    return tensor
+
+
+def _to_audio_tensor(value: Any, num_frames: int) -> torch.Tensor:
+    if isinstance(value, dict) and "array" in value:
+        arr = np.asarray(value["array"], dtype=np.float32)
+    else:
+        arr = np.asarray(value, dtype=np.float32)
+
+    if arr.ndim > 1:
+        arr = arr.reshape(-1)
+    if arr.shape[0] < num_frames:
+        arr = np.pad(arr, (0, num_frames - arr.shape[0]))
+    elif arr.shape[0] > num_frames:
+        arr = arr[:num_frames]
+    return torch.from_numpy(arr).unsqueeze(0)
+
+
+def _rows_to_tensor_dataset(rows: List[Dict[str, Any]], feature_key: str, label_key: str, args, name: str):
+    features = [row[feature_key] for row in rows]
+    labels = _normalize_labels([row[label_key] for row in rows])
+
+    if len(features) == 0:
+        return TensorBackedDataset(
+            torch.zeros(0, 1, dtype=torch.float32),
+            torch.zeros(0, dtype=torch.long),
+            name=name,
+        )
+
+    first = features[0]
+    if isinstance(first, str) or (
+        isinstance(first, (list, tuple)) and first and isinstance(first[0], str)
+    ):
+        texts = [_as_text(v) for v in features]
+        x_tensor, vocab_size = _encode_text_features(texts, args)
+        args.need_embedding = True
+        args.seq_len = int(x_tensor.shape[1])
+        args.num_embeddings = int(vocab_size)
+        return TensorBackedDataset(x_tensor, labels, name=name)
+
+    if isinstance(first, Image.Image) or (
+        isinstance(first, np.ndarray) and np.asarray(first).ndim in {2, 3}
+    ):
+        x_tensor = torch.stack([_to_image_tensor(v) for v in features], dim=0)
+        args.need_embedding = False
+        args.seq_len = None
+        args.num_embeddings = None
+        return TensorBackedDataset(x_tensor, labels, name=name)
+
+    if isinstance(first, dict) and "array" in first:
+        nframes = int(getattr(args, "audio_num_frames", 16000))
+        x_tensor = torch.stack([_to_audio_tensor(v, nframes) for v in features], dim=0)
+        args.need_embedding = False
+        args.seq_len = None
+        args.num_embeddings = None
+        return TensorBackedDataset(x_tensor, labels, name=name)
+
+    x_np = np.asarray(features)
+    x_tensor = torch.as_tensor(x_np)
+    if x_tensor.ndim == 1:
+        x_tensor = x_tensor.unsqueeze(-1)
+    if x_tensor.dtype in {torch.int8, torch.int16, torch.int32, torch.int64, torch.uint8}:
+        x_tensor = x_tensor.long()
+    else:
+        x_tensor = x_tensor.float()
+    args.need_embedding = False
+    args.seq_len = None
+    args.num_embeddings = None
+    return TensorBackedDataset(x_tensor, labels, name=name)
+
+
+def _parse_external_spec(args) -> Tuple[str, str]:
+    raw_dataset = str(getattr(args, "dataset", "")).strip()
+    source = str(getattr(args, "external_source", "")).strip().lower()
+    name = str(getattr(args, "external_dataset_name", "")).strip()
+
+    if raw_dataset.lower().startswith("hf:"):
+        source = "hf"
+        name = raw_dataset.split(":", 1)[1].strip()
+    elif raw_dataset.lower().startswith("timm:"):
+        source = "timm"
+        name = raw_dataset.split(":", 1)[1].strip()
+
+    if not source:
+        source = "hf"
+
+    if not name:
+        if raw_dataset and ":" not in raw_dataset:
+            name = raw_dataset
+        else:
+            raise ValueError(
+                "Unable to infer external dataset name. Set external_dataset_name or use dataset='hf:<name>'/'timm:<name>'."
+            )
+
+    if source not in {"hf", "timm"}:
+        raise ValueError("external_source must be one of: hf, timm")
+
+    return source, name
+
+
+def _fetch_hf_dataset(args, dataset_name: str):
+    try:
+        from datasets import DatasetDict, load_dataset
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "datasets (HuggingFace) is not installed. Install with: pip install datasets"
+        ) from e
+
+    config_name = str(getattr(args, "external_dataset_config_name", "")).strip()
+    train_split = str(getattr(args, "external_train_split", "train")).strip()
+    test_split = str(getattr(args, "external_test_split", "test")).strip()
+
+    kwargs: Dict[str, Any] = {
+        "cache_dir": str(getattr(args, "data_dir", "./data")),
+    }
+    try:
+        if config_name:
+            ds_obj = load_dataset(dataset_name, config_name, **kwargs)
+        else:
+            ds_obj = load_dataset(dataset_name, **kwargs)
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to load HuggingFace dataset '{dataset_name}'. "
+            "Check network access and dataset name, or use a local/custom parser."
+        ) from e
+
+    if isinstance(ds_obj, DatasetDict):
+        if train_split in ds_obj:
+            train_hf = ds_obj[train_split]
+        else:
+            first = list(ds_obj.keys())[0]
+            train_hf = ds_obj[first]
+
+        if test_split in ds_obj:
+            test_hf = ds_obj[test_split]
+        else:
+            split = train_hf.train_test_split(
+                test_size=float(getattr(args, "test_size", 0.2)),
+                seed=int(getattr(args, "seed", 42)),
+            )
+            train_hf, test_hf = split["train"], split["test"]
+    else:
+        split = ds_obj.train_test_split(
+            test_size=float(getattr(args, "test_size", 0.2)),
+            seed=int(getattr(args, "seed", 42)),
+        )
+        train_hf, test_hf = split["train"], split["test"]
+
+    train_rows = [train_hf[i] for i in range(len(train_hf))]
+    test_rows = [test_hf[i] for i in range(len(test_hf))]
+    if not train_rows:
+        raise ValueError(f"External HF dataset '{dataset_name}' has empty training split.")
+
+    columns = list(train_rows[0].keys())
+    label_key = _pick_label_key(columns, args)
+    feature_key = _pick_feature_key(columns, label_key, args)
+
+    raw_train = _rows_to_tensor_dataset(
+        train_rows,
+        feature_key=feature_key,
+        label_key=label_key,
+        args=args,
+        name=f"[HF:{dataset_name}] TRAIN",
+    )
+    raw_test = _rows_to_tensor_dataset(
+        test_rows,
+        feature_key=feature_key,
+        label_key=label_key,
+        args=args,
+        name=f"[HF:{dataset_name}] TEST",
+    )
+
+    split_map, client_datasets = clientize_raw_dataset(raw_train, args)
+    split_map, client_datasets, server_dataset, args = finalize_dataset_outputs(
+        split_map=split_map,
+        client_datasets=client_datasets,
+        server_dataset=raw_test,
+        args=args,
+        raw_train=raw_train,
+    )
+    args.num_classes = int(infer_num_classes(raw_train))
+    return split_map, client_datasets, server_dataset, args
+
+
+def _normalize_timm_dataset_name(name: str) -> str:
+    key = name.strip().lower().split("/")[-1]
+    mapping = {
+        "mnist": "MNIST",
+        "fashionmnist": "FashionMNIST",
+        "fmnist": "FashionMNIST",
+        "cifar10": "CIFAR10",
+        "cifar-10": "CIFAR10",
+        "cifar100": "CIFAR100",
+        "cifar-100": "CIFAR100",
+        "svhn": "SVHN",
+    }
+    if key in mapping:
+        return mapping[key]
+    return name
+
+
+def _fetch_timm_dataset(args, dataset_name: str):
+    # Use timm dataset naming when possible, but route through torchvision parser
+    # for lightweight simulation compatibility.
+    from appfl_sim.datasets.torchvisionparser import fetch_torchvision_dataset
+
+    tv_name = _normalize_timm_dataset_name(dataset_name)
+    args.dataset = tv_name
+    return fetch_torchvision_dataset(args)
+
+
+def fetch_external_dataset(args):
+    """External dataset parser.
+
+    Supported sources:
+    - `hf`: HuggingFace datasets (`dataset='hf:<dataset_name>'`)
+    - `timm`: timm-style dataset names mapped to torchvision when applicable (`dataset='timm:<name>'`)
+    """
+    args = to_namespace(args)
+    source, dataset_name = _parse_external_spec(args)
+    args.external_source = source
+    args.external_dataset_name = dataset_name
+
+    if source == "hf":
+        return _fetch_hf_dataset(args, dataset_name)
+    return _fetch_timm_dataset(args, dataset_name)

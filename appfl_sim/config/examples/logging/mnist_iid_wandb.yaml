@@ -1,0 +1,24 @@
+backend: serial
+exp_name: mnist-iid-wandb
+algorithm: fedavg
+
+dataset: MNIST
+dataset_loader: torchvision
+model_name: SimpleCNN
+
+num_clients: 3
+num_rounds: 2
+client_fraction: 1.0
+split_type: iid
+local_epochs: 1
+batch_size: 32
+
+logging_backend: wandb
+project_name: appfl-sim-mnist
+experiment_name: mnist-iid-wandb
+wandb_mode: online
+
+log_dir: ./logs
+data_dir: ./data
+device: cpu
+server_device: cpu

@@ -1,0 +1,32 @@
+backend: serial
+exp_name: timm-external
+algorithm: fedavg
+
+dataset: timm:cifar10
+dataset_loader: external
+download: true
+external_source: timm
+external_dataset_name: cifar10
+
+num_clients: 3
+num_rounds: 1
+client_fraction: 1.0
+split_type: iid
+local_epochs: 1
+batch_size: 16
+
+model:
+  source: timm
+  # Exact timm model name (required).
+  # Override from CLI, e.g. model.name=mobilevit_xxs
+  name: resnet18
+  pretrained: false
+
+logging_backend: file
+project_name: timm-sim
+experiment_name: timm-external
+
+log_dir: ./logs
+data_dir: ./data
+device: cpu
+server_device: cpu

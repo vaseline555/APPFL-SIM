@@ -1,0 +1,27 @@
+# Federated evaluation scheme (holdout-client based)
+# - Every round: evaluate in-clients only (training pool).
+# - Every federated_eval_every + final round: evaluate both in-clients and out-clients.
+backend: serial
+exp_name: mnist-holdout-client-eval
+
+dataset: MNIST
+algorithm: fedavg
+model_name: SimpleCNN
+
+num_clients: 8
+num_rounds: 3
+client_fraction: 0.5
+split_type: iid
+
+enable_global_eval: true
+enable_federated_eval: true
+federated_eval_scheme: holdout_client
+federated_eval_every: 2
+holdout_eval_num_clients: 2
+holdout_eval_client_ratio: 0.0
+
+local_epochs: 1
+batch_size: 32
+lr: 0.01
+device: cpu
+server_device: cpu

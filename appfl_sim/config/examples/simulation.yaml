@@ -1,0 +1,96 @@
+backend: mpi
+exp_name: appfl-sim
+seed: 42
+
+algorithm: fedavg
+dataset: MNIST
+model_name: SimpleCNN
+dataset_loader: auto
+download: true
+custom_dataset_loader: ""
+custom_dataset_kwargs: "{}"
+custom_dataset_path: ""
+external_source: ""
+external_dataset_name: ""
+external_dataset_config_name: ""
+external_train_split: train
+external_test_split: test
+external_feature_key: ""
+external_label_key: ""
+flamby_data_terms_accepted: false
+model:
+  source: auto
+  name: ""
+  pretrained: false
+  kwargs: {}
+  appfl:
+    kwargs: {}
+  timm:
+    pretrained: false
+    kwargs: {}
+  hf:
+    task: sequence_classification
+    local_files_only: false
+    trust_remote_code: false
+    gradient_checkpointing: false
+    kwargs: {}
+
+num_clients: 20
+num_rounds: 20
+client_fraction: 0.2
+test_size: 0.2
+
+local_epochs: 1
+batch_size: 32
+eval_batch_size: 128
+
+optimizer: SGD
+criterion: CrossEntropyLoss
+lr: 0.01
+weight_decay: 0.0
+max_grad_norm: 0.0
+
+server_lr: 1.0
+server_momentum: 0.0
+
+split_type: iid
+dirichlet_alpha: 0.3
+min_classes: 2
+unbalanced_keep_min: 0.5
+
+local_val_ratio: 0.2
+eval_every: 1
+enable_global_eval: true
+enable_federated_eval: true
+federated_eval_every: 1
+federated_eval_scheme: holdout_dataset
+holdout_eval_num_clients: 0
+holdout_eval_client_ratio: 0.0
+
+device: cpu
+server_device: cpu
+num_workers: 0
+mpi_dataset_download_mode: rank0
+mpi_use_local_rank_device: true
+mpi_log_rank_mapping: false
+
+data_dir: ./data
+log_dir: ./logs
+log_file: appfl-sim
+logging_backend: file
+project_name: appfl-sim
+experiment_name: appfl-sim
+wandb_entity: ""
+wandb_mode: online
+resize: 28
+crop: 28
+hidden_size: 64
+dropout: 0.0
+num_layers: 2
+num_embeddings: 10000
+embedding_size: 128
+seq_len: 128
+use_model_tokenizer: false
+use_pt_model: false
+is_seq2seq: false
+need_embedding: true

@@ -1,0 +1,23 @@
+backend: serial
+exp_name: mnist-iid-default-log
+algorithm: fedavg
+
+dataset: MNIST
+dataset_loader: torchvision
+model_name: SimpleCNN
+
+num_clients: 3
+num_rounds: 2
+client_fraction: 1.0
+split_type: iid
+local_epochs: 1
+batch_size: 32
+
+logging_backend: file
+project_name: mnist-default-log
+experiment_name: mnist-iid-default-log
+
+log_dir: ./logs
+data_dir: ./data
+device: cpu
+server_device: cpu

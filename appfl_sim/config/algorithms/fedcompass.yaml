@@ -1,0 +1,23 @@
+backend: serial
+exp_name: alg-fedcompass
+algorithm: fedcompass
+
+dataset: MNIST
+dataset_loader: auto
+
+model_name: SimpleCNN
+num_clients: 3
+num_rounds: 2
+client_fraction: 1.0
+split_type: iid
+local_epochs: 1
+batch_size: 16
+
+logging_backend: file
+project_name: algorithm-examples
+experiment_name: alg-fedcompass
+
+log_dir: ./logs
+data_dir: ./data
+device: cpu
+server_device: cpu

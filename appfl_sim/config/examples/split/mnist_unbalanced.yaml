@@ -1,0 +1,24 @@
+backend: serial
+exp_name: mnist-unbalanced
+algorithm: fedavg
+
+dataset: MNIST
+dataset_loader: torchvision
+model_name: SimpleCNN
+
+num_clients: 10
+num_rounds: 2
+client_fraction: 0.5
+split_type: unbalanced
+unbalanced_keep_min: 0.4
+local_epochs: 1
+batch_size: 32
+
+logging_backend: file
+project_name: split-examples
+experiment_name: mnist-unbalanced
+
+log_dir: ./logs
+data_dir: ./data
+device: cpu
+server_device: cpu

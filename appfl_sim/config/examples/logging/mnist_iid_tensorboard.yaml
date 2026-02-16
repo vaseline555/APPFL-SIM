@@ -1,0 +1,23 @@
+backend: serial
+exp_name: mnist-iid-tensorboard
+algorithm: fedavg
+
+dataset: MNIST
+dataset_loader: torchvision
+model_name: SimpleCNN
+
+num_clients: 3
+num_rounds: 2
+client_fraction: 1.0
+split_type: iid
+local_epochs: 1
+batch_size: 32
+
+logging_backend: tensorboard
+project_name: mnist-tb-runs
+experiment_name: mnist-iid-tensorboard
+
+log_dir: ./logs
+data_dir: ./data
+device: cpu
+server_device: cpu

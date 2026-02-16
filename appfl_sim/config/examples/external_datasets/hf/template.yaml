@@ -1,0 +1,49 @@
+backend: serial
+exp_name: hf-external
+algorithm: fedavg
+
+dataset: hf:ag_news
+dataset_loader: external
+download: true
+external_source: hf
+external_dataset_name: ag_news
+external_feature_key: text
+external_label_key: label
+seq_len: 32
+num_embeddings: 1000
+
+num_clients: 3
+num_rounds: 1
+client_fraction: 1.0
+split_type: iid
+local_epochs: 1
+batch_size: 8
+eval_batch_size: 16
+lr: 0.005
+optimizer: AdamW
+criterion: CrossEntropyLoss
+
+model:
+  source: hf
+  # Exact HF model card id (required).
+  # Override from CLI, e.g. model.name=bert-base-uncased
+  name: distilbert-base-uncased
+  pretrained: false
+  hf:
+    task: sequence_classification
+    local_files_only: true
+    config_overrides:
+      dim: 64
+      hidden_dim: 128
+      n_layers: 2
+      n_heads: 4
+      dropout: 0.1
+
+logging_backend: file
+project_name: hf-sim
+experiment_name: hf-external
+
+log_dir: ./logs
+data_dir: ./data
+device: cpu
+server_device: cpu
