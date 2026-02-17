@@ -102,6 +102,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `log_dir` (default: `./logs`): output log root.
 - `logging_backend` (default: `file`): tracking backend (`none`, `file`, `console`, `tensorboard`, `wandb`).
 - `client_logging_scheme` (default: `auto`): per-client logging policy (`auto`, `per_client`, `aggregated`).
+- Runtime rule: when `num_sampled_clients < num_clients`, client file logging is forced off for performance (server-only logging).
 - `per_client_logging_threshold` (default: `10`): `auto` cutoff.
 - `per_client_logging_warning_threshold` (default: `50`): warning threshold for forced per-client logs.
 - `aggregated_logging_scheme` (default: `server_only`): aggregated mode (currently `server_only`).

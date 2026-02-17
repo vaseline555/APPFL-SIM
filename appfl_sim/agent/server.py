@@ -251,10 +251,10 @@ class ServerAgent:
         return weights
 
     @torch.no_grad()
-    def evaluate(self) -> Dict[str, Any]:
-        return self._evaluate_metrics()
+    def evaluate(self, round_idx: Optional[int] = None) -> Dict[str, Any]:
+        return self._evaluate_metrics(round_idx=round_idx)
 
-    def _evaluate_metrics(self) -> Dict[str, Any]:
+    def _evaluate_metrics(self, round_idx: Optional[int] = None) -> Dict[str, Any]:
         if not hasattr(self, "_val_dataset") or self._val_dataset is None:
             return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
         if len(self._val_dataset) == 0:
@@ -328,12 +328,17 @@ class ServerAgent:
                 total_batches = len(self._val_dataloader)
             except Exception:
                 total_batches = None
+            if round_idx is None:
+                desc = "appfl-sim: ✅[Server | Global Eval]"
+            else:
+                desc = f"appfl-sim: ✅[Server | Round {int(round_idx):04d} | Global Eval]"
             progress_bar = _tqdm(
                 self._val_dataloader,
                 total=total_batches,
-                desc="global eval",
+                desc=desc,
                 leave=False,
                 dynamic_ncols=True,
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
             )
             iterator = progress_bar
 

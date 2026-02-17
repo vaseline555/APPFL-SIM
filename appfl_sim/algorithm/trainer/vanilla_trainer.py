@@ -313,41 +313,103 @@ class VanillaTrainer(BaseTrainer):
 
         has_val_split = self.val_dataloader is not None
         has_test_split = self.test_dataloader is not None
+        has_any_eval_split = has_val_split or has_test_split
         do_validation = bool(self.train_configs.get("do_validation", True)) and (
-            has_val_split or has_test_split
+            has_any_eval_split
         )
         do_pre_validation = bool(self.train_configs.get("do_pre_validation", True)) and (
-            has_val_split or has_test_split
+            has_any_eval_split
         )
-        metric_label = self._primary_metric_display_name()
-        log_eval_split = "val" if has_val_split else "test"
-        eval_label = f"{log_eval_split} {metric_label}"
+        metric_names_for_log = []
+        for metric_name in self.eval_metric_names:
+            text = str(metric_name).strip().lower()
+            if text and text not in metric_names_for_log:
+                metric_names_for_log.append(text)
+        if not metric_names_for_log:
+            fallback = self._primary_metric_name()
+            if fallback:
+                metric_names_for_log.append(str(fallback).strip().lower())
+
+        def _metric_title(metric_name: str) -> str:
+            text = str(metric_name).strip()
+            if text == "":
+                return "Metric"
+            return text[:1].upper() + text[1:]
+
+        def _metric_value(stats_obj: Optional[Dict[str, Any]], metric_name: str) -> float:
+            if not isinstance(stats_obj, dict):
+                return -1.0
+            nested = stats_obj.get("metrics", {})
+            if isinstance(nested, dict):
+                value = nested.get(metric_name, None)
+                if isinstance(value, (int, float)):
+                    return float(value)
+            for key in (f"metric_{metric_name}", metric_name):
+                value = stats_obj.get(key, None)
+                if isinstance(value, (int, float)):
+                    return float(value)
+            if metric_name in {"acc", "acc1", "accuracy"}:
+                value = stats_obj.get("accuracy", None)
+                if isinstance(value, (int, float)):
+                    return float(value)
+            return -1.0
+
+        def _build_log_row(
+            epoch_idx: Optional[int],
+            pre_eval_flag: str,
+            elapsed,
+            train_stats_obj: Optional[Dict[str, Any]],
+            val_stats_obj: Optional[Dict[str, Any]],
+            test_stats_obj: Optional[Dict[str, Any]],
+        ) -> List[Any]:
+            row: List[Any] = []
+            if self.train_configs.mode == "epoch":
+                row.append(epoch_idx if epoch_idx is not None else "-")
+            if has_any_eval_split:
+                row.append(pre_eval_flag)
+            row.append(elapsed)
+            row.append(
+                float(train_stats_obj["loss"])
+                if isinstance(train_stats_obj, dict) and "loss" in train_stats_obj
+                else "-"
+            )
+            for metric_name in metric_names_for_log:
+                row.append(_metric_value(train_stats_obj, metric_name))
+            if has_val_split:
+                row.append(
+                    float(val_stats_obj["loss"])
+                    if isinstance(val_stats_obj, dict) and "loss" in val_stats_obj
+                    else -1.0
+                )
+                for metric_name in metric_names_for_log:
+                    row.append(_metric_value(val_stats_obj, metric_name))
+            if has_test_split:
+                row.append(
+                    float(test_stats_obj["loss"])
+                    if isinstance(test_stats_obj, dict) and "loss" in test_stats_obj
+                    else -1.0
+                )
+                for metric_name in metric_names_for_log:
+                    row.append(_metric_value(test_stats_obj, metric_name))
+            return row
 
         # Set up logging title
-        title = (
-            ["Time", "Train Loss", f"Train {metric_label}"]
-            if (not do_validation) and (not do_pre_validation)
-            else (
-                [
-                    "Pre Eval?",
-                    "Time",
-                    "Train Loss",
-                    f"Train {metric_label}",
-                    f"{log_eval_split} Loss",
-                    eval_label,
-                ]
-                if do_pre_validation
-                else [
-                    "Time",
-                    "Train Loss",
-                    f"Train {metric_label}",
-                    f"{log_eval_split} Loss",
-                    eval_label,
-                ]
-            )
-        )
+        title: List[str] = []
         if self.train_configs.mode == "epoch":
-            title.insert(0, "Epoch")
+            title.append("Epoch")
+        if has_any_eval_split:
+            title.append("Pre Eval?")
+        title.extend(["Time", "Train. Loss"])
+        for metric_name in metric_names_for_log:
+            title.append(f"Train. {_metric_title(metric_name)}")
+        if has_val_split:
+            title.append("Val. Loss")
+            for metric_name in metric_names_for_log:
+                title.append(f"Val. {_metric_title(metric_name)}")
+        if has_test_split:
+            title.append("Test Loss")
+            for metric_name in metric_names_for_log:
+                title.append(f"Test {_metric_title(metric_name)}")
 
         if self.train_configs.get("client_log_title_each_round", True):
             self.logger.log_title(title)
@@ -386,17 +448,16 @@ class VanillaTrainer(BaseTrainer):
                         test_stats.get("metrics", {})
                     )
 
-                log_pre_stats = val_stats if log_eval_split == "val" else test_stats
-                log_pre_loss = float(log_pre_stats["loss"]) if log_pre_stats is not None else -1.0
-                log_pre_metric = (
-                    float(self._metric_from_stats(log_pre_stats))
-                    if log_pre_stats is not None
-                    else -1.0
+                self.logger.log_content(
+                    _build_log_row(
+                        epoch_idx=0 if self.train_configs.mode == "epoch" else None,
+                        pre_eval_flag="Y",
+                        elapsed="-",
+                        train_stats_obj=None,
+                        val_stats_obj=val_stats,
+                        test_stats_obj=test_stats,
+                    )
                 )
-                content = ["Y", "-", "-", "-", log_pre_loss, log_pre_metric]
-                if self.train_configs.mode == "epoch":
-                    content.insert(0, 0)
-                self.logger.log_content(content)
                 if self.enabled_wandb:
                     payload = {}
                     if val_stats is not None:
@@ -493,10 +554,8 @@ class VanillaTrainer(BaseTrainer):
                 self._fill_accuracy_from_fallback(train_stats, target_true, target_pred)
                 train_loss = float(train_stats["loss"])
                 train_accuracy = float(train_stats["accuracy"])
-                train_metric_value = float(self._metric_from_stats(train_stats))
                 val_stats = None
                 test_stats = None
-                log_eval_stats = None
                 if do_validation:
                     if has_val_split:
                         val_stats = self._validate_metrics(split="val")
@@ -532,7 +591,6 @@ class VanillaTrainer(BaseTrainer):
                         self.val_results["test_metrics"].append(
                             dict(test_stats.get("metrics", {}))
                         )
-                    log_eval_stats = val_stats if log_eval_split == "val" else test_stats
                 per_epoch_time = time.time() - start_time
                 if self.enabled_wandb:
                     payload = {
@@ -566,52 +624,14 @@ class VanillaTrainer(BaseTrainer):
                                 f"{self.wandb_logging_id}/test-{key} (during train)"
                             ] = float(value)
                     wandb.log(payload)
-                log_val_loss = (
-                    float(log_eval_stats["loss"])
-                    if log_eval_stats is not None
-                    else float(
-                        self.val_results.get(
-                            "pre_val_loss"
-                            if log_eval_split == "val"
-                            else "pre_test_loss",
-                            -1.0,
-                        )
-                    )
-                )
-                log_val_metric_value = (
-                    float(self._metric_from_stats(log_eval_stats))
-                    if log_eval_stats is not None
-                    else float(
-                        self.val_results.get(
-                            "pre_val_metric_value"
-                            if log_eval_split == "val"
-                            else "pre_test_metric_value",
-                            -1.0,
-                        )
-                    )
-                )
                 self.logger.log_content(
-                    [epoch, per_epoch_time, train_loss, train_metric_value]
-                    if (not do_validation) and (not do_pre_validation)
-                    else (
-                        [
-                            epoch,
-                            per_epoch_time,
-                            train_loss,
-                            train_metric_value,
-                            log_val_loss,
-                            log_val_metric_value,
-                        ]
-                        if not do_pre_validation
-                        else [
-                            epoch,
-                            "N",
-                            per_epoch_time,
-                            train_loss,
-                            train_metric_value,
-                            log_val_loss,
-                            log_val_metric_value,
-                        ]
+                    _build_log_row(
+                        epoch_idx=epoch,
+                        pre_eval_flag="N",
+                        elapsed=per_epoch_time,
+                        train_stats_obj=train_stats,
+                        val_stats_obj=val_stats if do_validation else None,
+                        test_stats_obj=test_stats if do_validation else None,
                     )
                 )
         else:
@@ -680,10 +700,8 @@ class VanillaTrainer(BaseTrainer):
             self._fill_accuracy_from_fallback(train_stats, target_true, target_pred)
             train_loss = float(train_stats["loss"])
             train_accuracy = float(train_stats["accuracy"])
-            train_metric_value = float(self._metric_from_stats(train_stats))
             val_stats = None
             test_stats = None
-            log_eval_stats = None
             if do_validation:
                 if has_val_split:
                     val_stats = self._validate_metrics(split="val")
@@ -701,7 +719,6 @@ class VanillaTrainer(BaseTrainer):
                         self._metric_from_stats(test_stats)
                     )
                     self.val_results["test_metrics"] = dict(test_stats.get("metrics", {}))
-                log_eval_stats = val_stats if log_eval_split == "val" else test_stats
             per_step_time = time.time() - start_time
             if self.enabled_wandb:
                 payload = {
@@ -735,48 +752,14 @@ class VanillaTrainer(BaseTrainer):
                             f"{self.wandb_logging_id}/test-{key} (during train)"
                         ] = float(value)
                 wandb.log(payload)
-            log_val_loss = (
-                float(log_eval_stats["loss"])
-                if log_eval_stats is not None
-                else float(
-                    self.val_results.get(
-                        "pre_val_loss" if log_eval_split == "val" else "pre_test_loss",
-                        -1.0,
-                    )
-                )
-            )
-            log_val_metric_value = (
-                float(self._metric_from_stats(log_eval_stats))
-                if log_eval_stats is not None
-                else float(
-                    self.val_results.get(
-                        "pre_val_metric_value"
-                        if log_eval_split == "val"
-                        else "pre_test_metric_value",
-                        -1.0,
-                    )
-                )
-            )
             self.logger.log_content(
-                [per_step_time, train_loss, train_metric_value]
-                if (not do_validation) and (not do_pre_validation)
-                else (
-                    [
-                        per_step_time,
-                        train_loss,
-                        train_metric_value,
-                        log_val_loss,
-                        log_val_metric_value,
-                    ]
-                    if not do_pre_validation
-                    else [
-                        "N",
-                        per_step_time,
-                        train_loss,
-                        train_metric_value,
-                        log_val_loss,
-                        log_val_metric_value,
-                    ]
+                _build_log_row(
+                    epoch_idx=None,
+                    pre_eval_flag="N",
+                    elapsed=per_step_time,
+                    train_stats_obj=train_stats,
+                    val_stats_obj=val_stats if do_validation else None,
+                    test_stats_obj=test_stats if do_validation else None,
                 )
             )
 

@@ -145,11 +145,13 @@ def _cfg_bool(config: DictConfig, key: str, default: bool) -> bool:
 def _new_progress(total: int, desc: str, enabled: bool):
     if not enabled or _tqdm is None or int(total) <= 0:
         return None
+    label = f"appfl-sim: ✅[{str(desc)}]"
     return _tqdm(
         total=int(total),
-        desc=str(desc),
+        desc=label,
         leave=False,
         dynamic_ncols=True,
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
     )
 
 
@@ -247,15 +249,7 @@ def _apply_local_dataset_split_ratio(
             out.append((splits[0], splits[1]))
         else:
             out.append((splits[0], splits[1], splits[2]))
-
-    msg = (
-        f"Applied local dataset split ratio={ratios} across {len(out)} client datasets "
-        "(2-way=train/test, 3-way=train/val/test)."
-    )
-    if logger is not None:
-        logger.info(msg)
-    else:
-        print(msg)
+    del logger
     return out
 
 
@@ -385,6 +379,10 @@ def _resolve_client_logging_policy(
     else:
         effective = "per_client" if basis_clients <= threshold else "aggregated"
 
+    forced_server_only = int(num_sampled_clients) < int(num_clients)
+    if forced_server_only:
+        effective = "aggregated"
+
     return {
         "requested_scheme": scheme,
         "effective_scheme": effective,
@@ -394,6 +392,7 @@ def _resolve_client_logging_policy(
         "aggregated_scheme": agg_scheme,
         "basis_clients": basis_clients,
         "total_clients": int(num_clients),
+        "forced_server_only": bool(forced_server_only),
     }
 
 
@@ -409,6 +408,7 @@ def _emit_logging_policy_message(
     agg_scheme = str(policy["aggregated_scheme"])
     basis_clients = int(policy.get("basis_clients", num_clients))
     total_clients = int(policy.get("total_clients", num_clients))
+    forced_server_only = bool(policy.get("forced_server_only", False))
 
     def _info(msg: str) -> None:
         if logger is not None:
@@ -421,6 +421,13 @@ def _emit_logging_policy_message(
             logger.warning(msg)
         else:
             print(msg)
+
+    if forced_server_only:
+        _info(
+            "Per-client file logging disabled because num_sampled_clients < num_clients. "
+            "Using server-only logging for performance."
+        )
+        return
 
     if requested == "auto" and effective == "aggregated":
         _info(
@@ -886,7 +893,7 @@ def _log_round(
             parts.append(f"...(+{len(ordered_keys) - len(shown_keys)} more)")
         lines.append(
             _entity_line(
-                "Federated Extrema:",
+                "Federated Extrema.:",
                 _join_metric_parts(parts),
             )
         )
@@ -918,9 +925,11 @@ def _log_round(
     do_post_val = _cfg_bool(config, "do_validation", True)
     if do_pre_val:
         _append_local_eval_block("Local Pre-val.", "local_pre_val", "pre_val_")
-        _append_local_eval_block("Local Pre-test.", "local_pre_test", "pre_test_")
     if do_post_val:
         _append_local_eval_block("Local Post-val.", "local_post_val", "post_val_")
+    if do_pre_val:
+        _append_local_eval_block("Local Pre-test.", "local_pre_test", "pre_test_")
+    if do_post_val:
         _append_local_eval_block("Local Post-test.", "local_post_test", "post_test_")
     _append_local_gen_error()
 
@@ -931,10 +940,10 @@ def _log_round(
         "Federated Eval.", "fed_eval", federated_eval_metrics, with_client_std=True
     )
     _append_eval_block(
-        "Fed Eval In.", "fed_eval_in", federated_eval_in_metrics, with_client_std=True
+        "Federated Eval(In).", "fed_eval_in", federated_eval_in_metrics, with_client_std=True
     )
     _append_eval_block(
-        "Fed Eval Out.",
+        "Federated Eval(Out).",
         "fed_eval_out",
         federated_eval_out_metrics,
         with_client_std=True,
@@ -1215,7 +1224,7 @@ def _run_federated_eval_mpi(
     )
     progress = _new_progress(
         total=len(eval_ids),
-        desc=f"{eval_tag} eval r{int(round_idx)}",
+        desc=f"Server | Round {int(round_idx):04d} | Federated {str(eval_tag).replace('-', ' ').title()}",
         enabled=_cfg_bool(config, "show_eval_progress", True),
     )
     try:
@@ -1333,7 +1342,7 @@ def _run_federated_eval_serial(
     eval_stats: Dict[int, Dict] = {}
     progress = _new_progress(
         total=len(eval_client_ids),
-        desc=f"{eval_tag} eval r{int(round_idx)}",
+        desc=f"Server | Round {int(round_idx):04d} | Federated {str(eval_tag).replace('-', ' ').title()}",
         enabled=_cfg_bool(config, "show_eval_progress", True),
     )
     try:
@@ -1429,7 +1438,7 @@ def _run_server_mpi(
         if enable_global_eval and _should_eval_round(
             round_idx, int(config.eval_every), int(config.num_rounds)
         ):
-            global_eval_metrics = server.evaluate()
+            global_eval_metrics = server.evaluate(round_idx=round_idx)
 
         federated_eval_metrics = None
         federated_eval_in_metrics = None
@@ -1767,7 +1776,7 @@ def run_serial(config) -> None:
         if enable_global_eval and _should_eval_round(
             round_idx, int(config.eval_every), int(config.num_rounds)
         ):
-            global_eval_metrics = server.evaluate()
+            global_eval_metrics = server.evaluate(round_idx=round_idx)
 
         federated_eval_metrics = None
         federated_eval_in_metrics = None
