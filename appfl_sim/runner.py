@@ -27,7 +27,7 @@ from appfl_sim.agent import (
 )
 from appfl_sim.logger import ServerAgentFileLogger, create_experiment_tracker
 from appfl_sim.loaders import load_dataset, load_model
-from appfl_sim.metrics import parse_metric_names
+from appfl_sim.metrics import MetricsManager, parse_metric_names
 from appfl_sim.misc.utils import get_local_rank, resolve_rank_device, set_seed_everything
 
 try:
@@ -320,7 +320,11 @@ def _dataset_has_eval_split(dataset) -> bool:
 
 
 def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
-    return round_idx % max(1, int(every)) == 0 or round_idx == int(num_rounds)
+    every_i = int(every)
+    if every_i <= 0:
+        # Non-positive cadence disables periodic checkpoints and keeps only final-round eval.
+        return round_idx == int(num_rounds)
+    return round_idx % every_i == 0 or round_idx == int(num_rounds)
 
 
 def _build_train_cfg(
@@ -499,6 +503,40 @@ def _emit_client_state_policy_message(
     source = str(policy.get("source", "stateful_clients"))
     mode = "stateful (persistent client objects)" if stateful else "stateless/on-demand"
     msg = f"Client lifecycle: mode={mode} source={source}"
+    if logger is not None:
+        logger.info(msg)
+    else:
+        print(msg)
+
+
+def _emit_federated_eval_policy_message(
+    config: DictConfig,
+    train_client_count: int,
+    holdout_client_count: int,
+    logger: Optional[ServerAgentFileLogger] = None,
+) -> None:
+    if not _cfg_bool(config, "enable_federated_eval", True):
+        return
+    ratio = float(config.get("federated_eval_client_ratio", 1.0))
+    cap = int(config.get("federated_eval_max_clients", 0))
+    cadence = int(config.get("federated_eval_every", int(config.eval_every)))
+    scheme = str(config.get("federated_eval_scheme", "holdout_dataset")).strip().lower()
+    mode = str(config.get("federated_eval_sampling_mode", "random")).strip().lower()
+    if mode not in {"random", "first", "last"}:
+        mode = "random"
+    if cap <= 0 and ratio >= 1.0 and cadence > 0:
+        return
+    total_basis = int(train_client_count)
+    if scheme == "holdout_client":
+        total_basis = int(train_client_count) + int(holdout_client_count)
+    msg = (
+        "Federated eval policy: "
+        f"cadence={'final_only' if cadence <= 0 else cadence} "
+        f"client_ratio={ratio:.4f} "
+        f"max_clients={'all' if cap <= 0 else cap} "
+        f"sampling_mode={mode} "
+        f"basis_clients={total_basis}"
+    )
     if logger is not None:
         logger.info(msg)
     else:
@@ -1158,13 +1196,17 @@ def _client_processing_chunk_size(
     total_clients: int = 0,
     phase: str = "train",
 ) -> int:
+    phase_name = str(phase).strip().lower()
+    if phase_name == "eval":
+        eval_configured = int(config.get("eval_client_processing_chunk_size", 0))
+        if eval_configured > 0:
+            return max(1, eval_configured)
     configured = int(config.get("client_processing_chunk_size", 0))
     if configured > 0:
         return max(1, configured)
 
     # Auto mode (configured <= 0):
     # choose a conservative chunk size by device/memory hints.
-    phase_name = str(phase).strip().lower()
     if str(device).strip().lower().startswith("cuda") and torch.cuda.is_available():
         try:
             dev_idx = _resolve_cuda_index(device)
@@ -1201,6 +1243,139 @@ def _release_clients(clients, clear_cuda_cache: bool = False) -> None:
         torch.cuda.empty_cache()
 
 
+def _sample_eval_clients(
+    config: DictConfig,
+    client_ids: List[int],
+    round_idx: int,
+) -> List[int]:
+    ids = sorted(int(cid) for cid in client_ids)
+    total = len(ids)
+    if total <= 1:
+        return ids
+
+    ratio = float(config.get("federated_eval_client_ratio", 1.0))
+    ratio = min(1.0, max(0.0, ratio))
+    max_clients = int(config.get("federated_eval_max_clients", 0))
+    mode = str(config.get("federated_eval_sampling_mode", "random")).strip().lower()
+    if mode not in {"random", "first", "last"}:
+        mode = "random"
+    seed = int(config.get("federated_eval_sampling_seed", int(config.seed)))
+
+    target = int(round(total * ratio))
+    if ratio > 0.0 and target <= 0:
+        target = 1
+    if max_clients > 0:
+        target = min(target if target > 0 else total, max_clients)
+    elif target <= 0:
+        target = total
+    target = max(1, min(total, target))
+
+    if target >= total:
+        return ids
+    if mode == "first":
+        return ids[:target]
+    if mode == "last":
+        return ids[-target:]
+    rng = random.Random(seed + 17 * int(round_idx))
+    return sorted(rng.sample(ids, target))
+
+
+def _resolve_client_eval_dataset(
+    client_datasets: Sequence,
+    client_id: int,
+    eval_split: str,
+):
+    item = client_datasets[int(client_id)]
+    if len(item) == 2:
+        train_ds, test_ds = item
+        val_ds = None
+    elif len(item) == 3:
+        train_ds, val_ds, test_ds = item
+    else:
+        raise ValueError(
+            "Each client dataset entry must be tuple(train,test) or tuple(train,val,test)."
+        )
+    del train_ds
+    chosen = str(eval_split).strip().lower()
+    if chosen in {"val", "validation"}:
+        return val_ds if val_ds is not None else test_ds
+    return test_ds if test_ds is not None else val_ds
+
+
+def _resolve_model_output(output):
+    if torch.is_tensor(output):
+        return output
+    if isinstance(output, (list, tuple)) and len(output) > 0:
+        first = output[0]
+        if torch.is_tensor(first):
+            return first
+    if isinstance(output, dict):
+        for key in ("logits", "predictions", "output"):
+            value = output.get(key, None)
+            if torch.is_tensor(value):
+                return value
+        for value in output.values():
+            if torch.is_tensor(value):
+                return value
+    raise TypeError("Model output is not a tensor-like object.")
+
+
+@torch.no_grad()
+def _evaluate_dataset_direct(
+    model,
+    dataset,
+    device: str,
+    loss_fn,
+    eval_metric_names: List[str],
+    default_eval_metric: str,
+    batch_size: int,
+    num_workers: int,
+) -> Dict[str, float]:
+    if dataset is None:
+        return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
+    try:
+        n = len(dataset)
+    except Exception:
+        n = 0
+    if int(n) <= 0:
+        return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
+
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=max(1, int(batch_size)),
+        shuffle=False,
+        num_workers=max(0, int(num_workers)),
+    )
+    manager = MetricsManager(
+        eval_metrics=eval_metric_names,
+        default_eval_metric=str(default_eval_metric),
+    )
+    total_examples = 0
+    correct = 0
+    has_logits = False
+    for data, target in loader:
+        data = data.to(device)
+        target = target.to(device)
+        logits = _resolve_model_output(model(data))
+        loss = loss_fn(logits, target)
+
+        logits_cpu = logits.detach().cpu()
+        target_cpu = target.detach().cpu()
+        manager.track(float(loss.item()), logits_cpu, target_cpu)
+        batch = int(target_cpu.shape[0]) if target_cpu.ndim > 0 else 1
+        total_examples += batch
+        if logits_cpu.ndim > 1:
+            has_logits = True
+            correct += int(
+                torch.sum(logits_cpu.argmax(dim=1) == target_cpu.reshape(-1)).item()
+            )
+
+    stats = manager.aggregate(total_len=total_examples)
+    if float(stats.get("accuracy", -1.0)) < 0.0 and has_logits:
+        stats["accuracy"] = float(correct / max(total_examples, 1))
+    return stats
+
+
 def _build_federated_eval_plan(
     config: DictConfig,
     round_idx: int,
@@ -1211,7 +1386,11 @@ def _build_federated_eval_plan(
 ) -> Dict[str, List[int] | str | bool]:
     scheme = str(config.get("federated_eval_scheme", "holdout_dataset")).strip().lower()
     del selected_train_ids
-    checkpoint = _should_eval_round(round_idx, int(config.eval_every), num_rounds)
+    checkpoint = _should_eval_round(
+        round_idx,
+        int(config.get("federated_eval_every", int(config.eval_every))),
+        num_rounds,
+    )
 
     if not checkpoint:
         return {
@@ -1222,8 +1401,8 @@ def _build_federated_eval_plan(
         }
 
     if scheme == "holdout_client":
-        in_ids = sorted(train_client_ids)
-        out_ids = sorted(holdout_client_ids)
+        in_ids = _sample_eval_clients(config, sorted(train_client_ids), round_idx)
+        out_ids = _sample_eval_clients(config, sorted(holdout_client_ids), round_idx)
         return {
             "scheme": "holdout_client",
             "checkpoint": checkpoint,
@@ -1233,7 +1412,7 @@ def _build_federated_eval_plan(
 
     # Default: holdout_dataset-based evaluation.
     # Evaluate all train clients only at checkpoint rounds.
-    in_ids = sorted(train_client_ids)
+    in_ids = _sample_eval_clients(config, sorted(train_client_ids), round_idx)
     return {
         "scheme": "holdout_dataset",
         "checkpoint": checkpoint,
@@ -1269,9 +1448,10 @@ def _run_federated_eval_mpi(
         enabled=_cfg_bool(config, "show_eval_progress", True),
     )
     try:
+        first_chunk = True
         for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
             communicator.broadcast_global_model(
-                model=model_state,
+                model=model_state if first_chunk else None,
                 args={
                     "done": False,
                     "mode": "eval",
@@ -1280,6 +1460,7 @@ def _run_federated_eval_mpi(
                     "eval_split": str(eval_split),
                 },
             )
+            first_chunk = False
             eval_payloads = communicator.recv_all_local_models_from_clients()
             for cid, payload in eval_payloads.items():
                 if isinstance(payload, dict) and "eval_stats" in payload:
@@ -1374,6 +1555,20 @@ def _run_federated_eval_serial(
 ) -> Optional[Dict[str, float]]:
     if not eval_client_ids:
         return None
+    eval_loss_fn = getattr(torch.nn, str(config.criterion))()
+    eval_metric_names = parse_metric_names(config.get("eval_metrics", ["acc1"]))
+    default_eval_metric = str(config.get("default_eval_metric", "acc1"))
+    eval_batch_size = int(config.get("eval_batch_size", config.batch_size))
+    eval_workers = (
+        int(config.num_workers)
+        if eval_num_workers_override is None
+        else max(0, int(eval_num_workers_override))
+    )
+    model.load_state_dict(global_state)
+    model = model.to(device)
+    eval_loss_fn = eval_loss_fn.to(device)
+    was_training = bool(getattr(model, "training", False))
+    model.eval()
     chunk_size = _client_processing_chunk_size(
         config=config,
         model=model,
@@ -1389,30 +1584,27 @@ def _run_federated_eval_serial(
     )
     try:
         for chunk_ids in _iter_id_chunks(sorted(eval_client_ids), chunk_size):
-            chunk_clients = _build_clients(
-                config=config,
-                model=model,
-                client_datasets=client_datasets,
-                local_client_ids=np.asarray(chunk_ids).astype(int),
-                device=device,
-                run_log_dir=run_log_dir,
-                client_logging_enabled=client_logging_enabled,
-                share_model=True,
-                num_workers_override=eval_num_workers_override,
-            )
-            for client in chunk_clients:
-                client.download(global_state)
-                eval_stats[int(client.id)] = client.evaluate(
-                    split=str(eval_split),
-                    offload_after=False,
+            for client_id in chunk_ids:
+                eval_ds = _resolve_client_eval_dataset(
+                    client_datasets=client_datasets,
+                    client_id=int(client_id),
+                    eval_split=str(eval_split),
                 )
-            _release_clients(
-                chunk_clients,
-                clear_cuda_cache=_cfg_bool(config, "clear_cuda_cache_after_chunk", False),
-            )
+                eval_stats[int(client_id)] = _evaluate_dataset_direct(
+                    model=model,
+                    dataset=eval_ds,
+                    device=device,
+                    loss_fn=eval_loss_fn,
+                    eval_metric_names=eval_metric_names,
+                    default_eval_metric=default_eval_metric,
+                    batch_size=eval_batch_size,
+                    num_workers=eval_workers,
+                )
             if progress is not None:
                 progress.update(len(chunk_ids))
     finally:
+        if was_training:
+            model.train()
         if progress is not None:
             progress.close()
     return _aggregate_eval_stats(eval_stats)
@@ -1457,6 +1649,12 @@ def _run_server_mpi(
     )
     if logger is not None:
         logger.info(start_msg)
+        _emit_federated_eval_policy_message(
+            config=config,
+            train_client_count=len(train_client_ids),
+            holdout_client_count=len(holdout_client_ids),
+            logger=logger,
+        )
     else:
         print(start_msg)
 
@@ -1576,9 +1774,20 @@ def _run_client_mpi(
     on_demand_eval_num_workers: Optional[int] = None,
 ):
     local_client_set = {int(cid) for cid in local_client_ids}
+    on_demand_model = copy.deepcopy(model) if use_on_demand else None
+    eval_model = on_demand_model if on_demand_model is not None else model
+    eval_loss_fn = getattr(torch.nn, str(config.criterion))().to(device)
+    eval_metric_names = parse_metric_names(config.get("eval_metrics", ["acc1"]))
+    default_eval_metric = str(config.get("default_eval_metric", "acc1"))
+    eval_batch_size = int(config.get("eval_batch_size", config.batch_size))
+    eval_workers = (
+        int(config.num_workers)
+        if on_demand_eval_num_workers is None
+        else max(0, int(on_demand_eval_num_workers))
+    )
     chunk_size = _client_processing_chunk_size(
         config=config,
-        model=model,
+        model=on_demand_model if on_demand_model is not None else model,
         device=device,
         total_clients=len(local_client_set),
         phase="train",
@@ -1611,47 +1820,31 @@ def _run_client_mpi(
         local_payload = {}
         if mode == "eval":
             eval_split = str(args.get("eval_split", "test"))
-            eval_ids = set(
+            eval_ids = sorted(
                 int(cid) for cid in args.get("eval_ids", []) if int(cid) in local_client_set
             )
-            if eager_clients is not None:
-                for client in eager_clients:
-                    if client.id not in eval_ids:
-                        continue
-                    client.download(global_state)
-                    local_payload[int(client.id)] = {
-                        "eval_stats": client.evaluate(
-                            split=eval_split,
-                            offload_after=False,
-                        )
-                    }
-            else:
-                for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
-                    chunk_clients = _build_clients(
-                        config=config,
-                        model=model,
-                        client_datasets=client_datasets,
-                        local_client_ids=np.asarray(chunk_ids).astype(int),
+            if global_state is not None:
+                eval_model.load_state_dict(global_state)
+            eval_model = eval_model.to(device)
+            eval_model.eval()
+            for client_id in eval_ids:
+                eval_ds = _resolve_client_eval_dataset(
+                    client_datasets=client_datasets,
+                    client_id=int(client_id),
+                    eval_split=eval_split,
+                )
+                local_payload[int(client_id)] = {
+                    "eval_stats": _evaluate_dataset_direct(
+                        model=eval_model,
+                        dataset=eval_ds,
                         device=device,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=client_logging_enabled,
-                        share_model=True,
-                        num_workers_override=on_demand_eval_num_workers,
+                        loss_fn=eval_loss_fn,
+                        eval_metric_names=eval_metric_names,
+                        default_eval_metric=default_eval_metric,
+                        batch_size=eval_batch_size,
+                        num_workers=eval_workers,
                     )
-                    for client in chunk_clients:
-                        client.download(global_state)
-                        local_payload[int(client.id)] = {
-                            "eval_stats": client.evaluate(
-                                split=eval_split,
-                                offload_after=False,
-                            )
-                        }
-                    _release_clients(
-                        chunk_clients,
-                        clear_cuda_cache=_cfg_bool(
-                            config, "clear_cuda_cache_after_chunk", False
-                        ),
-                    )
+                }
         else:
             selected = set(
                 int(cid)
@@ -1676,13 +1869,13 @@ def _run_client_mpi(
                 for chunk_ids in _iter_id_chunks(sorted(selected), chunk_size):
                     chunk_clients = _build_clients(
                         config=config,
-                        model=model,
+                        model=on_demand_model if on_demand_model is not None else model,
                         client_datasets=client_datasets,
                         local_client_ids=np.asarray(chunk_ids).astype(int),
                         device=device,
                         run_log_dir=run_log_dir,
                         client_logging_enabled=client_logging_enabled,
-                        share_model=False,
+                        share_model=True,
                         num_workers_override=on_demand_train_num_workers,
                     )
                     for client in chunk_clients:
@@ -1776,6 +1969,7 @@ def run_serial(config) -> None:
     )
     eager_clients = None
     use_on_demand = bool(state_policy["use_on_demand"])
+    on_demand_model = copy.deepcopy(model) if use_on_demand else None
 
     if not use_on_demand:
         eager_clients = _build_clients(
@@ -1797,6 +1991,12 @@ def run_serial(config) -> None:
             holdout_client_count=len(holdout_client_ids),
             num_sampled_clients=num_sampled_clients,
         )
+    )
+    _emit_federated_eval_policy_message(
+        config=config,
+        train_client_count=len(train_client_ids),
+        holdout_client_count=len(holdout_client_ids),
+        logger=server_logger,
     )
 
     for round_idx in range(1, int(config.num_rounds) + 1):
@@ -1826,13 +2026,13 @@ def run_serial(config) -> None:
             for chunk_ids in _iter_id_chunks(selected_ids, chunk_size):
                 chunk_clients = _build_clients(
                     config=config,
-                    model=model,
+                    model=on_demand_model if on_demand_model is not None else model,
                     client_datasets=client_datasets,
                     local_client_ids=np.asarray(chunk_ids).astype(int),
                     device=client_device,
                     run_log_dir=run_log_dir,
                     client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-                    share_model=False,
+                    share_model=True,
                     num_workers_override=on_demand_workers["train"],
                 )
                 for client in chunk_clients:
@@ -1906,7 +2106,7 @@ def run_serial(config) -> None:
                 if plan["scheme"] == "holdout_client":
                     federated_eval_in_metrics = _run_federated_eval_serial(
                         config=config,
-                        model=model,
+                        model=on_demand_model if on_demand_model is not None else model,
                         client_datasets=client_datasets,
                         run_log_dir=run_log_dir,
                         client_logging_enabled=bool(
@@ -1922,7 +2122,7 @@ def run_serial(config) -> None:
                     )
                     federated_eval_out_metrics = _run_federated_eval_serial(
                         config=config,
-                        model=model,
+                        model=on_demand_model if on_demand_model is not None else model,
                         client_datasets=client_datasets,
                         run_log_dir=run_log_dir,
                         client_logging_enabled=bool(
@@ -1939,7 +2139,7 @@ def run_serial(config) -> None:
                 else:
                     federated_eval_metrics = _run_federated_eval_serial(
                         config=config,
-                        model=model,
+                        model=on_demand_model if on_demand_model is not None else model,
                         client_datasets=client_datasets,
                         run_log_dir=run_log_dir,
                         client_logging_enabled=bool(
@@ -2020,6 +2220,7 @@ def run_mpi(config) -> None:
         num_clients=num_clients,
         num_sampled_clients=num_sampled_clients,
     )
+    on_demand_workers = _resolve_on_demand_worker_policy(config, logger=None)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
@@ -2049,9 +2250,7 @@ def run_mpi(config) -> None:
             logging_policy, num_clients=num_clients, logger=server_logger
         )
         _emit_client_state_policy_message(state_policy, logger=server_logger)
-        on_demand_workers = _resolve_on_demand_worker_policy(
-            config, logger=server_logger
-        )
+        on_demand_workers = _resolve_on_demand_worker_policy(config, logger=server_logger)
         server_logger.info(
             f"MPI context: world_size={world_size} rank={rank} local_rank={local_rank} "
             f"download_mode={_mpi_download_mode(config)}"

@@ -27,16 +27,22 @@ default_eval_metric: seqacc
 enable_global_eval: false
 enable_federated_eval: true
 eval_every: 1
+federated_eval_every: 0
 federated_eval_scheme: holdout_dataset
 holdout_eval_num_clients: 0
+federated_eval_client_ratio: 1.0
+federated_eval_max_clients: 254555
+federated_eval_sampling_mode: random
+eval_client_processing_chunk_size: 32
 
-device: cuda:1
+device: cuda
 server_device: cuda:0
-num_workers: 16
 
 # Large-client scalability knobs
 stateful_clients: false
-client_processing_chunk_size: 0
+client_processing_chunk_size: 16
+on_demand_workers: 0
+on_demand_eval_num_workers: 0
 
 download: false
 data_dir: ./data
