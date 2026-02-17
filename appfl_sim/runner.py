@@ -11,7 +11,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, Sequence, Tuple, List, Optional
+from typing import Any, Dict, Sequence, Tuple, List, Optional
 
 import numpy as np
 import torch
@@ -25,6 +25,7 @@ from appfl_sim.agent import (
 )
 from appfl_sim.logger import ServerAgentFileLogger, create_experiment_tracker
 from appfl_sim.loaders import load_dataset, load_model
+from appfl_sim.metrics import parse_metric_names
 from appfl_sim.misc.utils import get_local_rank, resolve_rank_device, set_seed_everything
 
 _MPI_AUTO_LAUNCH_ENV = "APPFL_SIM_MPI_AUTOLAUNCHED"
@@ -544,6 +545,31 @@ def _log_round(
     def _entity_line(title: str, body: str) -> str:
         return f"  {title:<18} {body}"
 
+    eval_metric_order = parse_metric_names(config.get("eval_metrics", None))
+    if not eval_metric_order:
+        default_metric = str(config.get("default_eval_metric", "acc1")).strip().lower()
+        if default_metric and default_metric not in {"none", "null"}:
+            eval_metric_order = [default_metric]
+
+    def _pick_numeric(d: Dict[str, Any], candidates: List[str]) -> Optional[Tuple[str, float]]:
+        for key in candidates:
+            if key in d and isinstance(d[key], (int, float)):
+                return key, float(d[key])
+        return None
+
+    def _collect_client_values(
+        all_stats: Dict[int, Dict[str, Any]],
+        candidates: List[str],
+    ) -> List[float]:
+        values: List[float] = []
+        for row in all_stats.values():
+            hit = _pick_numeric(row, candidates)
+            if hit is None:
+                continue
+            _, value = hit
+            values.append(float(value))
+        return values
+
     round_metrics: Dict[str, object] = {
         "clients": {
             "selected": int(selected_count),
@@ -556,31 +582,62 @@ def _log_round(
     ]
 
     if stats:
-        numeric_train_keys = sorted(
-            {
-                k
-                for values in stats.values()
-                for k, v in values.items()
-                if isinstance(v, (int, float))
-                and k != "num_examples"
-                and not k.startswith("pre_val_")
-                and not k.startswith("post_val_")
-            }
-        )
-        if numeric_train_keys:
-            train_parts = []
-            training_metrics: Dict[str, Dict[str, float]] = {}
-            for key in numeric_train_keys:
-                values = [float(v.get(key, 0.0)) for v in stats.values()]
-                avg_value = float(np.mean(values))
-                std_value = float(np.std(values))
-                training_metrics[key] = {
-                    "avg": avg_value,
-                    "std": std_value,
-                }
-                train_parts.append(f"{key}={avg_value:.4f}/{std_value:.4f}")
+        train_parts: List[str] = []
+        training_metrics: Dict[str, Dict[str, float]] = {}
+
+        def _append_train_field(label: str, candidates: List[str]) -> bool:
+            vals = _collect_client_values(stats, candidates)
+            if not vals:
+                return False
+            avg_value = float(np.mean(vals))
+            std_value = float(np.std(vals))
+            training_metrics[label] = {"avg": avg_value, "std": std_value}
+            train_parts.append(f"{label}: {avg_value:.4f}/{std_value:.4f}")
+            return True
+
+        _append_train_field("loss", ["loss"])
+        metric_hits = 0
+        for metric_name in eval_metric_order:
+            if _append_train_field(metric_name, [f"metric_{metric_name}", metric_name]):
+                metric_hits += 1
+        if metric_hits == 0:
+            # Backward-compatible fallback when only legacy accuracy is present.
+            _append_train_field("accuracy", ["accuracy"])
+
+        if train_parts:
             round_metrics["training"] = training_metrics
             lines.append(_entity_line("Training:", " | ".join(train_parts)))
+
+    def _append_local_eval_block(title: str, json_key: str, prefix: str) -> None:
+        if not stats:
+            return
+        parts: List[str] = []
+        section: Dict[str, Dict[str, float]] = {}
+
+        def _append_field(label: str, candidates: List[str]) -> bool:
+            vals = _collect_client_values(stats, candidates)
+            if not vals:
+                return False
+            avg_value = float(np.mean(vals))
+            std_value = float(np.std(vals))
+            section[label] = {"avg": avg_value, "std": std_value}
+            parts.append(f"{label}: {avg_value:.4f}/{std_value:.4f}")
+            return True
+
+        _append_field("loss", [f"{prefix}loss"])
+        metric_hits = 0
+        for metric_name in eval_metric_order:
+            if _append_field(
+                metric_name,
+                [f"{prefix}metric_{metric_name}", f"{prefix}{metric_name}"],
+            ):
+                metric_hits += 1
+        if metric_hits == 0:
+            _append_field("accuracy", [f"{prefix}accuracy"])
+
+        if parts:
+            round_metrics[json_key] = section
+            lines.append(_entity_line(f"{title}:", " | ".join(parts)))
 
     def _append_eval_block(
         title: str,
@@ -590,29 +647,42 @@ def _log_round(
     ) -> None:
         if metrics is None:
             return
-        parts = []
+
+        parts: List[str] = []
         section_metrics: Dict[str, object] = {}
-        for key, value in sorted(metrics.items()):
-            if not isinstance(value, (int, float)):
-                continue
-            if key in {"num_clients", "num_examples"}:
-                continue
-            if key.endswith("_min") or key.endswith("_max") or key.endswith("_std"):
-                continue
+        used_raw_keys: set[str] = set()
+
+        def _append_eval_field(label: str, candidates: List[str]) -> bool:
+            hit = _pick_numeric(metrics, candidates)
+            if hit is None:
+                return False
+            raw_key, value = hit
+            if raw_key in used_raw_keys:
+                return False
+            used_raw_keys.add(raw_key)
             if with_client_std:
-                std_key = f"{key}_std"
+                std_key = f"{raw_key}_std"
                 if std_key in metrics and isinstance(metrics[std_key], (int, float)):
-                    section_metrics[key] = {
+                    std_val = float(metrics[std_key])
+                    section_metrics[label] = {
                         "avg": float(value),
-                        "std": float(metrics[std_key]),
+                        "std": std_val,
                     }
-                    parts.append(f"{key}={float(value):.4f}/{float(metrics[std_key]):.4f}")
-                else:
-                    section_metrics[key] = float(value)
-                    parts.append(f"{key}={float(value):.4f}")
-            else:
-                section_metrics[key] = float(value)
-                parts.append(f"{key}={float(value):.4f}")
+                    parts.append(f"{label}: {float(value):.4f}/{std_val:.4f}")
+                    return True
+            section_metrics[label] = float(value)
+            parts.append(f"{label}: {float(value):.4f}")
+            return True
+
+        _append_eval_field("loss", ["loss"])
+        metric_hits = 0
+        for metric_name in eval_metric_order:
+            if _append_eval_field(metric_name, [f"metric_{metric_name}", metric_name]):
+                metric_hits += 1
+        if metric_hits == 0:
+            # Backward-compatible fallback when no configured metrics are present.
+            _append_eval_field("accuracy", ["accuracy"])
+
         if parts:
             lines.append(_entity_line(f"{title}:", " | ".join(parts)))
             round_metrics[json_key] = section_metrics
@@ -630,7 +700,9 @@ def _log_round(
             ):
                 continue
             base = key[:-4]
+            display_base = base[7:] if base.startswith("metric_") else base
             extrema[base] = {
+                "label": display_base,
                 "min": float(value),
                 "max": float(metrics[f"{base}_max"]),
             }
@@ -639,7 +711,7 @@ def _log_round(
         summary_keys = sorted(extrema.keys())
         shown_keys = summary_keys[:4]
         parts = [
-            f"{name}[min,max]=[{extrema[name]['min']:.4f},{extrema[name]['max']:.4f}]"
+            f"{extrema[name]['label']}[min,max]=[{extrema[name]['min']:.4f},{extrema[name]['max']:.4f}]"
             for name in shown_keys
         ]
         if len(summary_keys) > len(shown_keys):
@@ -654,47 +726,9 @@ def _log_round(
 
     do_pre_val = _cfg_bool(config, "do_pre_validation", True)
     do_post_val = _cfg_bool(config, "do_validation", True)
-    if do_pre_val and do_post_val and stats:
-        if all("pre_val_loss" in v and "pre_val_accuracy" in v for v in stats.values()):
-            pre_loss_vals = [float(v["pre_val_loss"]) for v in stats.values()]
-            pre_acc_vals = [float(v["pre_val_accuracy"]) for v in stats.values()]
-            round_metrics["local_pre_eval"] = {
-                "accuracy": {
-                    "avg": float(np.mean(pre_acc_vals)),
-                    "std": float(np.std(pre_acc_vals)),
-                },
-                "loss": {
-                    "avg": float(np.mean(pre_loss_vals)),
-                    "std": float(np.std(pre_loss_vals)),
-                },
-            }
-            lines.append(
-                _entity_line(
-                    "Local Pre-Eval.:",
-                    f"accuracy={np.mean(pre_acc_vals):.4f}/{np.std(pre_acc_vals):.4f} | "
-                    f"loss={np.mean(pre_loss_vals):.4f}/{np.std(pre_loss_vals):.4f}",
-                )
-            )
-        if all("post_val_loss" in v and "post_val_accuracy" in v for v in stats.values()):
-            post_loss_vals = [float(v["post_val_loss"]) for v in stats.values()]
-            post_acc_vals = [float(v["post_val_accuracy"]) for v in stats.values()]
-            round_metrics["local_post_eval"] = {
-                "accuracy": {
-                    "avg": float(np.mean(post_acc_vals)),
-                    "std": float(np.std(post_acc_vals)),
-                },
-                "loss": {
-                    "avg": float(np.mean(post_loss_vals)),
-                    "std": float(np.std(post_loss_vals)),
-                },
-            }
-            lines.append(
-                _entity_line(
-                    "Local Post-Eval.:",
-                    f"accuracy={np.mean(post_acc_vals):.4f}/{np.std(post_acc_vals):.4f} | "
-                    f"loss={np.mean(post_loss_vals):.4f}/{np.std(post_loss_vals):.4f}",
-                )
-            )
+    if do_pre_val and do_post_val:
+        _append_local_eval_block("Local Pre-Eval.", "local_pre_eval", "pre_val_")
+        _append_local_eval_block("Local Post-Eval.", "local_post_eval", "post_val_")
 
     _append_eval_block(
         "Global Eval.", "global_eval", global_eval_metrics, with_client_std=False
