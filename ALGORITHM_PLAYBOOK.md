@@ -78,7 +78,7 @@ Minimum idea:
 algorithm: <algo>
 num_clients: 3
 num_rounds: 2
-client_fraction: 1.0
+num_sampled_clients: 3
 ```
 
 ### Step C: run tiny experiment
@@ -101,7 +101,7 @@ split_map, client_datasets, server_dataset, args
 
 Where:
 - `split_map`: client split info (dict-like)
-- `client_datasets`: list of `(train_dataset, test_dataset)` for each client
+- `client_datasets`: list of `(train_dataset, test_dataset)` or `(train_dataset, val_dataset, test_dataset)` for each client
 - `server_dataset`: global test/eval dataset (or `None`)
 - `args`: metadata namespace, including at least:
   - `num_clients`
@@ -180,8 +180,11 @@ PYTHONPATH=. .venv/bin/python tools/export_appfl_plugin.py \
 
 Exporter output includes:
 - APPFL-style module files under `src/appfl/algorithm/...`
+- Auto-vendored `src/appfl/metrics/*` when exported trainer depends on `MetricsManager`.
 - Config template under `config/algorithms/<algo>.yaml`
 - Patch/install instructions (artifact mode)
+- Optional compatibility audit with APPFL tree:
+  `--check-appfl-root /path/to/APPFL-main`
 
 ---
 

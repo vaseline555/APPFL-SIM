@@ -37,7 +37,7 @@ model:
 
 num_clients: 20
 num_rounds: 20
-client_fraction: 0.2
+num_sampled_clients: 4
 test_size: 0.2
 
 local_epochs: 1
@@ -58,10 +58,10 @@ unbalanced_keep_min: 0.5
 eval_every: 1
 enable_global_eval: true
 enable_federated_eval: true
-federated_eval_every: 1
 federated_eval_scheme: holdout_dataset
 holdout_eval_num_clients: 0
 holdout_eval_client_ratio: 0.0
+show_eval_progress: true
 stateful_clients: false
 client_processing_chunk_size: 0
 offload_to_cpu_after_local_job: true

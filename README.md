@@ -238,19 +238,27 @@ Logging backend control:
 Evaluation control:
 
 - `enable_global_eval=true|false`:
-  Global evaluation on `server_dataset` (runs only when a separate server eval split exists).
+  Global evaluation on `server_dataset` (runs only when a separate server eval split exists),
+  at `eval_every` rounds and the final round.
 - `enable_federated_eval=true|false`:
-  Federated evaluation across client holdout sets.
+  Federated evaluation across client-local test sets.
 - `federated_eval_scheme=holdout_dataset|holdout_client`:
   - `holdout_dataset`:
-    selected training clients are evaluated each round;
-    all training clients are evaluated every `federated_eval_every` rounds and final round.
+    federated evaluation runs on all training clients at `eval_every` rounds and final round.
   - `holdout_client`:
-    in-client (training pool) evaluation each round;
-    every `federated_eval_every` rounds and final round, both in-client and out-client
-    (holdout pool) are evaluated and logged independently.
+    federated evaluation runs at `eval_every` rounds and final round, for both
+    in-client (training pool) and out-client (holdout pool), reported independently.
+- Local evaluation:
+  sampled clients report local pre/post stats each round (`Local Pre-val/test`, `Local Post-val/test`),
+  controlled by `do_pre_validation` and `do_validation`.
+  This is different from federated evaluation:
+  local pre/post is per-round sampled-client diagnostics, while federated evaluation is checkpointed all-client reporting.
 - `holdout_eval_num_clients` / `holdout_eval_client_ratio`:
   size of out-client holdout pool for `federated_eval_scheme=holdout_client`.
+- `num_sampled_clients`:
+  number of sampled training clients per round (replaces fraction-style sampling).
+- `show_eval_progress=true|false`:
+  enable tqdm progress bars for server global evaluation and federated evaluation.
 
 ## Client Lifecycle
 

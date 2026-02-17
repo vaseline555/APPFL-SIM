@@ -14,7 +14,7 @@ num_embeddings: 1000
 
 num_clients: 3
 num_rounds: 1
-client_fraction: 1.0
+num_sampled_clients: 3
 split_type: iid
 local_epochs: 1
 batch_size: 8

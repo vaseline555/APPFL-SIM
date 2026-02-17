@@ -90,10 +90,12 @@ class ICEADMMTrainer(BaseTrainer):
             self.train_configs.get("do_pre_validation", False) and do_validation
         )
 
+        metric_label = str(self.train_configs.get("default_eval_metric", "accuracy"))
+
         """Set up logging title"""
         if self.round == 0:
             title = (
-                ["Round", "Time", "Train Loss", "Train Accuracy"]
+                ["Round", "Time", "Train Loss", f"Train {metric_label}"]
                 if not do_validation
                 else (
                     [
@@ -101,18 +103,18 @@ class ICEADMMTrainer(BaseTrainer):
                         "Pre Val?",
                         "Time",
                         "Train Loss",
-                        "Train Accuracy",
+                        f"Train {metric_label}",
                         "Val Loss",
-                        "Val Accuracy",
+                        f"Val {metric_label}",
                     ]
                     if do_pre_validation
                     else [
                         "Round",
                         "Time",
                         "Train Loss",
-                        "Train Accuracy",
+                        f"Train {metric_label}",
                         "Val Loss",
-                        "Val Accuracy",
+                        f"Val {metric_label}",
                     ]
                 )
             )

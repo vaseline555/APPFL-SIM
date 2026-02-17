@@ -27,6 +27,11 @@ from omegaconf import OmegaConf, DictConfig
 from typing import Union, Dict, OrderedDict, Tuple, Optional, Any
 
 try:
+    from tqdm.auto import tqdm as _tqdm
+except Exception:  # pragma: no cover
+    _tqdm = None
+
+try:
     from appfl_sim.misc.data_readiness.report import (
         get_unique_file_path,
         generate_html_content,
@@ -313,26 +318,49 @@ class ServerAgent:
         total_examples = 0
         target_pred = []
         target_true = []
-        for inputs, targets in self._val_dataloader:
-            inputs = inputs.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-            logits = self.model(inputs)
-            loss = self.loss_fn(logits, targets)
-            logits_cpu = logits.detach().cpu()
-            targets_cpu = targets.detach().cpu()
+        show_progress = bool(
+            self.server_agent_config.server_configs.get("eval_show_progress", True)
+        )
+        progress_bar = None
+        iterator = self._val_dataloader
+        if show_progress and _tqdm is not None:
+            try:
+                total_batches = len(self._val_dataloader)
+            except Exception:
+                total_batches = None
+            progress_bar = _tqdm(
+                self._val_dataloader,
+                total=total_batches,
+                desc="global eval",
+                leave=False,
+                dynamic_ncols=True,
+            )
+            iterator = progress_bar
 
-            manager.track(float(loss.item()), logits_cpu, targets_cpu)
-            bs = targets_cpu.size(0)
-            total_examples += bs
-            target_pred.append(logits_cpu.numpy())
-            target_true.append(targets_cpu.numpy())
-            if logits_cpu.ndim > 1:
-                total_has_logits = True
-                total_correct += int(
-                    torch.eq(torch.argmax(logits_cpu, dim=1), targets_cpu.view(-1))
-                    .sum()
-                    .item()
-                )
+        try:
+            for inputs, targets in iterator:
+                inputs = inputs.to(device, non_blocking=True)
+                targets = targets.to(device, non_blocking=True)
+                logits = self.model(inputs)
+                loss = self.loss_fn(logits, targets)
+                logits_cpu = logits.detach().cpu()
+                targets_cpu = targets.detach().cpu()
+
+                manager.track(float(loss.item()), logits_cpu, targets_cpu)
+                bs = targets_cpu.size(0)
+                total_examples += bs
+                target_pred.append(logits_cpu.numpy())
+                target_true.append(targets_cpu.numpy())
+                if logits_cpu.ndim > 1:
+                    total_has_logits = True
+                    total_correct += int(
+                        torch.eq(torch.argmax(logits_cpu, dim=1), targets_cpu.view(-1))
+                        .sum()
+                        .item()
+                    )
+        finally:
+            if progress_bar is not None:
+                progress_bar.close()
 
         result = manager.aggregate(total_len=total_examples)
         if float(result.get("accuracy", -1.0)) < 0.0:

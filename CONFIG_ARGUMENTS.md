@@ -46,8 +46,10 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## FL Scale
 - `num_clients` (default: `20`): logical total number of clients.
 - `num_rounds` (default: `20`): number of global rounds.
-- `client_fraction` (default: `0.2`): sampled client fraction per round.
-- `test_size` (default: `0.2`): train/holdout split ratio inside client data.
+- `num_sampled_clients` (default: `4`): number of sampled clients per round.
+- `test_size` (default: `0.2`): loader-level train/holdout split ratio when parser supports it.
+- `dataset_split_ratio` (default: unset): optional local split override for each client dataset.
+  Use `[80,20]` for train/test or `[80,10,10]` for train/val/test (also accepts 1.0 scale).
 
 ## Optimization
 - `local_epochs` (default: `1`): local epochs per selected client.
@@ -68,11 +70,11 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## Evaluation
 - `eval_every` (default: `1`): server/global eval frequency.
 - `enable_global_eval` (default: `true`): enable server-side global eval.
-- `enable_federated_eval` (default: `true`): enable federated eval.
-- `federated_eval_every` (default: `1`): federated checkpoint eval frequency.
+- `enable_federated_eval` (default: `true`): enable checkpointed federated eval on local test splits.
 - `federated_eval_scheme` (default: `holdout_dataset`): federated eval mode (`holdout_dataset` or `holdout_client`).
 - `holdout_eval_num_clients` (default: `0`): number of holdout clients (holdout-client mode).
 - `holdout_eval_client_ratio` (default: `0.0`): ratio-based holdout client size.
+- `show_eval_progress` (default: `true`): show tqdm progress bars for global/federated evaluation.
 
 ## Client Lifecycle and Memory
 - `stateful_clients` (default: `false`): keep client objects across rounds (`true`) or instantiate/release on-demand (`false`).
@@ -111,8 +113,11 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## Metrics
 - `eval_metrics` (default in code: `[acc1]` when unspecified): metric list.
 - `default_eval_metric` (default in code: `acc1` when unspecified): primary metric key.
-- `do_pre_validation` (default in code: `true`): pre-train local validation.
-- `do_validation` (default in code: `true`): post-train local validation.
+- `do_pre_validation` (default in code: `true`): local pre-eval on available local val/test splits for sampled clients.
+- `do_validation` (default in code: `true`): local post-eval on available local val/test splits for sampled clients.
+- `local_gen_error` (derived): reported when local val exists, computed as `post_val_loss - train_loss`.
+- `pre/post local eval` vs `federated eval`:
+  pre/post is per-round sampled-client diagnostics; federated eval is all-client checkpoint reporting at `eval_every`.
 
 ## Model Shape/Text Parameters
 - `resize` (default: `28`): image resize hint for local models.
@@ -135,6 +140,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 
 ## Deprecated Alias
 - `effective` / `client_init_mode` (alias): mapped to `stateful_clients` for backward compatibility.
+- `client_fraction` (alias): converted to `num_sampled_clients` using `int(client_fraction * num_clients)`.
 
 ## Purged (removed from default config)
 - `server_lr`: removed (unused by current runner pipeline).

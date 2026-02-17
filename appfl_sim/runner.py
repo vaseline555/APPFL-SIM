@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import random
+import ast
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +17,7 @@ from typing import Any, Dict, Sequence, Tuple, List, Optional
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+from torch.utils.data import ConcatDataset, random_split
 
 from appfl_sim.agent import (
     ClientAgent,
@@ -27,6 +29,11 @@ from appfl_sim.logger import ServerAgentFileLogger, create_experiment_tracker
 from appfl_sim.loaders import load_dataset, load_model
 from appfl_sim.metrics import parse_metric_names
 from appfl_sim.misc.utils import get_local_rank, resolve_rank_device, set_seed_everything
+
+try:
+    from tqdm.auto import tqdm as _tqdm
+except Exception:  # pragma: no cover
+    _tqdm = None
 
 _MPI_AUTO_LAUNCH_ENV = "APPFL_SIM_MPI_AUTOLAUNCHED"
 
@@ -135,6 +142,123 @@ def _cfg_bool(config: DictConfig, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def _new_progress(total: int, desc: str, enabled: bool):
+    if not enabled or _tqdm is None or int(total) <= 0:
+        return None
+    return _tqdm(
+        total=int(total),
+        desc=str(desc),
+        leave=False,
+        dynamic_ncols=True,
+    )
+
+
+def _parse_dataset_split_ratio(config: DictConfig) -> Optional[List[float]]:
+    raw = config.get("dataset_split_ratio", config.get("split_ratio", None))
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        text = raw.strip()
+        if text == "":
+            return None
+        try:
+            parsed = ast.literal_eval(text)
+        except Exception as exc:
+            raise ValueError(
+                "dataset_split_ratio must be a list-like string, e.g. '[80,20]' or '[0.8,0.1,0.1]'"
+            ) from exc
+    else:
+        parsed = raw
+
+    if isinstance(parsed, (int, float)):
+        raise ValueError("dataset_split_ratio must contain 2 or 3 values.")
+    ratios = [float(x) for x in parsed]
+    if len(ratios) not in {2, 3}:
+        raise ValueError("dataset_split_ratio must have length 2 or 3.")
+    if any(x <= 0 for x in ratios):
+        raise ValueError("dataset_split_ratio values must be positive.")
+    total = float(sum(ratios))
+    if np.isclose(total, 100.0, atol=1e-6):
+        ratios = [x / 100.0 for x in ratios]
+    elif not np.isclose(total, 1.0, atol=1e-6):
+        raise ValueError(
+            "dataset_split_ratio must sum to 1.0 or 100.0, e.g. [0.8,0.2] or [80,20]."
+        )
+    return ratios
+
+
+def _safe_split_lengths(n: int, ratios: List[float]) -> List[int]:
+    lengths = [int(float(n) * r) for r in ratios]
+    remain = int(n) - int(sum(lengths))
+    for i in range(remain):
+        lengths[i % len(lengths)] += 1
+    # If possible, ensure each partition has at least one sample.
+    if n >= len(lengths):
+        for idx in range(len(lengths)):
+            if lengths[idx] > 0:
+                continue
+            donor = int(np.argmax(lengths))
+            if lengths[donor] > 1:
+                lengths[donor] -= 1
+                lengths[idx] = 1
+    return lengths
+
+
+def _normalize_client_tuple(entry) -> Tuple[Optional[object], Optional[object], Optional[object]]:
+    if not isinstance(entry, tuple):
+        raise ValueError("Each client dataset entry must be a tuple.")
+    if len(entry) == 2:
+        train_ds, test_ds = entry
+        return train_ds, None, test_ds
+    if len(entry) == 3:
+        train_ds, val_ds, test_ds = entry
+        return train_ds, val_ds, test_ds
+    raise ValueError("Each client dataset entry must be (train,test) or (train,val,test).")
+
+
+def _apply_local_dataset_split_ratio(
+    client_datasets,
+    config: DictConfig,
+    logger: Optional[ServerAgentFileLogger] = None,
+):
+    ratios = _parse_dataset_split_ratio(config)
+    if ratios is None:
+        return client_datasets
+
+    seed = int(config.get("seed", 0))
+    out = []
+    for cid, entry in enumerate(client_datasets):
+        train_ds, val_ds, test_ds = _normalize_client_tuple(entry)
+        parts = [ds for ds in (train_ds, val_ds, test_ds) if ds is not None]
+        if not parts:
+            raise ValueError(f"Client dataset entry {cid} is empty.")
+        merged = parts[0] if len(parts) == 1 else ConcatDataset(parts)
+        total = len(merged)
+        if total <= 0:
+            if len(ratios) == 2:
+                out.append((merged, merged))
+            else:
+                out.append((merged, merged, merged))
+            continue
+        lengths = _safe_split_lengths(total, ratios)
+        generator = torch.Generator().manual_seed(seed + 7919 + int(cid))
+        splits = random_split(merged, lengths, generator=generator)
+        if len(ratios) == 2:
+            out.append((splits[0], splits[1]))
+        else:
+            out.append((splits[0], splits[1], splits[2]))
+
+    msg = (
+        f"Applied local dataset split ratio={ratios} across {len(out)} client datasets "
+        "(2-way=train/test, 3-way=train/val/test)."
+    )
+    if logger is not None:
+        logger.info(msg)
+    else:
+        print(msg)
+    return out
+
+
 def _mpi_download_mode(config: DictConfig) -> str:
     raw_mode = str(config.get("mpi_dataset_download_mode", "rank0")).strip().lower()
     aliases = {
@@ -238,6 +362,7 @@ def _build_train_cfg(config: DictConfig, device: str, run_log_dir: str) -> Dict:
 def _resolve_client_logging_policy(
     config: DictConfig,
     num_clients: int,
+    num_sampled_clients: int,
 ) -> Dict[str, object]:
     scheme = str(config.get("client_logging_scheme", "auto")).strip().lower()
     threshold = int(config.get("per_client_logging_threshold", 10))
@@ -251,12 +376,14 @@ def _resolve_client_logging_policy(
     if agg_scheme != "server_only":
         raise ValueError("aggregated_logging_scheme currently supports only: server_only")
 
+    basis_clients = max(1, int(num_sampled_clients))
+
     if scheme == "aggregated":
         effective = "aggregated"
     elif scheme == "per_client":
         effective = "per_client"
     else:
-        effective = "per_client" if int(num_clients) <= threshold else "aggregated"
+        effective = "per_client" if basis_clients <= threshold else "aggregated"
 
     return {
         "requested_scheme": scheme,
@@ -265,6 +392,8 @@ def _resolve_client_logging_policy(
         "threshold": threshold,
         "warning_threshold": warning_threshold,
         "aggregated_scheme": agg_scheme,
+        "basis_clients": basis_clients,
+        "total_clients": int(num_clients),
     }
 
 
@@ -278,6 +407,8 @@ def _emit_logging_policy_message(
     threshold = int(policy["threshold"])
     warning_threshold = int(policy["warning_threshold"])
     agg_scheme = str(policy["aggregated_scheme"])
+    basis_clients = int(policy.get("basis_clients", num_clients))
+    total_clients = int(policy.get("total_clients", num_clients))
 
     def _info(msg: str) -> None:
         if logger is not None:
@@ -293,8 +424,8 @@ def _emit_logging_policy_message(
 
     if requested == "auto" and effective == "aggregated":
         _info(
-            f"Client logging auto-disabled: num_clients={num_clients} > "
-            f"per_client_logging_threshold={threshold}. "
+            f"Client logging auto-disabled: sampled_clients={basis_clients} > "
+            f"per_client_logging_threshold={threshold} (total_clients={total_clients}). "
             f"Using aggregated_logging_scheme={agg_scheme} (server-side metrics only)."
         )
         return
@@ -303,10 +434,10 @@ def _emit_logging_policy_message(
             f"Using aggregated_logging_scheme={agg_scheme} (server-side metrics only)."
         )
         return
-    if requested == "per_client" and int(num_clients) > warning_threshold:
+    if requested == "per_client" and int(basis_clients) > warning_threshold:
         _warn(
             f"Per-client logging is explicitly enabled with "
-            f"num_clients={num_clients} (> {warning_threshold}). "
+            f"sampled_clients={basis_clients} (> {warning_threshold}, total_clients={total_clients}). "
             "This may produce large I/O overhead. "
             "Suggestion: set client_logging_scheme=auto or aggregated."
         )
@@ -371,7 +502,16 @@ def _build_clients(
     train_cfg["client_logging_enabled"] = bool(client_logging_enabled)
     clients = []
     for cid in local_client_ids:
-        train_ds, test_ds = client_datasets[int(cid)]
+        dataset_entry = client_datasets[int(cid)]
+        if len(dataset_entry) == 2:
+            train_ds, test_ds = dataset_entry
+            val_ds = None
+        elif len(dataset_entry) == 3:
+            train_ds, val_ds, test_ds = dataset_entry
+        else:
+            raise ValueError(
+                "Each client dataset entry must be tuple(train,test) or tuple(train,val,test)."
+            )
         client_cfg = ClientAgentConfig(
             train_configs=OmegaConf.create(
                 {
@@ -387,7 +527,8 @@ def _build_clients(
         client = ClientAgent(client_agent_config=client_cfg)
         client.model = copy.deepcopy(model)
         client.train_dataset = train_ds
-        client.val_dataset = test_ds
+        client.val_dataset = val_ds
+        client.test_dataset = test_ds
         client.client_agent_config.train_configs.trainer = "VanillaTrainer"
         client._load_trainer()
         client.id = int(cid)
@@ -427,6 +568,8 @@ def _build_server(
     server_dataset,
 ) -> ServerAgent:
     num_clients = int(runtime_cfg["num_clients"])
+    num_sampled_clients = _resolve_num_sampled_clients(config, num_clients=num_clients)
+    sampled_fraction = float(num_sampled_clients / max(1, num_clients))
     server_cfg = ServerAgentConfig(
         client_configs=OmegaConf.create(
             {
@@ -444,8 +587,11 @@ def _build_server(
             {
                 "num_clients": num_clients,
                 "num_global_epochs": int(config.num_rounds),
-                "client_fraction": float(config.client_fraction),
+                "num_sampled_clients": int(num_sampled_clients),
+                # Kept for APPFL compatibility.
+                "client_fraction": float(sampled_fraction),
                 "device": str(config.server_device),
+                "eval_show_progress": _cfg_bool(config, "show_eval_progress", True),
                 "eval_batch_size": int(config.get("eval_batch_size", config.batch_size)),
                 "num_workers": int(config.num_workers),
                 "eval_metrics": config.get("eval_metrics", ["acc1"]),
@@ -545,6 +691,11 @@ def _log_round(
     def _entity_line(title: str, body: str) -> str:
         return f"  {title:<18} {body}"
 
+    def _join_metric_parts(parts: List[str]) -> str:
+        if not parts:
+            return ""
+        return " | ".join(f"{part:<24}" for part in parts).rstrip()
+
     eval_metric_order = parse_metric_names(config.get("eval_metrics", None))
     if not eval_metric_order:
         default_metric = str(config.get("default_eval_metric", "acc1")).strip().lower()
@@ -578,7 +729,11 @@ def _log_round(
     }
     lines = [
         "--- Round Summary ---",
-        _entity_line("Clients:", f"selected={selected_count}/{total_train_clients}"),
+        _entity_line(
+            "Clients:",
+            f"selected={selected_count}/{total_train_clients} "
+            f"({(100.0 * float(selected_count) / float(max(1, total_train_clients))):.2f}%)",
+        ),
     ]
 
     if stats:
@@ -606,7 +761,7 @@ def _log_round(
 
         if train_parts:
             round_metrics["training"] = training_metrics
-            lines.append(_entity_line("Training:", " | ".join(train_parts)))
+            lines.append(_entity_line("Training:", _join_metric_parts(train_parts)))
 
     def _append_local_eval_block(title: str, json_key: str, prefix: str) -> None:
         if not stats:
@@ -637,7 +792,7 @@ def _log_round(
 
         if parts:
             round_metrics[json_key] = section
-            lines.append(_entity_line(f"{title}:", " | ".join(parts)))
+            lines.append(_entity_line(f"{title}:", _join_metric_parts(parts)))
 
     def _append_eval_block(
         title: str,
@@ -684,7 +839,7 @@ def _log_round(
             _append_eval_field("accuracy", ["accuracy"])
 
         if parts:
-            lines.append(_entity_line(f"{title}:", " | ".join(parts)))
+            lines.append(_entity_line(f"{title}:", _join_metric_parts(parts)))
             round_metrics[json_key] = section_metrics
 
     def _append_federated_extrema(metrics: Optional[Dict[str, float]]) -> None:
@@ -708,27 +863,66 @@ def _log_round(
             }
         if not extrema:
             return
-        summary_keys = sorted(extrema.keys())
-        shown_keys = summary_keys[:4]
+
+        ordered_keys: List[str] = []
+        if "loss" in extrema:
+            ordered_keys.append("loss")
+        for metric_name in eval_metric_order:
+            for candidate in (f"metric_{metric_name}", metric_name):
+                if candidate in extrema and candidate not in ordered_keys:
+                    ordered_keys.append(candidate)
+                    break
+        if len(ordered_keys) <= 1 and "accuracy" in extrema and "accuracy" not in ordered_keys:
+            ordered_keys.append("accuracy")
+        if not ordered_keys:
+            ordered_keys = sorted(extrema.keys())
+
+        shown_keys = ordered_keys[:4]
         parts = [
             f"{extrema[name]['label']}[min,max]=[{extrema[name]['min']:.4f},{extrema[name]['max']:.4f}]"
             for name in shown_keys
         ]
-        if len(summary_keys) > len(shown_keys):
-            parts.append(f"...(+{len(summary_keys) - len(shown_keys)} more)")
+        if len(ordered_keys) > len(shown_keys):
+            parts.append(f"...(+{len(ordered_keys) - len(shown_keys)} more)")
         lines.append(
             _entity_line(
                 "Federated Extrema:",
-                " | ".join(parts),
+                _join_metric_parts(parts),
             )
         )
-        round_metrics["fed_extrema"] = extrema
+        round_metrics["fed_extrema"] = {
+            extrema[name]["label"]: {
+                "min": float(extrema[name]["min"]),
+                "max": float(extrema[name]["max"]),
+            }
+            for name in ordered_keys
+        }
+
+    def _append_local_gen_error() -> None:
+        if not stats:
+            return
+        vals = _collect_client_values(stats, ["local_gen_error"])
+        if not vals:
+            return
+        avg_value = float(np.mean(vals))
+        std_value = float(np.std(vals))
+        round_metrics["local_gen_error"] = {"avg": avg_value, "std": std_value}
+        lines.append(
+            _entity_line(
+                "Local Gen. Error:",
+                _join_metric_parts([f"loss_gap: {avg_value:.4f}/{std_value:.4f}"]),
+            )
+        )
 
     do_pre_val = _cfg_bool(config, "do_pre_validation", True)
     do_post_val = _cfg_bool(config, "do_validation", True)
-    if do_pre_val and do_post_val:
-        _append_local_eval_block("Local Pre-Eval.", "local_pre_eval", "pre_val_")
-        _append_local_eval_block("Local Post-Eval.", "local_post_eval", "post_val_")
+    if do_pre_val:
+        _append_local_eval_block("Local Pre-val.", "local_pre_val", "pre_val_")
+        _append_local_eval_block("Local Pre-test.", "local_pre_test", "pre_test_")
+    if do_post_val:
+        _append_local_eval_block("Local Post-val.", "local_post_val", "post_val_")
+        _append_local_eval_block("Local Post-test.", "local_post_test", "post_test_")
+    _append_local_gen_error()
 
     _append_eval_block(
         "Global Eval.", "global_eval", global_eval_metrics, with_client_std=False
@@ -784,21 +978,24 @@ def _start_summary_lines(
     num_clients: int,
     train_client_count: int,
     holdout_client_count: int,
+    num_sampled_clients: int,
 ) -> str:
-    return "\n".join(
-        [
-            f"Start {mode.upper()} simulation",
-            f"  * Experiment: {config.exp_name}",
-            f"  * Algorithm: {config.algorithm}",
-            f"  * Dataset: {config.dataset}",
-            f"  * Rounds: {config.num_rounds}",
-            f"  * Total Clients: {num_clients}",
-            f"  * Per-round Clients: {train_client_count}",
-            f"  * Evaluation Scheme: {config.get('federated_eval_scheme', 'holdout_dataset')}",
-            f"  * Holdout Clients (evaluation): {holdout_client_count}\n" \
-                if config.get('federated_eval_scheme', 'holdout_dataset') == 'holdout_client' else ''
-        ]
+    sampled_pct = (
+        100.0 * float(num_sampled_clients) / float(max(1, train_client_count))
     )
+    lines = [
+        f"Start {mode.upper()} simulation",
+        f"  * Experiment: {config.exp_name}",
+        f"  * Algorithm: {config.algorithm}",
+        f"  * Dataset: {config.dataset}",
+        f"  * Rounds: {config.num_rounds}",
+        f"  * Total Clients: {num_clients}",
+        f"  * Sampled Clients/Round: {num_sampled_clients}/{train_client_count} ({sampled_pct:.2f}%)",
+        f"  * Evaluation Scheme: {config.get('federated_eval_scheme', 'holdout_dataset')}",
+    ]
+    if str(config.get("federated_eval_scheme", "holdout_dataset")) == "holdout_client":
+        lines.append(f"  * Holdout Clients (evaluation): {holdout_client_count}")
+    return "\n".join(lines)
 
 
 def _merge_runtime_cfg(config: DictConfig, loader_args: SimpleNamespace | dict) -> Dict:
@@ -822,9 +1019,9 @@ def _validate_loader_output(client_datasets, runtime_cfg: Dict) -> None:
             f"but num_clients={num_clients}"
         )
     for cid, pair in enumerate(client_datasets):
-        if not (isinstance(pair, tuple) and len(pair) == 2):
+        if not (isinstance(pair, tuple) and len(pair) in {2, 3}):
             raise ValueError(
-                f"client_datasets[{cid}] must be a tuple(train_dataset, test_dataset)."
+                f"client_datasets[{cid}] must be tuple(train,test) or tuple(train,val,test)."
             )
 
 
@@ -852,10 +1049,33 @@ def _build_client_groups(config: DictConfig, num_clients: int) -> Tuple[List[int
     return train_clients, holdout
 
 
-def _sample_train_clients(train_client_ids: List[int], client_fraction: float) -> List[int]:
+def _resolve_num_sampled_clients(config: DictConfig, num_clients: int) -> int:
+    if int(num_clients) <= 0:
+        return 0
+
+    if "num_sampled_clients" in config:
+        try:
+            n = int(config.get("num_sampled_clients", 0))
+        except Exception:
+            n = 0
+        if n > 0:
+            return max(1, min(int(num_clients), n))
+
+    # Backward compatibility: derive from client_fraction if present.
+    try:
+        fraction = float(config.get("client_fraction", 1.0))
+    except Exception:
+        fraction = 1.0
+    n = int(fraction * int(num_clients))
+    if n <= 0:
+        n = 1
+    return max(1, min(int(num_clients), n))
+
+
+def _sample_train_clients(train_client_ids: List[int], num_sampled_clients: int) -> List[int]:
     if not train_client_ids:
         return []
-    n = max(1, int(float(client_fraction) * len(train_client_ids)))
+    n = max(1, int(num_sampled_clients))
     n = min(n, len(train_client_ids))
     return sorted(random.sample(train_client_ids, n))
 
@@ -940,12 +1160,20 @@ def _build_federated_eval_plan(
     holdout_client_ids: List[int],
 ) -> Dict[str, List[int] | str | bool]:
     scheme = str(config.get("federated_eval_scheme", "holdout_dataset")).strip().lower()
-    fed_eval_every = int(config.get("federated_eval_every", int(config.eval_every)))
-    checkpoint = _should_eval_round(round_idx, fed_eval_every, num_rounds)
+    del selected_train_ids
+    checkpoint = _should_eval_round(round_idx, int(config.eval_every), num_rounds)
+
+    if not checkpoint:
+        return {
+            "scheme": "holdout_client" if scheme == "holdout_client" else "holdout_dataset",
+            "checkpoint": False,
+            "in_ids": [],
+            "out_ids": [],
+        }
 
     if scheme == "holdout_client":
-        in_ids = sorted(train_client_ids if checkpoint else selected_train_ids)
-        out_ids = sorted(holdout_client_ids if checkpoint else [])
+        in_ids = sorted(train_client_ids)
+        out_ids = sorted(holdout_client_ids)
         return {
             "scheme": "holdout_client",
             "checkpoint": checkpoint,
@@ -954,9 +1182,8 @@ def _build_federated_eval_plan(
         }
 
     # Default: holdout_dataset-based evaluation.
-    # During training rounds evaluate selected clients only;
-    # at checkpoint rounds evaluate all training clients.
-    in_ids = sorted(train_client_ids if checkpoint else selected_train_ids)
+    # Evaluate all train clients only at checkpoint rounds.
+    in_ids = sorted(train_client_ids)
     return {
         "scheme": "holdout_dataset",
         "checkpoint": checkpoint,
@@ -973,6 +1200,8 @@ def _run_federated_eval_mpi(
     device: str,
     round_idx: int,
     eval_ids: List[int],
+    eval_tag: str = "federated",
+    eval_split: str = "test",
 ) -> Optional[Dict[str, float]]:
     if not eval_ids:
         return None
@@ -984,20 +1213,32 @@ def _run_federated_eval_mpi(
         total_clients=len(eval_ids),
         phase="eval",
     )
-    for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
-        communicator.broadcast_global_model(
-            model=model_state,
-            args={
-                "done": False,
-                "mode": "eval",
-                "round": int(round_idx),
-                "eval_ids": list(chunk_ids),
-            },
-        )
-        eval_payloads = communicator.recv_all_local_models_from_clients()
-        for cid, payload in eval_payloads.items():
-            if isinstance(payload, dict) and "eval_stats" in payload:
-                eval_stats[int(cid)] = payload["eval_stats"]
+    progress = _new_progress(
+        total=len(eval_ids),
+        desc=f"{eval_tag} eval r{int(round_idx)}",
+        enabled=_cfg_bool(config, "show_eval_progress", True),
+    )
+    try:
+        for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
+            communicator.broadcast_global_model(
+                model=model_state,
+                args={
+                    "done": False,
+                    "mode": "eval",
+                    "round": int(round_idx),
+                    "eval_ids": list(chunk_ids),
+                    "eval_split": str(eval_split),
+                },
+            )
+            eval_payloads = communicator.recv_all_local_models_from_clients()
+            for cid, payload in eval_payloads.items():
+                if isinstance(payload, dict) and "eval_stats" in payload:
+                    eval_stats[int(cid)] = payload["eval_stats"]
+            if progress is not None:
+                progress.update(len(chunk_ids))
+    finally:
+        if progress is not None:
+            progress.close()
     return _aggregate_eval_stats(eval_stats)
 
 
@@ -1076,6 +1317,9 @@ def _run_federated_eval_serial(
     device: str,
     global_state,
     eval_client_ids: List[int],
+    round_idx: int,
+    eval_tag: str = "federated",
+    eval_split: str = "test",
 ) -> Optional[Dict[str, float]]:
     if not eval_client_ids:
         return None
@@ -1087,20 +1331,31 @@ def _run_federated_eval_serial(
         phase="eval",
     )
     eval_stats: Dict[int, Dict] = {}
-    for chunk_ids in _iter_id_chunks(sorted(eval_client_ids), chunk_size):
-        for cid in chunk_ids:
-            client = _build_single_client(
-                config=config,
-                model=model,
-                client_datasets=client_datasets,
-                client_id=int(cid),
-                device=device,
-                run_log_dir=run_log_dir,
-                client_logging_enabled=client_logging_enabled,
-            )
-            client.download(global_state)
-            eval_stats[int(client.id)] = client.evaluate()
-            _release_clients([client])
+    progress = _new_progress(
+        total=len(eval_client_ids),
+        desc=f"{eval_tag} eval r{int(round_idx)}",
+        enabled=_cfg_bool(config, "show_eval_progress", True),
+    )
+    try:
+        for chunk_ids in _iter_id_chunks(sorted(eval_client_ids), chunk_size):
+            for cid in chunk_ids:
+                client = _build_single_client(
+                    config=config,
+                    model=model,
+                    client_datasets=client_datasets,
+                    client_id=int(cid),
+                    device=device,
+                    run_log_dir=run_log_dir,
+                    client_logging_enabled=client_logging_enabled,
+                )
+                client.download(global_state)
+                eval_stats[int(client.id)] = client.evaluate(split=str(eval_split))
+                _release_clients([client])
+            if progress is not None:
+                progress.update(len(chunk_ids))
+    finally:
+        if progress is not None:
+            progress.close()
     return _aggregate_eval_stats(eval_stats)
 
 
@@ -1130,12 +1385,16 @@ def _run_server_mpi(
     tracker=None,
 ):
     t0 = time.time()
+    num_sampled_clients = _resolve_num_sampled_clients(
+        config, num_clients=len(train_client_ids)
+    )
     start_msg = _start_summary_lines(
         mode="mpi",
         config=config,
         num_clients=int(server.num_clients),
         train_client_count=len(train_client_ids),
         holdout_client_count=len(holdout_client_ids),
+        num_sampled_clients=num_sampled_clients,
     )
     if logger is not None:
         logger.info(start_msg)
@@ -1150,7 +1409,7 @@ def _run_server_mpi(
 
         selected_ids = _sample_train_clients(
             train_client_ids=train_client_ids,
-            client_fraction=float(server.client_fraction),
+            num_sampled_clients=int(num_sampled_clients),
         )
         communicator.broadcast_global_model(
             model=server.model.state_dict(),
@@ -1193,6 +1452,8 @@ def _run_server_mpi(
                     device=str(config.device),
                     round_idx=round_idx,
                     eval_ids=list(plan["in_ids"]),
+                    eval_tag="fed-in",
+                    eval_split="test",
                 )
                 federated_eval_out_metrics = _run_federated_eval_mpi(
                     config=config,
@@ -1202,6 +1463,8 @@ def _run_server_mpi(
                     device=str(config.device),
                     round_idx=round_idx,
                     eval_ids=list(plan["out_ids"]),
+                    eval_tag="fed-out",
+                    eval_split="test",
                 )
             else:
                 federated_eval_metrics = _run_federated_eval_mpi(
@@ -1212,6 +1475,8 @@ def _run_server_mpi(
                     device=str(config.device),
                     round_idx=round_idx,
                     eval_ids=list(plan["in_ids"]),
+                    eval_tag="fed",
+                    eval_split="test",
                 )
 
         _log_round(
@@ -1284,6 +1549,7 @@ def _run_client_mpi(
 
         local_payload = {}
         if mode == "eval":
+            eval_split = str(args.get("eval_split", "test"))
             eval_ids = set(
                 int(cid) for cid in args.get("eval_ids", []) if int(cid) in local_client_set
             )
@@ -1292,7 +1558,9 @@ def _run_client_mpi(
                     if client.id not in eval_ids:
                         continue
                     client.download(global_state)
-                    local_payload[int(client.id)] = {"eval_stats": client.evaluate()}
+                    local_payload[int(client.id)] = {
+                        "eval_stats": client.evaluate(split=eval_split)
+                    }
             else:
                 for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
                     for cid in chunk_ids:
@@ -1306,7 +1574,9 @@ def _run_client_mpi(
                             client_logging_enabled=client_logging_enabled,
                         )
                         client.download(global_state)
-                        local_payload[int(client.id)] = {"eval_stats": client.evaluate()}
+                        local_payload[int(client.id)] = {
+                            "eval_stats": client.evaluate(split=eval_split)
+                        }
                         _release_clients([client])
         else:
             selected = set(
@@ -1374,17 +1644,27 @@ def run_serial(config) -> None:
     # Respect user-configured download policy in serial mode.
     loader_cfg["download"] = _cfg_bool(config, "download", True)
     _, client_datasets, server_dataset, args = load_dataset(loader_cfg)
+    client_datasets = _apply_local_dataset_split_ratio(
+        client_datasets, config=config, logger=server_logger
+    )
 
     runtime_cfg = _merge_runtime_cfg(config, args)
     _validate_loader_output(client_datasets, runtime_cfg)
     num_clients = int(runtime_cfg["num_clients"])
-    logging_policy = _resolve_client_logging_policy(config, num_clients=num_clients)
     state_policy = _resolve_client_state_policy(config)
+    train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
+    num_sampled_clients = _resolve_num_sampled_clients(
+        config, num_clients=len(train_client_ids)
+    )
+    logging_policy = _resolve_client_logging_policy(
+        config,
+        num_clients=num_clients,
+        num_sampled_clients=num_sampled_clients,
+    )
     _emit_logging_policy_message(
         logging_policy, num_clients=num_clients, logger=server_logger
     )
     _emit_client_state_policy_message(state_policy, logger=server_logger)
-    train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
@@ -1433,13 +1713,14 @@ def run_serial(config) -> None:
             num_clients=num_clients,
             train_client_count=len(train_client_ids),
             holdout_client_count=len(holdout_client_ids),
+            num_sampled_clients=num_sampled_clients,
         )
     )
 
     for round_idx in range(1, int(config.num_rounds) + 1):
         selected_ids = _sample_train_clients(
             train_client_ids=train_client_ids,
-            client_fraction=float(server.client_fraction),
+            num_sampled_clients=int(num_sampled_clients),
         )
         global_state = server.model.state_dict()
 
@@ -1510,10 +1791,10 @@ def run_serial(config) -> None:
                     for client in eager_clients:
                         if client.id in eval_in_set:
                             client.download(state)
-                            eval_in_stats[int(client.id)] = client.evaluate()
+                            eval_in_stats[int(client.id)] = client.evaluate(split="test")
                         elif client.id in eval_out_set:
                             client.download(state)
-                            eval_out_stats[int(client.id)] = client.evaluate()
+                            eval_out_stats[int(client.id)] = client.evaluate(split="test")
                     federated_eval_in_metrics = _aggregate_eval_stats(eval_in_stats)
                     federated_eval_out_metrics = _aggregate_eval_stats(eval_out_stats)
                 else:
@@ -1523,7 +1804,7 @@ def run_serial(config) -> None:
                         if client.id not in eval_set:
                             continue
                         client.download(state)
-                        eval_stats[int(client.id)] = client.evaluate()
+                        eval_stats[int(client.id)] = client.evaluate(split="test")
                     federated_eval_metrics = _aggregate_eval_stats(eval_stats)
             else:
                 if plan["scheme"] == "holdout_client":
@@ -1538,6 +1819,9 @@ def run_serial(config) -> None:
                         device=client_device,
                         global_state=server.model.state_dict(),
                         eval_client_ids=list(plan["in_ids"]),
+                        round_idx=round_idx,
+                        eval_tag="fed-in",
+                        eval_split="test",
                     )
                     federated_eval_out_metrics = _run_federated_eval_serial(
                         config=config,
@@ -1550,6 +1834,9 @@ def run_serial(config) -> None:
                         device=client_device,
                         global_state=server.model.state_dict(),
                         eval_client_ids=list(plan["out_ids"]),
+                        round_idx=round_idx,
+                        eval_tag="fed-out",
+                        eval_split="test",
                     )
                 else:
                     federated_eval_metrics = _run_federated_eval_serial(
@@ -1563,6 +1850,9 @@ def run_serial(config) -> None:
                         device=client_device,
                         global_state=server.model.state_dict(),
                         eval_client_ids=list(plan["in_ids"]),
+                        round_idx=round_idx,
+                        eval_tag="fed",
+                        eval_split="test",
                     )
 
         _log_round(
@@ -1615,14 +1905,22 @@ def run_mpi(config) -> None:
     _, client_datasets, server_dataset, args = _load_dataset_mpi(
         config=config, communicator=communicator, rank=rank
     )
+    client_datasets = _apply_local_dataset_split_ratio(client_datasets, config=config)
 
     runtime_cfg = _merge_runtime_cfg(config, args)
     _validate_loader_output(client_datasets, runtime_cfg)
 
     num_clients = int(runtime_cfg["num_clients"])
-    logging_policy = _resolve_client_logging_policy(config, num_clients=num_clients)
     state_policy = _resolve_client_state_policy(config)
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
+    num_sampled_clients = _resolve_num_sampled_clients(
+        config, num_clients=len(train_client_ids)
+    )
+    logging_policy = _resolve_client_logging_policy(
+        config,
+        num_clients=num_clients,
+        num_sampled_clients=num_sampled_clients,
+    )
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )

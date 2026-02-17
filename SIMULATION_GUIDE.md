@@ -57,12 +57,16 @@ PYTHONPATH=. .venv/bin/python -m appfl_sim.runner \
   dataset=MNIST \
   num_clients=3 \
   num_rounds=2 \
-  client_fraction=1.0 \
+  num_sampled_clients=3 \
   split_type=iid \
   download=true \
   batch_size=16 \
   local_epochs=1
 ```
+
+Evaluation notes:
+- Local pre/post evaluation is controlled by `do_pre_validation` and `do_validation`.
+- Federated and global evaluations run at `eval_every` rounds and the final round.
 
 ## 4) HF / timm examples
 

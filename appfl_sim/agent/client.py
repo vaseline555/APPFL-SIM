@@ -245,11 +245,14 @@ class ClientAgent:
     def upload(self):
         return self.get_parameters()
 
-    def evaluate(self) -> Dict:
+    def evaluate(self, split: str = "test", **kwargs) -> Dict:
         if not hasattr(self, "trainer") or self.trainer is None:
             return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0}
         if hasattr(self.trainer, "evaluate"):
-            return self.trainer.evaluate()
+            try:
+                return self.trainer.evaluate(split=split, **kwargs)
+            except TypeError:
+                return self.trainer.evaluate()
         raise AttributeError("Trainer does not implement evaluate().")
 
     def save_checkpoint(self, checkpoint_path: Optional[str] = None) -> None:
@@ -697,6 +700,7 @@ class ClientAgent:
                 metric=self.metric,
                 train_dataset=self.train_dataset,
                 val_dataset=self.val_dataset,
+                test_dataset=getattr(self, "test_dataset", None),
                 train_configs=self.client_agent_config.train_configs,
                 logger=self.logger,
             )
@@ -709,6 +713,7 @@ class ClientAgent:
                 metric=self.metric,
                 train_dataset=self.train_dataset,
                 val_dataset=self.val_dataset,
+                test_dataset=getattr(self, "test_dataset", None),
                 train_configs=self.client_agent_config.train_configs,
                 logger=self.logger,
             )
@@ -732,6 +737,7 @@ class ClientAgent:
                 metric=self.metric,
                 train_dataset=self.train_dataset,
                 val_dataset=self.val_dataset,
+                test_dataset=getattr(self, "test_dataset", None),
                 train_configs=self.client_agent_config.train_configs,
                 logger=self.logger,
                 client_id=self.get_id(),  # currently, only useful for MonaiTrainer

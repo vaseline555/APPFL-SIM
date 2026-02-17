@@ -9,7 +9,7 @@ model_name: StackedLSTM
 num_clients: 0
 infer_num_clients: true
 num_rounds: 2
-client_fraction: 0.00005
+num_sampled_clients: 1
 
 split_type: iid
 local_epochs: 1
@@ -27,7 +27,6 @@ default_eval_metric: seqacc
 enable_global_eval: false
 enable_federated_eval: true
 eval_every: 1
-federated_eval_every: 1
 federated_eval_scheme: holdout_dataset
 holdout_eval_num_clients: 0
 

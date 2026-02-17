@@ -1,6 +1,6 @@
 # Federated evaluation scheme (holdout-dataset based)
-# - Every round: evaluate sampled training clients only.
-# - Every federated_eval_every + final round: evaluate all training clients.
+# - Every round: local eval is reported only for sampled training clients.
+# - Every eval_every + final round: federated eval runs on all training clients.
 backend: serial
 exp_name: mnist-holdout-dataset-eval
 
@@ -10,13 +10,13 @@ model_name: SimpleCNN
 
 num_clients: 6
 num_rounds: 3
-client_fraction: 0.5
+num_sampled_clients: 3
 split_type: iid
 
 enable_global_eval: true
 enable_federated_eval: true
 federated_eval_scheme: holdout_dataset
-federated_eval_every: 2
+eval_every: 2
 holdout_eval_num_clients: 0
 holdout_eval_client_ratio: 0.0
 

@@ -8,7 +8,7 @@ model_name: SimpleCNN
 
 num_clients: 3
 num_rounds: 2
-client_fraction: 1.0
+num_sampled_clients: 3
 
 split_type: iid
 local_epochs: 1
@@ -26,7 +26,6 @@ default_eval_metric: acc1
 enable_global_eval: true
 enable_federated_eval: true
 eval_every: 1
-federated_eval_every: 1
 federated_eval_scheme: holdout_dataset
 holdout_eval_num_clients: 0
 
