@@ -387,6 +387,29 @@ def _build_clients(
     return clients
 
 
+def _build_single_client(
+    config: DictConfig,
+    model,
+    client_datasets: Sequence,
+    client_id: int,
+    device: str,
+    run_log_dir: str,
+    client_logging_enabled: bool = True,
+):
+    clients = _build_clients(
+        config=config,
+        model=model,
+        client_datasets=client_datasets,
+        local_client_ids=np.asarray([int(client_id)]).astype(int),
+        device=device,
+        run_log_dir=run_log_dir,
+        client_logging_enabled=bool(client_logging_enabled),
+    )
+    if not clients:
+        raise RuntimeError(f"Failed to construct client for id={client_id}")
+    return clients[0]
+
+
 def _build_server(
     config: DictConfig,
     runtime_cfg: Dict,
@@ -444,6 +467,56 @@ def _build_server(
     server._val_dataset = server_dataset
     server._load_val_data()
     return server
+
+
+def _maybe_force_server_cpu(
+    config: DictConfig,
+    enable_global_eval: bool,
+    logger: Optional[ServerAgentFileLogger] = None,
+) -> None:
+    if enable_global_eval:
+        return
+    if not _cfg_bool(config, "force_server_cpu_when_no_global_eval", True):
+        return
+    current = str(config.get("server_device", "cpu")).strip().lower()
+    if not current.startswith("cuda"):
+        return
+    config.server_device = "cpu"
+    msg = (
+        "Global eval is disabled; forcing `server_device=cpu` to avoid unnecessary "
+        "server-side GPU memory usage. Set "
+        "`force_server_cpu_when_no_global_eval=false` to keep CUDA."
+    )
+    if logger is not None:
+        logger.info(msg)
+    else:
+        print(msg)
+
+
+def _warn_if_workers_pinned_to_single_gpu(
+    config: DictConfig,
+    world_size: int,
+    logger: Optional[ServerAgentFileLogger] = None,
+) -> None:
+    if world_size <= 2:
+        return
+    if not _cfg_bool(config, "mpi_use_local_rank_device", True):
+        return
+    dev = str(config.get("device", "cpu")).strip().lower()
+    if not dev.startswith("cuda:"):
+        return
+    suffix = dev.split(":", 1)[1].strip()
+    if not suffix.isdigit():
+        return
+    msg = (
+        f"MPI device warning: `device={dev}` pins all client ranks to the same GPU index. "
+        "For multi-rank GPU spreading, use `device=cuda` (or `cuda:local`) with "
+        "`mpi_use_local_rank_device=true`."
+    )
+    if logger is not None:
+        logger.warning(msg)
+    else:
+        print(msg)
 
 
 def _log_round(
@@ -904,19 +977,19 @@ def _run_federated_eval_serial(
     chunk_size = _client_processing_chunk_size(config)
     eval_stats: Dict[int, Dict] = {}
     for chunk_ids in _iter_id_chunks(sorted(eval_client_ids), chunk_size):
-        clients = _build_clients(
-            config=config,
-            model=model,
-            client_datasets=client_datasets,
-            local_client_ids=np.asarray(chunk_ids).astype(int),
-            device=device,
-            run_log_dir=run_log_dir,
-            client_logging_enabled=client_logging_enabled,
-        )
-        for client in clients:
+        for cid in chunk_ids:
+            client = _build_single_client(
+                config=config,
+                model=model,
+                client_datasets=client_datasets,
+                client_id=int(cid),
+                device=device,
+                run_log_dir=run_log_dir,
+                client_logging_enabled=client_logging_enabled,
+            )
             client.download(global_state)
             eval_stats[int(client.id)] = client.evaluate()
-        _release_clients(clients)
+            _release_clients([client])
     return _aggregate_eval_stats(eval_stats)
 
 
@@ -1096,19 +1169,19 @@ def _run_client_mpi(
                     local_payload[int(client.id)] = {"eval_stats": client.evaluate()}
             else:
                 for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
-                    clients = _build_clients(
-                        config=config,
-                        model=model,
-                        client_datasets=client_datasets,
-                        local_client_ids=np.asarray(chunk_ids).astype(int),
-                        device=device,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=client_logging_enabled,
-                    )
-                    for client in clients:
+                    for cid in chunk_ids:
+                        client = _build_single_client(
+                            config=config,
+                            model=model,
+                            client_datasets=client_datasets,
+                            client_id=int(cid),
+                            device=device,
+                            run_log_dir=run_log_dir,
+                            client_logging_enabled=client_logging_enabled,
+                        )
                         client.download(global_state)
                         local_payload[int(client.id)] = {"eval_stats": client.evaluate()}
-                    _release_clients(clients)
+                        _release_clients([client])
         else:
             selected = set(
                 int(cid)
@@ -1131,16 +1204,16 @@ def _run_client_mpi(
                     }
             else:
                 for chunk_ids in _iter_id_chunks(sorted(selected), chunk_size):
-                    clients = _build_clients(
-                        config=config,
-                        model=model,
-                        client_datasets=client_datasets,
-                        local_client_ids=np.asarray(chunk_ids).astype(int),
-                        device=device,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=client_logging_enabled,
-                    )
-                    for client in clients:
+                    for cid in chunk_ids:
+                        client = _build_single_client(
+                            config=config,
+                            model=model,
+                            client_datasets=client_datasets,
+                            client_id=int(cid),
+                            device=device,
+                            run_log_dir=run_log_dir,
+                            client_logging_enabled=client_logging_enabled,
+                        )
                         client.download(global_state)
                         train_result = client.update(round_idx=round_idx)
                         state = client.upload()
@@ -1151,7 +1224,7 @@ def _run_client_mpi(
                             "num_examples": int(train_result.get("num_examples", 0)),
                             "stats": train_result,
                         }
-                    _release_clients(clients)
+                        _release_clients([client])
 
         communicator.send_local_models_to_server(local_payload, dest=0)
 
@@ -1191,6 +1264,7 @@ def run_serial(config) -> None:
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
+    _maybe_force_server_cpu(config, enable_global_eval, logger=server_logger)
     enable_federated_eval = _cfg_bool(config, "enable_federated_eval", True)
 
     model = load_model(
@@ -1255,16 +1329,16 @@ def run_serial(config) -> None:
                 stats[client.id] = train_result
         else:
             for chunk_ids in _iter_id_chunks(selected_ids, chunk_size):
-                clients = _build_clients(
-                    config=config,
-                    model=model,
-                    client_datasets=client_datasets,
-                    local_client_ids=np.asarray(chunk_ids).astype(int),
-                    device=client_device,
-                    run_log_dir=run_log_dir,
-                    client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-                )
-                for client in clients:
+                for cid in chunk_ids:
+                    client = _build_single_client(
+                        config=config,
+                        model=model,
+                        client_datasets=client_datasets,
+                        client_id=int(cid),
+                        device=client_device,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+                    )
                     client.download(global_state)
                     train_result = client.update(round_idx=round_idx)
                     state = client.upload()
@@ -1273,7 +1347,7 @@ def run_serial(config) -> None:
                     updates[client.id] = state
                     sample_sizes[client.id] = int(train_result["num_examples"])
                     stats[client.id] = train_result
-                _release_clients(clients)
+                    _release_clients([client])
 
         weights = server.aggregate(updates, sample_sizes)
         global_eval_metrics = None
@@ -1433,6 +1507,12 @@ def run_mpi(config) -> None:
 
     if rank == 0:
         server_logger = _new_server_logger(config, mode="mpi")
+        _maybe_force_server_cpu(config, enable_global_eval, logger=server_logger)
+        _warn_if_workers_pinned_to_single_gpu(
+            config=config,
+            world_size=world_size,
+            logger=server_logger,
+        )
         _emit_logging_policy_message(
             logging_policy, num_clients=num_clients, logger=server_logger
         )

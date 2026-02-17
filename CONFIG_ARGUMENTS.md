@@ -1,7 +1,7 @@
-# APPFL-SIM Config Arguments
+# `APPFL-SIM` Config Arguments
 
 This file lists runtime arguments used by `python -m appfl_sim.runner`, with default values.
-Defaults come from `/Users/vaseline555/Desktop/workspace/APPFL_SIM/APPFL-SIM/appfl_sim/config/examples/simulation.yaml` and code-side fallbacks.
+Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fallbacks.
 
 ## Core
 - `backend` (default: `mpi`): execution backend (`serial` or `mpi`).
