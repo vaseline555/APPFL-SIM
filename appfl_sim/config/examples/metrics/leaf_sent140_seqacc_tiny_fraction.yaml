@@ -9,7 +9,7 @@ model_name: StackedLSTM
 num_clients: 0
 infer_num_clients: true
 num_rounds: 2
-client_fraction: 0.1
+client_fraction: 0.00005
 
 split_type: iid
 local_epochs: 1
@@ -31,9 +31,14 @@ federated_eval_every: 1
 federated_eval_scheme: holdout_dataset
 holdout_eval_num_clients: 0
 
-device: cpu
-server_device: cpu
-num_workers: 0
+device: cuda:1
+server_device: cuda:0
+num_workers: 16
+
+# Large-client scalability knobs
+client_init_mode: auto
+client_init_on_demand_threshold: 1000
+client_processing_chunk_size: 256
 
 download: false
 data_dir: ./data

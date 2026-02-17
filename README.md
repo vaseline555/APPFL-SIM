@@ -59,6 +59,9 @@ python -m appfl_sim.runner \
 ```
 
 - `backend=mpi` auto-launches MPI when not already inside an MPI job.
+- Auto-launch first checks `PATH`; if not found, it also checks common prefixes
+  such as `$HOME/openmpi-install/bin`, `$MPI_HOME/bin`, `$OPENMPI_HOME/bin`,
+  `$OMPI_HOME/bin`, and `$I_MPI_ROOT/bin`.
 - Worker ranks are auto-sized independently of logical `num_clients` (server rank is added automatically).
 - Pin worker count via `mpi_num_workers=<N>` when needed.
 - If you already run inside `mpiexec`/`mpirun` (e.g., scheduler scripts), auto-launch is skipped.
@@ -248,6 +251,22 @@ Evaluation control:
     (holdout pool) are evaluated and logged independently.
 - `holdout_eval_num_clients` / `holdout_eval_client_ratio`:
   size of out-client holdout pool for `federated_eval_scheme=holdout_client`.
+
+## Client Initialization
+
+Client initialization policy for scalability:
+
+- `client_init_mode=auto|eager|on_demand` (default: `auto`)
+- `client_init_on_demand_threshold=1000`:
+  when `client_init_mode=auto`, on-demand mode is enabled if
+  `num_clients > client_init_on_demand_threshold`.
+- `client_processing_chunk_size=256`:
+  chunk size used by on-demand mode while training/evaluating clients.
+
+Guidance:
+
+- Cross-silo / moderate client counts: `eager` is usually fine and lower-overhead.
+- Cross-device / very large client counts: use `on_demand` (or `auto` with threshold).
 
 ## Metrics
 

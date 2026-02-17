@@ -272,7 +272,9 @@ class ServerAgent:
                 ),
             )
 
-        device = self.server_agent_config.server_configs.get("device", "cpu")
+        device = torch.device(
+            str(self.server_agent_config.server_configs.get("device", "cpu"))
+        )
         eval_metric_names = parse_metric_names(
             self.server_agent_config.server_configs.get(
                 "eval_metrics",
@@ -302,6 +304,8 @@ class ServerAgent:
         )
         was_training = self.model.training
         self.model.to(device)
+        if hasattr(self.loss_fn, "to"):
+            self.loss_fn = self.loss_fn.to(device)
         self.model.eval()
 
         total_correct = 0
@@ -310,8 +314,8 @@ class ServerAgent:
         target_pred = []
         target_true = []
         for inputs, targets in self._val_dataloader:
-            inputs = inputs.to(device)
-            targets = targets.to(device)
+            inputs = inputs.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
             logits = self.model(inputs)
             loss = self.loss_fn(logits, targets)
             logits_cpu = logits.detach().cpu()
@@ -345,6 +349,8 @@ class ServerAgent:
         if was_training:
             self.model.train()
         self.model.to("cpu")
+        if hasattr(self.loss_fn, "to"):
+            self.loss_fn = self.loss_fn.to("cpu")
         return result
 
     def server_validate(self):

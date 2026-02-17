@@ -213,20 +213,34 @@ class Seqacc(BaseMetric):
     def __init__(self):
         self.scores = []
         self.answers = []
+        self.ignore_indices = (-1, -100)
 
     def collect(self, pred, true):
-        num_classes = pred.size(-1)
         p, t = pred.detach().cpu(), true.detach().cpu()
-        self.scores.append(p.view(-1, num_classes))
-        self.answers.append(t.view(-1))
+        if p.ndim == 0:
+            p = p.view(1, 1)
+        elif p.ndim == 1:
+            p = p.unsqueeze(-1)
+        num_classes = p.size(-1)
+        self.scores.append(p.reshape(-1, num_classes))
+        self.answers.append(t.reshape(-1))
 
     def summarize(self):
-        labels = torch.cat(self.scores).argmax(-1).numpy()
+        scores = torch.cat(self.scores)
         answers = torch.cat(self.answers).numpy()
+        if scores.size(-1) > 1:
+            labels = scores.argmax(-1).numpy()
+        else:
+            labels = (scores.sigmoid().reshape(-1) >= 0.5).long().numpy()
 
         # ignore special tokens
-        labels = labels[answers != -1]
-        answers = answers[answers != -1]
+        valid_mask = np.ones_like(answers, dtype=bool)
+        for idx in self.ignore_indices:
+            valid_mask = np.logical_and(valid_mask, answers != idx)
+        labels = labels[valid_mask]
+        answers = answers[valid_mask]
+        if answers.size == 0:
+            return 0.0
         return np.nan_to_num(accuracy_score(answers, labels))
 
 class Mse(BaseMetric):

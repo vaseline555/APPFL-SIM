@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import gc
 import os
 import shutil
 import subprocess
@@ -308,6 +309,38 @@ def _emit_logging_policy_message(
             "This may produce large I/O overhead. "
             "Suggestion: set client_logging_scheme=auto or aggregated."
         )
+
+
+def _resolve_client_init_policy(config: DictConfig, num_clients: int) -> Dict[str, object]:
+    mode = str(config.get("client_init_mode", "auto")).strip().lower()
+    threshold = int(config.get("client_init_on_demand_threshold", 1000))
+    if mode not in {"auto", "eager", "on_demand"}:
+        raise ValueError("client_init_mode must be one of: auto, eager, on_demand")
+    use_on_demand = (num_clients > threshold) if mode == "auto" else (mode == "on_demand")
+    return {
+        "requested_mode": mode,
+        "effective_mode": "on_demand" if use_on_demand else "eager",
+        "use_on_demand": use_on_demand,
+        "threshold": threshold,
+    }
+
+
+def _emit_client_init_policy_message(
+    policy: Dict[str, object],
+    num_clients: int,
+    logger: Optional[ServerAgentFileLogger] = None,
+) -> None:
+    requested = str(policy["requested_mode"])
+    effective = str(policy["effective_mode"])
+    threshold = int(policy["threshold"])
+    msg = (
+        f"Client init policy: requested={requested} effective={effective} "
+        f"(num_clients={num_clients}, threshold={threshold})"
+    )
+    if logger is not None:
+        logger.info(msg)
+    else:
+        print(msg)
 
 
 def _build_clients(
@@ -709,6 +742,23 @@ def _sample_train_clients(train_client_ids: List[int], client_fraction: float) -
     return sorted(random.sample(train_client_ids, n))
 
 
+def _client_processing_chunk_size(config: DictConfig) -> int:
+    return max(1, int(config.get("client_processing_chunk_size", 256)))
+
+
+def _iter_id_chunks(ids: Sequence[int], chunk_size: int):
+    ordered = list(ids)
+    for start in range(0, len(ordered), chunk_size):
+        yield ordered[start : start + chunk_size]
+
+
+def _release_clients(clients) -> None:
+    del clients
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def _build_federated_eval_plan(
     config: DictConfig,
     round_idx: int,
@@ -835,19 +885,33 @@ def _aggregate_eval_stats(stats: Dict[int, Dict]) -> Optional[Dict[str, float]]:
 
 
 def _run_federated_eval_serial(
-    clients,
+    config: DictConfig,
+    model,
+    client_datasets,
+    run_log_dir: str,
+    client_logging_enabled: bool,
+    device: str,
     global_state,
     eval_client_ids: List[int],
 ) -> Optional[Dict[str, float]]:
     if not eval_client_ids:
         return None
-    eval_set = set(eval_client_ids)
+    chunk_size = _client_processing_chunk_size(config)
     eval_stats: Dict[int, Dict] = {}
-    for client in clients:
-        if client.id not in eval_set:
-            continue
-        client.download(global_state)
-        eval_stats[int(client.id)] = client.evaluate()
+    for chunk_ids in _iter_id_chunks(sorted(eval_client_ids), chunk_size):
+        clients = _build_clients(
+            config=config,
+            model=model,
+            client_datasets=client_datasets,
+            local_client_ids=np.asarray(chunk_ids).astype(int),
+            device=device,
+            run_log_dir=run_log_dir,
+            client_logging_enabled=client_logging_enabled,
+        )
+        for client in clients:
+            client.download(global_state)
+            eval_stats[int(client.id)] = client.evaluate()
+        _release_clients(clients)
     return _aggregate_eval_stats(eval_stats)
 
 
@@ -976,7 +1040,31 @@ def _run_server_mpi(
         print(finish_msg)
 
 
-def _run_client_mpi(communicator, clients):
+def _run_client_mpi(
+    communicator,
+    config: DictConfig,
+    model,
+    client_datasets,
+    local_client_ids,
+    device: str,
+    run_log_dir: str,
+    client_logging_enabled: bool,
+    use_on_demand: bool,
+):
+    local_client_set = {int(cid) for cid in local_client_ids}
+    chunk_size = _client_processing_chunk_size(config)
+    eager_clients = None
+    if not use_on_demand:
+        eager_clients = _build_clients(
+            config=config,
+            model=model,
+            client_datasets=client_datasets,
+            local_client_ids=np.asarray(sorted(local_client_set)).astype(int),
+            device=device,
+            run_log_dir=run_log_dir,
+            client_logging_enabled=client_logging_enabled,
+        )
+
     while True:
         incoming = communicator.recv_global_model_from_server(source=0)
         if isinstance(incoming, tuple):
@@ -992,30 +1080,78 @@ def _run_client_mpi(communicator, clients):
 
         local_payload = {}
         if mode == "eval":
-            eval_ids = set(args.get("eval_ids", []))
-            for client in clients:
-                if client.id not in eval_ids:
-                    continue
-                client.download(global_state)
-                local_payload[int(client.id)] = {"eval_stats": client.evaluate()}
+            eval_ids = set(
+                int(cid) for cid in args.get("eval_ids", []) if int(cid) in local_client_set
+            )
+            if eager_clients is not None:
+                for client in eager_clients:
+                    if client.id not in eval_ids:
+                        continue
+                    client.download(global_state)
+                    local_payload[int(client.id)] = {"eval_stats": client.evaluate()}
+            else:
+                for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
+                    clients = _build_clients(
+                        config=config,
+                        model=model,
+                        client_datasets=client_datasets,
+                        local_client_ids=np.asarray(chunk_ids).astype(int),
+                        device=device,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=client_logging_enabled,
+                    )
+                    for client in clients:
+                        client.download(global_state)
+                        local_payload[int(client.id)] = {"eval_stats": client.evaluate()}
+                    _release_clients(clients)
         else:
-            selected = set(args.get("selected_ids", []))
-            for client in clients:
-                if client.id not in selected:
-                    continue
-                client.download(global_state)
-                train_result = client.update(round_idx=round_idx)
-                state = client.upload()
-                if isinstance(state, tuple):
-                    state = state[0]
-                local_payload[int(client.id)] = {
-                    "state": state,
-                    "num_examples": int(train_result.get("num_examples", 0)),
-                    "stats": train_result,
-                }
+            selected = set(
+                int(cid)
+                for cid in args.get("selected_ids", [])
+                if int(cid) in local_client_set
+            )
+            if eager_clients is not None:
+                for client in eager_clients:
+                    if client.id not in selected:
+                        continue
+                    client.download(global_state)
+                    train_result = client.update(round_idx=round_idx)
+                    state = client.upload()
+                    if isinstance(state, tuple):
+                        state = state[0]
+                    local_payload[int(client.id)] = {
+                        "state": state,
+                        "num_examples": int(train_result.get("num_examples", 0)),
+                        "stats": train_result,
+                    }
+            else:
+                for chunk_ids in _iter_id_chunks(sorted(selected), chunk_size):
+                    clients = _build_clients(
+                        config=config,
+                        model=model,
+                        client_datasets=client_datasets,
+                        local_client_ids=np.asarray(chunk_ids).astype(int),
+                        device=device,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=client_logging_enabled,
+                    )
+                    for client in clients:
+                        client.download(global_state)
+                        train_result = client.update(round_idx=round_idx)
+                        state = client.upload()
+                        if isinstance(state, tuple):
+                            state = state[0]
+                        local_payload[int(client.id)] = {
+                            "state": state,
+                            "num_examples": int(train_result.get("num_examples", 0)),
+                            "stats": train_result,
+                        }
+                    _release_clients(clients)
 
         communicator.send_local_models_to_server(local_payload, dest=0)
 
+    if eager_clients is not None:
+        _release_clients(eager_clients)
     communicator.barrier()
 
 
@@ -1039,8 +1175,12 @@ def run_serial(config) -> None:
     _validate_loader_output(client_datasets, runtime_cfg)
     num_clients = int(runtime_cfg["num_clients"])
     logging_policy = _resolve_client_logging_policy(config, num_clients=num_clients)
+    init_policy = _resolve_client_init_policy(config, num_clients=num_clients)
     _emit_logging_policy_message(
         logging_policy, num_clients=num_clients, logger=server_logger
+    )
+    _emit_client_init_policy_message(
+        init_policy, num_clients=num_clients, logger=server_logger
     )
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
@@ -1061,15 +1201,19 @@ def run_serial(config) -> None:
         server_dataset=server_dataset,
     )
 
-    clients = _build_clients(
-        config=config,
-        model=model,
-        client_datasets=client_datasets,
-        local_client_ids=np.arange(num_clients).astype(int),
-        device=resolve_rank_device(str(config.device), rank=1, world_size=2),
-        run_log_dir=run_log_dir,
-        client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-    )
+    client_device = resolve_rank_device(str(config.device), rank=1, world_size=2)
+    chunk_size = _client_processing_chunk_size(config)
+    eager_clients = None
+    if not bool(init_policy["use_on_demand"]):
+        eager_clients = _build_clients(
+            config=config,
+            model=model,
+            client_datasets=client_datasets,
+            local_client_ids=np.arange(num_clients).astype(int),
+            device=client_device,
+            run_log_dir=run_log_dir,
+            client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+        )
 
     server_logger.info(
         _start_summary_lines(
@@ -1086,23 +1230,45 @@ def run_serial(config) -> None:
             train_client_ids=train_client_ids,
             client_fraction=float(server.client_fraction),
         )
-        selected = set(selected_ids)
         global_state = server.model.state_dict()
 
         updates = {}
         sample_sizes = {}
         stats = {}
-        for client in clients:
-            if client.id not in selected:
-                continue
-            client.download(global_state)
-            train_result = client.update(round_idx=round_idx)
-            state = client.upload()
-            if isinstance(state, tuple):
-                state = state[0]
-            updates[client.id] = state
-            sample_sizes[client.id] = int(train_result["num_examples"])
-            stats[client.id] = train_result
+        if eager_clients is not None:
+            selected = set(selected_ids)
+            for client in eager_clients:
+                if client.id not in selected:
+                    continue
+                client.download(global_state)
+                train_result = client.update(round_idx=round_idx)
+                state = client.upload()
+                if isinstance(state, tuple):
+                    state = state[0]
+                updates[client.id] = state
+                sample_sizes[client.id] = int(train_result["num_examples"])
+                stats[client.id] = train_result
+        else:
+            for chunk_ids in _iter_id_chunks(selected_ids, chunk_size):
+                clients = _build_clients(
+                    config=config,
+                    model=model,
+                    client_datasets=client_datasets,
+                    local_client_ids=np.asarray(chunk_ids).astype(int),
+                    device=client_device,
+                    run_log_dir=run_log_dir,
+                    client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+                )
+                for client in clients:
+                    client.download(global_state)
+                    train_result = client.update(round_idx=round_idx)
+                    state = client.upload()
+                    if isinstance(state, tuple):
+                        state = state[0]
+                    updates[client.id] = state
+                    sample_sizes[client.id] = int(train_result["num_examples"])
+                    stats[client.id] = train_result
+                _release_clients(clients)
 
         weights = server.aggregate(updates, sample_sizes)
         global_eval_metrics = None
@@ -1123,23 +1289,70 @@ def run_serial(config) -> None:
                 train_client_ids=train_client_ids,
                 holdout_client_ids=holdout_client_ids,
             )
-            if plan["scheme"] == "holdout_client":
-                federated_eval_in_metrics = _run_federated_eval_serial(
-                    clients=clients,
-                    global_state=server.model.state_dict(),
-                    eval_client_ids=list(plan["in_ids"]),
-                )
-                federated_eval_out_metrics = _run_federated_eval_serial(
-                    clients=clients,
-                    global_state=server.model.state_dict(),
-                    eval_client_ids=list(plan["out_ids"]),
-                )
+            if eager_clients is not None:
+                state = server.model.state_dict()
+                if plan["scheme"] == "holdout_client":
+                    eval_in_set = set(plan["in_ids"])
+                    eval_out_set = set(plan["out_ids"])
+                    eval_in_stats = {}
+                    eval_out_stats = {}
+                    for client in eager_clients:
+                        if client.id in eval_in_set:
+                            client.download(state)
+                            eval_in_stats[int(client.id)] = client.evaluate()
+                        elif client.id in eval_out_set:
+                            client.download(state)
+                            eval_out_stats[int(client.id)] = client.evaluate()
+                    federated_eval_in_metrics = _aggregate_eval_stats(eval_in_stats)
+                    federated_eval_out_metrics = _aggregate_eval_stats(eval_out_stats)
+                else:
+                    eval_set = set(plan["in_ids"])
+                    eval_stats = {}
+                    for client in eager_clients:
+                        if client.id not in eval_set:
+                            continue
+                        client.download(state)
+                        eval_stats[int(client.id)] = client.evaluate()
+                    federated_eval_metrics = _aggregate_eval_stats(eval_stats)
             else:
-                federated_eval_metrics = _run_federated_eval_serial(
-                    clients=clients,
-                    global_state=server.model.state_dict(),
-                    eval_client_ids=list(plan["in_ids"]),
-                )
+                if plan["scheme"] == "holdout_client":
+                    federated_eval_in_metrics = _run_federated_eval_serial(
+                        config=config,
+                        model=model,
+                        client_datasets=client_datasets,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=bool(
+                            logging_policy["client_logging_enabled"]
+                        ),
+                        device=client_device,
+                        global_state=server.model.state_dict(),
+                        eval_client_ids=list(plan["in_ids"]),
+                    )
+                    federated_eval_out_metrics = _run_federated_eval_serial(
+                        config=config,
+                        model=model,
+                        client_datasets=client_datasets,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=bool(
+                            logging_policy["client_logging_enabled"]
+                        ),
+                        device=client_device,
+                        global_state=server.model.state_dict(),
+                        eval_client_ids=list(plan["out_ids"]),
+                    )
+                else:
+                    federated_eval_metrics = _run_federated_eval_serial(
+                        config=config,
+                        model=model,
+                        client_datasets=client_datasets,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=bool(
+                            logging_policy["client_logging_enabled"]
+                        ),
+                        device=client_device,
+                        global_state=server.model.state_dict(),
+                        eval_client_ids=list(plan["in_ids"]),
+                    )
 
         _log_round(
             config,
@@ -1157,6 +1370,8 @@ def run_serial(config) -> None:
         )
 
     server_logger.info(f"Finished serial simulation in {time.time() - t0:.2f}s.")
+    if eager_clients is not None:
+        _release_clients(eager_clients)
     if tracker is not None:
         tracker.close()
 
@@ -1195,6 +1410,7 @@ def run_mpi(config) -> None:
 
     num_clients = int(runtime_cfg["num_clients"])
     logging_policy = _resolve_client_logging_policy(config, num_clients=num_clients)
+    init_policy = _resolve_client_init_policy(config, num_clients=num_clients)
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
@@ -1214,6 +1430,9 @@ def run_mpi(config) -> None:
         server_logger = _new_server_logger(config, mode="mpi")
         _emit_logging_policy_message(
             logging_policy, num_clients=num_clients, logger=server_logger
+        )
+        _emit_client_init_policy_message(
+            init_policy, num_clients=num_clients, logger=server_logger
         )
         server_logger.info(
             f"MPI context: world_size={world_size} rank={rank} local_rank={local_rank} "
@@ -1256,7 +1475,8 @@ def run_mpi(config) -> None:
             f"client_device={client_device} num_local_clients={len(local_client_ids)}"
         )
 
-    clients = _build_clients(
+    _run_client_mpi(
+        communicator=communicator,
         config=config,
         model=model,
         client_datasets=client_datasets,
@@ -1264,8 +1484,8 @@ def run_mpi(config) -> None:
         device=client_device,
         run_log_dir=run_log_dir,
         client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+        use_on_demand=bool(init_policy["use_on_demand"]),
     )
-    _run_client_mpi(communicator, clients)
 
 
 def _extract_config_path(argv: list[str]) -> tuple[str | None, list[str]]:
@@ -1414,6 +1634,41 @@ def _resolve_mpi_nproc(config: DictConfig) -> int:
     return nproc
 
 
+def _find_mpi_launcher() -> Tuple[Optional[str], Dict[str, str]]:
+    launcher = shutil.which("mpiexec") or shutil.which("mpirun")
+    if launcher is not None:
+        return launcher, {}
+
+    candidate_bins: List[Path] = []
+    home = Path.home()
+    candidate_bins.append(home / "openmpi-install" / "bin")
+    for env_key in ("MPI_HOME", "OPENMPI_HOME", "OMPI_HOME", "I_MPI_ROOT"):
+        raw = os.environ.get(env_key, "").strip()
+        if raw:
+            candidate_bins.append(Path(raw).expanduser() / "bin")
+
+    for bin_dir in candidate_bins:
+        mpiexec_path = bin_dir / "mpiexec"
+        mpirun_path = bin_dir / "mpirun"
+        if mpiexec_path.exists():
+            lib_dir = bin_dir.parent / "lib"
+            updates = {}
+            if lib_dir.exists():
+                updates["LD_LIBRARY_PATH"] = (
+                    f"{lib_dir}:{os.environ.get('LD_LIBRARY_PATH', '')}".rstrip(":")
+                )
+            return str(mpiexec_path), updates
+        if mpirun_path.exists():
+            lib_dir = bin_dir.parent / "lib"
+            updates = {}
+            if lib_dir.exists():
+                updates["LD_LIBRARY_PATH"] = (
+                    f"{lib_dir}:{os.environ.get('LD_LIBRARY_PATH', '')}".rstrip(":")
+                )
+            return str(mpirun_path), updates
+    return None, {}
+
+
 def _maybe_autolaunch_mpi(
     backend: str,
     config: DictConfig,
@@ -1426,7 +1681,7 @@ def _maybe_autolaunch_mpi(
     if _is_running_under_mpi_launcher():
         return
 
-    launcher = shutil.which("mpiexec") or shutil.which("mpirun")
+    launcher, env_updates = _find_mpi_launcher()
     if launcher is None:
         raise RuntimeError(
             "backend=mpi requested, but no MPI launcher found in PATH "
@@ -1440,6 +1695,7 @@ def _maybe_autolaunch_mpi(
     cmd.extend(["-n", str(nproc), sys.executable, "-m", "appfl_sim.runner", *cli_argv])
     env = os.environ.copy()
     env[_MPI_AUTO_LAUNCH_ENV] = "1"
+    env.update(env_updates)
     completed = subprocess.run(cmd, env=env, check=False)
     raise SystemExit(int(completed.returncode))
 

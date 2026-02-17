@@ -795,6 +795,9 @@ class VanillaTrainer(BaseTrainer):
     def _validate_metrics(self) -> Dict[str, Any]:
         device = self.device
         was_training = self.model.training
+        self.model = apply_model_device(self.model, self.device_config, device)
+        if hasattr(self.loss_fn, "to"):
+            self.loss_fn = self.loss_fn.to(device)
         self.model.eval()
         manager = self._new_metrics_manager()
         total_examples = 0
