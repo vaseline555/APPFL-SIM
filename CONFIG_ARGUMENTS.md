@@ -81,6 +81,8 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `client_processing_chunk_size` (default: `0`): chunk size for sampled/eval client-id processing (`<=0` enables auto sizing).
 - `offload_to_cpu_after_local_job` (default: `true`): offload model/loss to CPU after local train/eval to reduce VRAM.
 - `clear_cuda_cache_after_chunk` (default: `false`): force `torch.cuda.empty_cache()` after each processed chunk (usually slower; keep false unless needed).
+- `on_demand_num_workers` (default: `0`): DataLoader workers for on-demand (stateless) local training client builds.
+- `on_demand_eval_num_workers` (default: `0`): DataLoader workers for on-demand (stateless) federated evaluation client builds.
 
 ## Device and MPI
 - `device` (default: `cpu`): client device.
@@ -88,6 +90,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `num_workers` (default: `0`): DataLoader workers per process.
 - `mpi_dataset_download_mode` (default: `rank0`): dataset download policy (`rank0`, `local_rank0`, `all`, `none`).
 - `mpi_use_local_rank_device` (default: `true`): map device by local rank in MPI.
+- `mpi_respect_explicit_cuda_index` (default: `false`): when false, MPI local-rank mapping overrides explicit `device=cuda:<idx>` to avoid all ranks pinning one GPU.
 - `mpi_log_rank_mapping` (default: `false`): print rank/device mapping in MPI workers.
 - `mpi_num_workers` (default: `0`): MPI worker ranks (0 = auto).
 - `mpi_oversubscribe` (default: `false`): pass `--oversubscribe` to MPI launcher.

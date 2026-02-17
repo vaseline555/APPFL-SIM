@@ -323,14 +323,23 @@ def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
     return round_idx % max(1, int(every)) == 0 or round_idx == int(num_rounds)
 
 
-def _build_train_cfg(config: DictConfig, device: str, run_log_dir: str) -> Dict:
+def _build_train_cfg(
+    config: DictConfig,
+    device: str,
+    run_log_dir: str,
+    num_workers_override: Optional[int] = None,
+) -> Dict:
+    if num_workers_override is None:
+        num_workers = int(config.num_workers)
+    else:
+        num_workers = max(0, int(num_workers_override))
     return {
         "device": device,
         "mode": "epoch",
         "num_local_epochs": int(config.local_epochs),
         "train_batch_size": int(config.batch_size),
         "val_batch_size": int(config.get("eval_batch_size", config.batch_size)),
-        "num_workers": int(config.num_workers),
+        "num_workers": int(num_workers),
         "optim": str(config.optimizer),
         "optim_args": {
             "lr": float(config.lr),
@@ -496,6 +505,27 @@ def _emit_client_state_policy_message(
         print(msg)
 
 
+def _resolve_on_demand_worker_policy(
+    config: DictConfig,
+    logger: Optional[ServerAgentFileLogger] = None,
+) -> Dict[str, int]:
+    base_workers = max(0, int(config.get("num_workers", 0)))
+    train_workers = max(0, int(config.get("on_demand_num_workers", 0)))
+    eval_workers = max(0, int(config.get("on_demand_eval_num_workers", 0)))
+    if logger is not None and base_workers > 0:
+        if "on_demand_num_workers" not in config:
+            logger.info(
+                f"On-demand training dataloaders default to 0 workers (num_workers={base_workers} ignored). "
+                "Set on_demand_num_workers to override."
+            )
+        if "on_demand_eval_num_workers" not in config:
+            logger.info(
+                f"On-demand eval dataloaders default to 0 workers (num_workers={base_workers} ignored). "
+                "Set on_demand_eval_num_workers to override."
+            )
+    return {"train": train_workers, "eval": eval_workers}
+
+
 def _build_clients(
     config: DictConfig,
     model,
@@ -505,8 +535,14 @@ def _build_clients(
     run_log_dir: str,
     client_logging_enabled: bool = True,
     share_model: bool = False,
+    num_workers_override: Optional[int] = None,
 ):
-    train_cfg = _build_train_cfg(config, device=device, run_log_dir=run_log_dir)
+    train_cfg = _build_train_cfg(
+        config,
+        device=device,
+        run_log_dir=run_log_dir,
+        num_workers_override=num_workers_override,
+    )
     train_cfg["client_logging_enabled"] = bool(client_logging_enabled)
     clients = []
     for cid in local_client_ids:
@@ -555,6 +591,7 @@ def _build_single_client(
     run_log_dir: str,
     client_logging_enabled: bool = True,
     share_model: bool = False,
+    num_workers_override: Optional[int] = None,
 ):
     clients = _build_clients(
         config=config,
@@ -565,6 +602,7 @@ def _build_single_client(
         run_log_dir=run_log_dir,
         client_logging_enabled=bool(client_logging_enabled),
         share_model=bool(share_model),
+        num_workers_override=num_workers_override,
     )
     if not clients:
         raise RuntimeError(f"Failed to construct client for id={client_id}")
@@ -1332,6 +1370,7 @@ def _run_federated_eval_serial(
     round_idx: int,
     eval_tag: str = "federated",
     eval_split: str = "test",
+    eval_num_workers_override: Optional[int] = None,
 ) -> Optional[Dict[str, float]]:
     if not eval_client_ids:
         return None
@@ -1359,6 +1398,7 @@ def _run_federated_eval_serial(
                 run_log_dir=run_log_dir,
                 client_logging_enabled=client_logging_enabled,
                 share_model=True,
+                num_workers_override=eval_num_workers_override,
             )
             for client in chunk_clients:
                 client.download(global_state)
@@ -1532,6 +1572,8 @@ def _run_client_mpi(
     run_log_dir: str,
     client_logging_enabled: bool,
     use_on_demand: bool,
+    on_demand_train_num_workers: Optional[int] = None,
+    on_demand_eval_num_workers: Optional[int] = None,
 ):
     local_client_set = {int(cid) for cid in local_client_ids}
     chunk_size = _client_processing_chunk_size(
@@ -1594,6 +1636,7 @@ def _run_client_mpi(
                         run_log_dir=run_log_dir,
                         client_logging_enabled=client_logging_enabled,
                         share_model=True,
+                        num_workers_override=on_demand_eval_num_workers,
                     )
                     for client in chunk_clients:
                         client.download(global_state)
@@ -1640,6 +1683,7 @@ def _run_client_mpi(
                         run_log_dir=run_log_dir,
                         client_logging_enabled=client_logging_enabled,
                         share_model=False,
+                        num_workers_override=on_demand_train_num_workers,
                     )
                     for client in chunk_clients:
                         client.download(global_state)
@@ -1702,6 +1746,7 @@ def run_serial(config) -> None:
         logging_policy, num_clients=num_clients, logger=server_logger
     )
     _emit_client_state_policy_message(state_policy, logger=server_logger)
+    on_demand_workers = _resolve_on_demand_worker_policy(config, logger=server_logger)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
@@ -1788,6 +1833,7 @@ def run_serial(config) -> None:
                     run_log_dir=run_log_dir,
                     client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
                     share_model=False,
+                    num_workers_override=on_demand_workers["train"],
                 )
                 for client in chunk_clients:
                     client.download(global_state)
@@ -1872,6 +1918,7 @@ def run_serial(config) -> None:
                         round_idx=round_idx,
                         eval_tag="fed-in",
                         eval_split="test",
+                        eval_num_workers_override=on_demand_workers["eval"],
                     )
                     federated_eval_out_metrics = _run_federated_eval_serial(
                         config=config,
@@ -1887,6 +1934,7 @@ def run_serial(config) -> None:
                         round_idx=round_idx,
                         eval_tag="fed-out",
                         eval_split="test",
+                        eval_num_workers_override=on_demand_workers["eval"],
                     )
                 else:
                     federated_eval_metrics = _run_federated_eval_serial(
@@ -1903,6 +1951,7 @@ def run_serial(config) -> None:
                         round_idx=round_idx,
                         eval_tag="fed",
                         eval_split="test",
+                        eval_num_workers_override=on_demand_workers["eval"],
                     )
 
         _log_round(
@@ -1984,6 +2033,9 @@ def run_mpi(config) -> None:
     set_seed_everything(int(config.seed) + rank)
     use_local_rank_device = _cfg_bool(config, "mpi_use_local_rank_device", True)
     client_local_rank = local_rank if use_local_rank_device else max(rank - 1, 0)
+    respect_explicit_cuda_index = _cfg_bool(
+        config, "mpi_respect_explicit_cuda_index", False
+    )
 
     if rank == 0:
         server_logger = _new_server_logger(config, mode="mpi")
@@ -1997,6 +2049,9 @@ def run_mpi(config) -> None:
             logging_policy, num_clients=num_clients, logger=server_logger
         )
         _emit_client_state_policy_message(state_policy, logger=server_logger)
+        on_demand_workers = _resolve_on_demand_worker_policy(
+            config, logger=server_logger
+        )
         server_logger.info(
             f"MPI context: world_size={world_size} rank={rank} local_rank={local_rank} "
             f"download_mode={_mpi_download_mode(config)}"
@@ -2027,7 +2082,15 @@ def run_mpi(config) -> None:
     local_client_ids = np.asarray(client_groups[rank - 1]).astype(int)
 
     client_device = resolve_rank_device(
-        str(config.device),
+        (
+            str(config.device)
+            if (respect_explicit_cuda_index or not use_local_rank_device)
+            else (
+                "cuda"
+                if str(config.device).strip().lower().startswith("cuda:")
+                else str(config.device)
+            )
+        ),
         rank=rank,
         world_size=world_size,
         local_rank=client_local_rank,
@@ -2048,6 +2111,8 @@ def run_mpi(config) -> None:
         run_log_dir=run_log_dir,
         client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
         use_on_demand=bool(state_policy["use_on_demand"]),
+        on_demand_train_num_workers=int(on_demand_workers["train"]),
+        on_demand_eval_num_workers=int(on_demand_workers["eval"]),
     )
 
 

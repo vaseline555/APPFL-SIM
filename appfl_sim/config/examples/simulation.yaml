@@ -66,12 +66,15 @@ stateful_clients: false
 client_processing_chunk_size: 0
 offload_to_cpu_after_local_job: true
 clear_cuda_cache_after_chunk: false
+on_demand_num_workers: 0
+on_demand_eval_num_workers: 0
 
 device: cpu
 server_device: cpu
 num_workers: 0
 mpi_dataset_download_mode: rank0
 mpi_use_local_rank_device: true
+mpi_respect_explicit_cuda_index: false
 mpi_log_rank_mapping: false
 mpi_num_workers: 0
 mpi_oversubscribe: false
