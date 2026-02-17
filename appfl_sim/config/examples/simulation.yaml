@@ -65,6 +65,7 @@ show_eval_progress: true
 stateful_clients: false
 client_processing_chunk_size: 0
 offload_to_cpu_after_local_job: true
+clear_cuda_cache_after_chunk: false
 
 device: cpu
 server_device: cpu

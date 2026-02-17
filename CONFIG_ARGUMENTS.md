@@ -80,6 +80,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `stateful_clients` (default: `false`): keep client objects across rounds (`true`) or instantiate/release on-demand (`false`).
 - `client_processing_chunk_size` (default: `0`): chunk size for sampled/eval client-id processing (`<=0` enables auto sizing).
 - `offload_to_cpu_after_local_job` (default: `true`): offload model/loss to CPU after local train/eval to reduce VRAM.
+- `clear_cuda_cache_after_chunk` (default: `false`): force `torch.cuda.empty_cache()` after each processed chunk (usually slower; keep false unless needed).
 
 ## Device and MPI
 - `device` (default: `cpu`): client device.

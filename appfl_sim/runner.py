@@ -504,6 +504,7 @@ def _build_clients(
     device: str,
     run_log_dir: str,
     client_logging_enabled: bool = True,
+    share_model: bool = False,
 ):
     train_cfg = _build_train_cfg(config, device=device, run_log_dir=run_log_dir)
     train_cfg["client_logging_enabled"] = bool(client_logging_enabled)
@@ -532,7 +533,7 @@ def _build_clients(
         client_cfg.client_id = str(int(cid))
         client_cfg.experiment_id = str(config.exp_name)
         client = ClientAgent(client_agent_config=client_cfg)
-        client.model = copy.deepcopy(model)
+        client.model = model if share_model else copy.deepcopy(model)
         client.train_dataset = train_ds
         client.val_dataset = val_ds
         client.test_dataset = test_ds
@@ -553,6 +554,7 @@ def _build_single_client(
     device: str,
     run_log_dir: str,
     client_logging_enabled: bool = True,
+    share_model: bool = False,
 ):
     clients = _build_clients(
         config=config,
@@ -562,6 +564,7 @@ def _build_single_client(
         device=device,
         run_log_dir=run_log_dir,
         client_logging_enabled=bool(client_logging_enabled),
+        share_model=bool(share_model),
     )
     if not clients:
         raise RuntimeError(f"Failed to construct client for id={client_id}")
@@ -917,7 +920,7 @@ def _log_round(
         lines.append(
             _entity_line(
                 "Local Gen. Error:",
-                _join_metric_parts([f"loss_gap: {avg_value:.4f}/{std_value:.4f}"]),
+                _join_metric_parts([f"err.: {avg_value:.4f}/{std_value:.4f}"]),
             )
         )
 
@@ -1153,10 +1156,10 @@ def _iter_id_chunks(ids: Sequence[int], chunk_size: int):
         yield ordered[start : start + chunk_size]
 
 
-def _release_clients(clients) -> None:
+def _release_clients(clients, clear_cuda_cache: bool = False) -> None:
     del clients
     gc.collect()
-    if torch.cuda.is_available():
+    if clear_cuda_cache and torch.cuda.is_available():
         torch.cuda.empty_cache()
 
 
@@ -1224,7 +1227,7 @@ def _run_federated_eval_mpi(
     )
     progress = _new_progress(
         total=len(eval_ids),
-        desc=f"Server | Round {int(round_idx):04d} | Federated {str(eval_tag).replace('-', ' ').title()}",
+        desc=f"Server | Round {int(round_idx):04d} | {str(eval_tag).replace('-', ' ').title()}",
         enabled=_cfg_bool(config, "show_eval_progress", True),
     )
     try:
@@ -1347,19 +1350,26 @@ def _run_federated_eval_serial(
     )
     try:
         for chunk_ids in _iter_id_chunks(sorted(eval_client_ids), chunk_size):
-            for cid in chunk_ids:
-                client = _build_single_client(
-                    config=config,
-                    model=model,
-                    client_datasets=client_datasets,
-                    client_id=int(cid),
-                    device=device,
-                    run_log_dir=run_log_dir,
-                    client_logging_enabled=client_logging_enabled,
-                )
+            chunk_clients = _build_clients(
+                config=config,
+                model=model,
+                client_datasets=client_datasets,
+                local_client_ids=np.asarray(chunk_ids).astype(int),
+                device=device,
+                run_log_dir=run_log_dir,
+                client_logging_enabled=client_logging_enabled,
+                share_model=True,
+            )
+            for client in chunk_clients:
                 client.download(global_state)
-                eval_stats[int(client.id)] = client.evaluate(split=str(eval_split))
-                _release_clients([client])
+                eval_stats[int(client.id)] = client.evaluate(
+                    split=str(eval_split),
+                    offload_after=False,
+                )
+            _release_clients(
+                chunk_clients,
+                clear_cuda_cache=_cfg_bool(config, "clear_cuda_cache_after_chunk", False),
+            )
             if progress is not None:
                 progress.update(len(chunk_ids))
     finally:
@@ -1568,25 +1578,37 @@ def _run_client_mpi(
                         continue
                     client.download(global_state)
                     local_payload[int(client.id)] = {
-                        "eval_stats": client.evaluate(split=eval_split)
+                        "eval_stats": client.evaluate(
+                            split=eval_split,
+                            offload_after=False,
+                        )
                     }
             else:
                 for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
-                    for cid in chunk_ids:
-                        client = _build_single_client(
-                            config=config,
-                            model=model,
-                            client_datasets=client_datasets,
-                            client_id=int(cid),
-                            device=device,
-                            run_log_dir=run_log_dir,
-                            client_logging_enabled=client_logging_enabled,
-                        )
+                    chunk_clients = _build_clients(
+                        config=config,
+                        model=model,
+                        client_datasets=client_datasets,
+                        local_client_ids=np.asarray(chunk_ids).astype(int),
+                        device=device,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=client_logging_enabled,
+                        share_model=True,
+                    )
+                    for client in chunk_clients:
                         client.download(global_state)
                         local_payload[int(client.id)] = {
-                            "eval_stats": client.evaluate(split=eval_split)
+                            "eval_stats": client.evaluate(
+                                split=eval_split,
+                                offload_after=False,
+                            )
                         }
-                        _release_clients([client])
+                    _release_clients(
+                        chunk_clients,
+                        clear_cuda_cache=_cfg_bool(
+                            config, "clear_cuda_cache_after_chunk", False
+                        ),
+                    )
         else:
             selected = set(
                 int(cid)
@@ -1609,16 +1631,17 @@ def _run_client_mpi(
                     }
             else:
                 for chunk_ids in _iter_id_chunks(sorted(selected), chunk_size):
-                    for cid in chunk_ids:
-                        client = _build_single_client(
-                            config=config,
-                            model=model,
-                            client_datasets=client_datasets,
-                            client_id=int(cid),
-                            device=device,
-                            run_log_dir=run_log_dir,
-                            client_logging_enabled=client_logging_enabled,
-                        )
+                    chunk_clients = _build_clients(
+                        config=config,
+                        model=model,
+                        client_datasets=client_datasets,
+                        local_client_ids=np.asarray(chunk_ids).astype(int),
+                        device=device,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=client_logging_enabled,
+                        share_model=False,
+                    )
+                    for client in chunk_clients:
                         client.download(global_state)
                         train_result = client.update(round_idx=round_idx)
                         state = client.upload()
@@ -1629,7 +1652,12 @@ def _run_client_mpi(
                             "num_examples": int(train_result.get("num_examples", 0)),
                             "stats": train_result,
                         }
-                        _release_clients([client])
+                    _release_clients(
+                        chunk_clients,
+                        clear_cuda_cache=_cfg_bool(
+                            config, "clear_cuda_cache_after_chunk", False
+                        ),
+                    )
 
         communicator.send_local_models_to_server(local_payload, dest=0)
 
@@ -1751,16 +1779,17 @@ def run_serial(config) -> None:
                 stats[client.id] = train_result
         else:
             for chunk_ids in _iter_id_chunks(selected_ids, chunk_size):
-                for cid in chunk_ids:
-                    client = _build_single_client(
-                        config=config,
-                        model=model,
-                        client_datasets=client_datasets,
-                        client_id=int(cid),
-                        device=client_device,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-                    )
+                chunk_clients = _build_clients(
+                    config=config,
+                    model=model,
+                    client_datasets=client_datasets,
+                    local_client_ids=np.asarray(chunk_ids).astype(int),
+                    device=client_device,
+                    run_log_dir=run_log_dir,
+                    client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+                    share_model=False,
+                )
+                for client in chunk_clients:
                     client.download(global_state)
                     train_result = client.update(round_idx=round_idx)
                     state = client.upload()
@@ -1769,7 +1798,10 @@ def run_serial(config) -> None:
                     updates[client.id] = state
                     sample_sizes[client.id] = int(train_result["num_examples"])
                     stats[client.id] = train_result
-                    _release_clients([client])
+                _release_clients(
+                    chunk_clients,
+                    clear_cuda_cache=_cfg_bool(config, "clear_cuda_cache_after_chunk", False),
+                )
 
         weights = server.aggregate(updates, sample_sizes)
         global_eval_metrics = None
@@ -1800,10 +1832,16 @@ def run_serial(config) -> None:
                     for client in eager_clients:
                         if client.id in eval_in_set:
                             client.download(state)
-                            eval_in_stats[int(client.id)] = client.evaluate(split="test")
+                            eval_in_stats[int(client.id)] = client.evaluate(
+                                split="test",
+                                offload_after=False,
+                            )
                         elif client.id in eval_out_set:
                             client.download(state)
-                            eval_out_stats[int(client.id)] = client.evaluate(split="test")
+                            eval_out_stats[int(client.id)] = client.evaluate(
+                                split="test",
+                                offload_after=False,
+                            )
                     federated_eval_in_metrics = _aggregate_eval_stats(eval_in_stats)
                     federated_eval_out_metrics = _aggregate_eval_stats(eval_out_stats)
                 else:
@@ -1813,7 +1851,10 @@ def run_serial(config) -> None:
                         if client.id not in eval_set:
                             continue
                         client.download(state)
-                        eval_stats[int(client.id)] = client.evaluate(split="test")
+                        eval_stats[int(client.id)] = client.evaluate(
+                            split="test",
+                            offload_after=False,
+                        )
                     federated_eval_metrics = _aggregate_eval_stats(eval_stats)
             else:
                 if plan["scheme"] == "holdout_client":

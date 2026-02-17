@@ -1009,6 +1009,7 @@ class VanillaTrainer(BaseTrainer):
         split: str = "test",
         val: bool = False,
         test: bool = False,
+        offload_after: Optional[bool] = None,
     ) -> Dict[str, Any]:
         chosen = self._resolve_eval_split(split=split, val=val, test=test)
         if chosen == "val" and self.val_dataloader is None:
@@ -1019,9 +1020,14 @@ class VanillaTrainer(BaseTrainer):
             chosen = "val"
         if chosen == "val" and self.val_dataloader is None:
             return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
+        offload_flag = (
+            self._should_offload_after_local_job()
+            if offload_after is None
+            else bool(offload_after)
+        )
         return self._validate_metrics(
             split=chosen,
-            offload_after=self._should_offload_after_local_job(),
+            offload_after=offload_flag,
         )
 
     def _validate(self) -> Tuple[float, float]:
