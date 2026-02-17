@@ -62,9 +62,8 @@ federated_eval_every: 1
 federated_eval_scheme: holdout_dataset
 holdout_eval_num_clients: 0
 holdout_eval_client_ratio: 0.0
-client_init_mode: auto
-client_init_on_demand_threshold: 1000
-client_processing_chunk_size: 256
+stateful_clients: false
+client_processing_chunk_size: 0
 offload_to_cpu_after_local_job: true
 
 device: cpu

@@ -75,9 +75,8 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `holdout_eval_client_ratio` (default: `0.0`): ratio-based holdout client size.
 
 ## Client Lifecycle and Memory
-- `client_init_mode` (default: `auto`): client init policy (`auto`, `eager`, `on_demand`).
-- `client_init_on_demand_threshold` (default: `1000`): `auto` threshold for on-demand init.
-- `client_processing_chunk_size` (default: `256`): number of clients processed per chunk in on-demand mode.
+- `stateful_clients` (default: `false`): keep client objects across rounds (`true`) or instantiate/release on-demand (`false`).
+- `client_processing_chunk_size` (default: `0`): chunk size for sampled/eval client-id processing (`<=0` enables auto sizing).
 - `offload_to_cpu_after_local_job` (default: `true`): offload model/loss to CPU after local train/eval to reduce VRAM.
 
 ## Device and MPI
@@ -135,7 +134,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `leaf_image_root` (default: `""`): optional LEAF image root override.
 
 ## Deprecated Alias
-- `effective` (alias): treated as `client_init_mode` for backward compatibility.
+- `effective` / `client_init_mode` (alias): mapped to `stateful_clients` for backward compatibility.
 
 ## Purged (removed from default config)
 - `server_lr`: removed (unused by current runner pipeline).

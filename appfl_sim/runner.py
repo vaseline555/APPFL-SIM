@@ -311,37 +311,46 @@ def _emit_logging_policy_message(
         )
 
 
-def _resolve_client_init_policy(config: DictConfig, num_clients: int) -> Dict[str, object]:
-    mode = str(
-        config.get(
-            "client_init_mode",
-            config.get("effective", "auto"),
-        )
-    ).strip().lower()
-    threshold = int(config.get("client_init_on_demand_threshold", 1000))
-    if mode not in {"auto", "eager", "on_demand"}:
-        raise ValueError("client_init_mode must be one of: auto, eager, on_demand")
-    use_on_demand = (num_clients > threshold) if mode == "auto" else (mode == "on_demand")
+def _resolve_client_state_policy(config: DictConfig) -> Dict[str, object]:
+    """Client lifecycle policy.
+
+    Default is stateless (on-demand): instantiate sampled client(s), run, then free.
+    Stateful mode is explicit via `stateful_clients=true`.
+
+    Backward compatibility:
+    - `client_init_mode=eager|stateful` -> stateful.
+    - `effective=eager|stateful` -> stateful.
+    """
+    if "stateful_clients" in config:
+        stateful = _cfg_bool(config, "stateful_clients", False)
+        source = "stateful_clients"
+    else:
+        legacy_mode = str(
+            config.get(
+                "client_init_mode",
+                config.get("effective", "on_demand"),
+            )
+        ).strip().lower()
+        if legacy_mode not in {"auto", "eager", "on_demand", "stateful", "stateless"}:
+            legacy_mode = "on_demand"
+        stateful = legacy_mode in {"eager", "stateful"}
+        source = "legacy_client_init_mode"
+
     return {
-        "requested_mode": mode,
-        "effective_mode": "on_demand" if use_on_demand else "eager",
-        "use_on_demand": use_on_demand,
-        "threshold": threshold,
+        "stateful_clients": bool(stateful),
+        "use_on_demand": not bool(stateful),
+        "source": source,
     }
 
 
-def _emit_client_init_policy_message(
+def _emit_client_state_policy_message(
     policy: Dict[str, object],
-    num_clients: int,
     logger: Optional[ServerAgentFileLogger] = None,
 ) -> None:
-    requested = str(policy["requested_mode"])
-    effective = str(policy["effective_mode"])
-    threshold = int(policy["threshold"])
-    msg = (
-        f"Client init policy: requested={requested} effective={effective} "
-        f"(num_clients={num_clients}, threshold={threshold})"
-    )
+    stateful = bool(policy.get("stateful_clients", False))
+    source = str(policy.get("source", "stateful_clients"))
+    mode = "stateful (persistent client objects)" if stateful else "stateless/on-demand"
+    msg = f"Client lifecycle: mode={mode} source={source}"
     if logger is not None:
         logger.info(msg)
     else:
@@ -476,16 +485,13 @@ def _maybe_force_server_cpu(
 ) -> None:
     if enable_global_eval:
         return
-    if not _cfg_bool(config, "force_server_cpu_when_no_global_eval", True):
-        return
     current = str(config.get("server_device", "cpu")).strip().lower()
     if not current.startswith("cuda"):
         return
     config.server_device = "cpu"
     msg = (
         "Global eval is disabled; forcing `server_device=cpu` to avoid unnecessary "
-        "server-side GPU memory usage. Set "
-        "`force_server_cpu_when_no_global_eval=false` to keep CUDA."
+        "server-side GPU memory usage."
     )
     if logger is not None:
         logger.info(msg)
@@ -820,8 +826,62 @@ def _sample_train_clients(train_client_ids: List[int], client_fraction: float) -
     return sorted(random.sample(train_client_ids, n))
 
 
-def _client_processing_chunk_size(config: DictConfig) -> int:
-    return max(1, int(config.get("client_processing_chunk_size", 256)))
+def _resolve_cuda_index(device: str) -> int:
+    text = str(device).strip().lower()
+    if not text.startswith("cuda"):
+        return 0
+    if ":" not in text:
+        return 0
+    suffix = text.split(":", 1)[1].strip()
+    if suffix.isdigit():
+        return int(suffix)
+    return 0
+
+
+def _model_bytes(model) -> int:
+    total = 0
+    for p in model.parameters():
+        total += int(p.numel()) * int(p.element_size())
+    for b in model.buffers():
+        total += int(b.numel()) * int(b.element_size())
+    return int(total)
+
+
+def _client_processing_chunk_size(
+    config: DictConfig,
+    model=None,
+    device: str = "cpu",
+    total_clients: int = 0,
+    phase: str = "train",
+) -> int:
+    configured = int(config.get("client_processing_chunk_size", 0))
+    if configured > 0:
+        return max(1, configured)
+
+    # Auto mode (configured <= 0):
+    # choose a conservative chunk size by device/memory hints.
+    phase_name = str(phase).strip().lower()
+    if str(device).strip().lower().startswith("cuda") and torch.cuda.is_available():
+        try:
+            dev_idx = _resolve_cuda_index(device)
+            free_bytes, _ = torch.cuda.mem_get_info(dev_idx)
+        except Exception:
+            free_bytes = 0
+        model_bytes = _model_bytes(model) if model is not None else 64 * 1024 * 1024
+        per_client = max(
+            256 * 1024 * 1024,
+            model_bytes * (10 if phase_name == "train" else 4),
+        )
+        budget = int(float(free_bytes) * 0.35) if free_bytes > 0 else 0
+        auto_chunk = int(budget // per_client) if budget > 0 else 1
+        auto_chunk = max(1, min(64, auto_chunk))
+    else:
+        cpu = max(1, (os.cpu_count() or 1))
+        auto_chunk = max(1, min(64, cpu // 2))
+
+    if int(total_clients) > 0:
+        auto_chunk = min(auto_chunk, int(total_clients))
+    return max(1, int(auto_chunk))
 
 
 def _iter_id_chunks(ids: Sequence[int], chunk_size: int):
@@ -872,27 +932,38 @@ def _build_federated_eval_plan(
 
 
 def _run_federated_eval_mpi(
+    config: DictConfig,
     communicator,
     model_state,
+    model,
+    device: str,
     round_idx: int,
     eval_ids: List[int],
 ) -> Optional[Dict[str, float]]:
     if not eval_ids:
         return None
-    communicator.broadcast_global_model(
-        model=model_state,
-        args={
-            "done": False,
-            "mode": "eval",
-            "round": int(round_idx),
-            "eval_ids": list(eval_ids),
-        },
-    )
-    eval_payloads = communicator.recv_all_local_models_from_clients()
     eval_stats = {}
-    for cid, payload in eval_payloads.items():
-        if isinstance(payload, dict) and "eval_stats" in payload:
-            eval_stats[int(cid)] = payload["eval_stats"]
+    chunk_size = _client_processing_chunk_size(
+        config=config,
+        model=model,
+        device=device,
+        total_clients=len(eval_ids),
+        phase="eval",
+    )
+    for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
+        communicator.broadcast_global_model(
+            model=model_state,
+            args={
+                "done": False,
+                "mode": "eval",
+                "round": int(round_idx),
+                "eval_ids": list(chunk_ids),
+            },
+        )
+        eval_payloads = communicator.recv_all_local_models_from_clients()
+        for cid, payload in eval_payloads.items():
+            if isinstance(payload, dict) and "eval_stats" in payload:
+                eval_stats[int(cid)] = payload["eval_stats"]
     return _aggregate_eval_stats(eval_stats)
 
 
@@ -974,7 +1045,13 @@ def _run_federated_eval_serial(
 ) -> Optional[Dict[str, float]]:
     if not eval_client_ids:
         return None
-    chunk_size = _client_processing_chunk_size(config)
+    chunk_size = _client_processing_chunk_size(
+        config=config,
+        model=model,
+        device=device,
+        total_clients=len(eval_client_ids),
+        phase="eval",
+    )
     eval_stats: Dict[int, Dict] = {}
     for chunk_ids in _iter_id_chunks(sorted(eval_client_ids), chunk_size):
         for cid in chunk_ids:
@@ -1075,21 +1152,30 @@ def _run_server_mpi(
             )
             if plan["scheme"] == "holdout_client":
                 federated_eval_in_metrics = _run_federated_eval_mpi(
+                    config=config,
                     communicator=communicator,
                     model_state=server.model.state_dict(),
+                    model=server.model,
+                    device=str(config.device),
                     round_idx=round_idx,
                     eval_ids=list(plan["in_ids"]),
                 )
                 federated_eval_out_metrics = _run_federated_eval_mpi(
+                    config=config,
                     communicator=communicator,
                     model_state=server.model.state_dict(),
+                    model=server.model,
+                    device=str(config.device),
                     round_idx=round_idx,
                     eval_ids=list(plan["out_ids"]),
                 )
             else:
                 federated_eval_metrics = _run_federated_eval_mpi(
+                    config=config,
                     communicator=communicator,
                     model_state=server.model.state_dict(),
+                    model=server.model,
+                    device=str(config.device),
                     round_idx=round_idx,
                     eval_ids=list(plan["in_ids"]),
                 )
@@ -1130,7 +1216,13 @@ def _run_client_mpi(
     use_on_demand: bool,
 ):
     local_client_set = {int(cid) for cid in local_client_ids}
-    chunk_size = _client_processing_chunk_size(config)
+    chunk_size = _client_processing_chunk_size(
+        config=config,
+        model=model,
+        device=device,
+        total_clients=len(local_client_set),
+        phase="train",
+    )
     eager_clients = None
     if not use_on_demand:
         eager_clients = _build_clients(
@@ -1253,13 +1345,11 @@ def run_serial(config) -> None:
     _validate_loader_output(client_datasets, runtime_cfg)
     num_clients = int(runtime_cfg["num_clients"])
     logging_policy = _resolve_client_logging_policy(config, num_clients=num_clients)
-    init_policy = _resolve_client_init_policy(config, num_clients=num_clients)
+    state_policy = _resolve_client_state_policy(config)
     _emit_logging_policy_message(
         logging_policy, num_clients=num_clients, logger=server_logger
     )
-    _emit_client_init_policy_message(
-        init_policy, num_clients=num_clients, logger=server_logger
-    )
+    _emit_client_state_policy_message(state_policy, logger=server_logger)
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
@@ -1281,9 +1371,17 @@ def run_serial(config) -> None:
     )
 
     client_device = resolve_rank_device(str(config.device), rank=1, world_size=2)
-    chunk_size = _client_processing_chunk_size(config)
+    chunk_size = _client_processing_chunk_size(
+        config=config,
+        model=model,
+        device=client_device,
+        total_clients=num_clients,
+        phase="train",
+    )
     eager_clients = None
-    if not bool(init_policy["use_on_demand"]):
+    use_on_demand = bool(state_policy["use_on_demand"])
+
+    if not use_on_demand:
         eager_clients = _build_clients(
             config=config,
             model=model,
@@ -1489,7 +1587,7 @@ def run_mpi(config) -> None:
 
     num_clients = int(runtime_cfg["num_clients"])
     logging_policy = _resolve_client_logging_policy(config, num_clients=num_clients)
-    init_policy = _resolve_client_init_policy(config, num_clients=num_clients)
+    state_policy = _resolve_client_state_policy(config)
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
@@ -1516,9 +1614,7 @@ def run_mpi(config) -> None:
         _emit_logging_policy_message(
             logging_policy, num_clients=num_clients, logger=server_logger
         )
-        _emit_client_init_policy_message(
-            init_policy, num_clients=num_clients, logger=server_logger
-        )
+        _emit_client_state_policy_message(state_policy, logger=server_logger)
         server_logger.info(
             f"MPI context: world_size={world_size} rank={rank} local_rank={local_rank} "
             f"download_mode={_mpi_download_mode(config)}"
@@ -1569,7 +1665,7 @@ def run_mpi(config) -> None:
         device=client_device,
         run_log_dir=run_log_dir,
         client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-        use_on_demand=bool(init_policy["use_on_demand"]),
+        use_on_demand=bool(state_policy["use_on_demand"]),
     )
 
 
@@ -1598,6 +1694,17 @@ def _extract_config_path(argv: list[str]) -> tuple[str | None, list[str]]:
     return config_path, remaining
 
 
+def _legacy_client_mode_to_stateful_flag(value: str) -> bool:
+    mode = str(value).strip().lower()
+    if mode in {"eager", "stateful", "persistent"}:
+        return True
+    if mode in {"on_demand", "stateless", "auto"}:
+        return False
+    if mode in {"true", "1", "yes", "y", "on"}:
+        return True
+    return False
+
+
 def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
     backend = None
     out: list[str] = []
@@ -1616,20 +1723,30 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
             if "=" in keyval:
                 key, value = keyval.split("=", 1)
                 key = key.replace("-", "_")
-                if key == "effective":
-                    key = "client_init_mode"
-                out.append(f"{key.replace('-', '_')}={value}")
+                if key in {"effective", "client_init_mode"}:
+                    stateful = _legacy_client_mode_to_stateful_flag(value)
+                    out.append(
+                        f"stateful_clients={'true' if stateful else 'false'}"
+                    )
+                else:
+                    out.append(f"{key.replace('-', '_')}={value}")
                 idx += 1
                 continue
             key = keyval.replace("-", "_")
-            if key == "effective":
-                key = "client_init_mode"
+            if key in {"effective", "client_init_mode"}:
+                key = "stateful_clients"
             if key == "no_need_embedding":
                 out.append("need_embedding=false")
                 idx += 1
                 continue
             if idx + 1 < len(tokens) and not tokens[idx + 1].startswith("--"):
-                out.append(f"{key}={tokens[idx + 1]}")
+                if key == "stateful_clients":
+                    stateful = _legacy_client_mode_to_stateful_flag(tokens[idx + 1])
+                    out.append(
+                        f"stateful_clients={'true' if stateful else 'false'}"
+                    )
+                else:
+                    out.append(f"{key}={tokens[idx + 1]}")
                 idx += 2
             else:
                 out.append(f"{key}=true")
@@ -1643,9 +1760,13 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
             elif key == "no_need_embedding":
                 out.append("need_embedding=false")
             else:
-                if key == "effective":
-                    key = "client_init_mode"
-                out.append(f"{key}={value}")
+                if key in {"effective", "client_init_mode"}:
+                    stateful = _legacy_client_mode_to_stateful_flag(value)
+                    out.append(
+                        f"stateful_clients={'true' if stateful else 'false'}"
+                    )
+                else:
+                    out.append(f"{key}={value}")
         idx += 1
     return backend, out
 

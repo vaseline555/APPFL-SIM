@@ -252,21 +252,22 @@ Evaluation control:
 - `holdout_eval_num_clients` / `holdout_eval_client_ratio`:
   size of out-client holdout pool for `federated_eval_scheme=holdout_client`.
 
-## Client Initialization
+## Client Lifecycle
 
-Client initialization policy for scalability:
+Client lifecycle policy for scalability:
 
-- `client_init_mode=auto|eager|on_demand` (default: `auto`)
-- `client_init_on_demand_threshold=1000`:
-  when `client_init_mode=auto`, on-demand mode is enabled if
-  `num_clients > client_init_on_demand_threshold`.
-- `client_processing_chunk_size=256`:
-  chunk size used by on-demand mode while training/evaluating clients.
+- `stateful_clients=false` (default):
+  stateless/on-demand mode. Only sampled clients are instantiated per round, then freed.
+- `stateful_clients=true`:
+  keep persistent client objects across rounds (explicit stateful mode).
+- `client_processing_chunk_size=0` (default):
+  auto chunk sizing for sampled/evaluation client-id processing.
+  Set `>0` to pin a manual chunk size.
 
 Guidance:
 
-- Cross-silo / moderate client counts: `eager` is usually fine and lower-overhead.
-- Cross-device / very large client counts: use `on_demand` (or `auto` with threshold).
+- Cross-device / large-client simulation: keep `stateful_clients=false`.
+- Cross-silo stateful experiments: set `stateful_clients=true` only when needed.
 
 ## Metrics
 
