@@ -211,6 +211,24 @@ class VanillaTrainer(BaseTrainer):
         for key, value in metrics.items():
             output[f"{prefix}_metric_{key}"] = float(value)
 
+    def _should_offload_after_local_job(self) -> bool:
+        """Whether to move model/loss back to CPU after local train/eval."""
+        return bool(self.train_configs.get("offload_to_cpu_after_local_job", True))
+
+    def _offload_model_to_cpu(self) -> None:
+        """Move model/loss to CPU to avoid VRAM accumulation across many clients."""
+        try:
+            self.model = self.model.to("cpu")
+        except Exception:
+            pass
+        try:
+            if hasattr(self.loss_fn, "to"):
+                self.loss_fn = self.loss_fn.to("cpu")
+        except Exception:
+            pass
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     def train(self, **kwargs):
         """
         Train the model for a certain number of local epochs or steps and store the mode state
@@ -698,6 +716,10 @@ class VanillaTrainer(BaseTrainer):
                     )
                 ),
             }
+            if hasattr(self, "model_prev"):
+                del self.model_prev
+            del local_state, delta_state
+            optimize_memory_cleanup(force_gc=True)
         else:
             # Move to CPU for communication
             if "cuda" in self.train_configs.device:
@@ -713,6 +735,12 @@ class VanillaTrainer(BaseTrainer):
             # Compute the gradient if needed
             if send_gradient:
                 self._compute_gradient()
+                if hasattr(self, "model_prev"):
+                    del self.model_prev
+                optimize_memory_cleanup(force_gc=True)
+
+        if self._should_offload_after_local_job():
+            self._offload_model_to_cpu()
 
         result = train_metrics_manager.aggregate(total_len=total_examples)
         if float(result.get("accuracy", -1.0)) < 0.0 and total_has_logits:
@@ -750,10 +778,12 @@ class VanillaTrainer(BaseTrainer):
         if not hasattr(self, "model_state"):
             if self.optimize_memory:
                 self.model_state = extract_model_state_optimized(
-                    self.model, include_buffers=True, cpu_transfer=False
+                    self.model, include_buffers=True, cpu_transfer=True
                 )
             else:
-                self.model_state = copy.deepcopy(self.model.state_dict())
+                self.model_state = {
+                    k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()
+                }
         return (
             (self.model_state, self.val_results)
             if hasattr(self, "val_results")
@@ -782,17 +812,17 @@ class VanillaTrainer(BaseTrainer):
     def evaluate(self) -> Dict[str, Any]:
         if self.val_dataloader is None:
             return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
-        return self._validate_metrics()
+        return self._validate_metrics(offload_after=self._should_offload_after_local_job())
 
     def _validate(self) -> Tuple[float, float]:
         """
         Validate the model
         :return: loss, accuracy
         """
-        stats = self._validate_metrics()
+        stats = self._validate_metrics(offload_after=False)
         return float(stats["loss"]), float(stats["accuracy"])
 
-    def _validate_metrics(self) -> Dict[str, Any]:
+    def _validate_metrics(self, offload_after: bool = False) -> Dict[str, Any]:
         device = self.device
         was_training = self.model.training
         self.model = apply_model_device(self.model, self.device_config, device)
@@ -815,6 +845,8 @@ class VanillaTrainer(BaseTrainer):
                 target_pred.append(pred_cpu.numpy())
         stats = manager.aggregate(total_len=total_examples)
         self._fill_accuracy_from_fallback(stats, target_true, target_pred)
+        if offload_after:
+            self._offload_model_to_cpu()
         if was_training:
             self.model.train()
         return stats

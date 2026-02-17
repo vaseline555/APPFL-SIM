@@ -50,15 +50,11 @@ lr: 0.01
 weight_decay: 0.0
 max_grad_norm: 0.0
 
-server_lr: 1.0
-server_momentum: 0.0
-
 split_type: iid
 dirichlet_alpha: 0.3
 min_classes: 2
 unbalanced_keep_min: 0.5
 
-local_val_ratio: 0.2
 eval_every: 1
 enable_global_eval: true
 enable_federated_eval: true
@@ -66,6 +62,10 @@ federated_eval_every: 1
 federated_eval_scheme: holdout_dataset
 holdout_eval_num_clients: 0
 holdout_eval_client_ratio: 0.0
+client_init_mode: auto
+client_init_on_demand_threshold: 1000
+client_processing_chunk_size: 256
+offload_to_cpu_after_local_job: true
 
 device: cpu
 server_device: cpu
@@ -84,7 +84,6 @@ client_subsample_seed: 42
 
 data_dir: ./data
 log_dir: ./logs
-log_file: appfl-sim
 logging_backend: file
 client_logging_scheme: auto
 per_client_logging_threshold: 10

@@ -312,7 +312,12 @@ def _emit_logging_policy_message(
 
 
 def _resolve_client_init_policy(config: DictConfig, num_clients: int) -> Dict[str, object]:
-    mode = str(config.get("client_init_mode", "auto")).strip().lower()
+    mode = str(
+        config.get(
+            "client_init_mode",
+            config.get("effective", "auto"),
+        )
+    ).strip().lower()
     threshold = int(config.get("client_init_on_demand_threshold", 1000))
     if mode not in {"auto", "eager", "on_demand"}:
         raise ValueError("client_init_mode must be one of: auto, eager, on_demand")
@@ -1530,10 +1535,15 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
             keyval = tok[2:]
             if "=" in keyval:
                 key, value = keyval.split("=", 1)
+                key = key.replace("-", "_")
+                if key == "effective":
+                    key = "client_init_mode"
                 out.append(f"{key.replace('-', '_')}={value}")
                 idx += 1
                 continue
             key = keyval.replace("-", "_")
+            if key == "effective":
+                key = "client_init_mode"
             if key == "no_need_embedding":
                 out.append("need_embedding=false")
                 idx += 1
@@ -1553,6 +1563,8 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
             elif key == "no_need_embedding":
                 out.append("need_embedding=false")
             else:
+                if key == "effective":
+                    key = "client_init_mode"
                 out.append(f"{key}={value}")
         idx += 1
     return backend, out
