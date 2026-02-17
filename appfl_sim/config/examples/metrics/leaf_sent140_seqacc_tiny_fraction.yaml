@@ -1,0 +1,51 @@
+backend: serial
+exp_name: leaf-sent140-seqacc
+algorithm: fedavg
+
+dataset: sent140
+dataset_loader: leaf
+model_name: StackedLSTM
+
+num_clients: 0
+infer_num_clients: true
+num_rounds: 2
+client_fraction: 0.1
+
+split_type: iid
+local_epochs: 1
+batch_size: 32
+
+optimizer: SGD
+criterion: CrossEntropyLoss
+lr: 0.01
+weight_decay: 0.0
+max_grad_norm: 0.0
+
+eval_metrics: [seqacc]
+default_eval_metric: seqacc
+
+enable_global_eval: false
+enable_federated_eval: true
+eval_every: 1
+federated_eval_every: 1
+federated_eval_scheme: holdout_dataset
+holdout_eval_num_clients: 0
+
+device: cpu
+server_device: cpu
+num_workers: 0
+
+download: false
+data_dir: ./data
+log_dir: ./logs
+
+# Sent140 defaults expected by LEAF parser/model
+embedding_size: 128
+hidden_size: 64
+num_layers: 2
+dropout: 0.0
+is_seq2seq: false
+
+logging_backend: file
+project_name: metrics-examples
+experiment_name: leaf-sent140-seqacc

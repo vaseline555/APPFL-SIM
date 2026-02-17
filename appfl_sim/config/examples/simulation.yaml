@@ -73,6 +73,14 @@ num_workers: 0
 mpi_dataset_download_mode: rank0
 mpi_use_local_rank_device: true
 mpi_log_rank_mapping: false
+mpi_num_workers: 0
+mpi_oversubscribe: false
+
+infer_num_clients: false
+client_subsample_num: 0
+client_subsample_ratio: 1.0
+client_subsample_mode: random
+client_subsample_seed: 42
 
 data_dir: ./data
 log_dir: ./logs

@@ -11,7 +11,7 @@ from appfl_sim.agent.config import ServerAgentConfig
 from appfl_sim.logger import ServerAgentFileLogger
 from appfl_sim.algorithm.scheduler import BaseScheduler
 from appfl_sim.algorithm.aggregator import BaseAggregator
-from appfl_sim.metrics.metricszoo import accuracy_from_logits
+from appfl_sim.metrics import MetricsManager, parse_metric_names
 from appfl_sim.misc.utils import (
     create_instance_from_file,
     create_instance_from_file_source,
@@ -24,7 +24,7 @@ from appfl_sim.misc.utils import (
 from concurrent.futures import Future
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf, DictConfig
-from typing import Union, Dict, OrderedDict, Tuple, Optional
+from typing import Union, Dict, OrderedDict, Tuple, Optional, Any
 
 try:
     from appfl_sim.misc.data_readiness.report import (
@@ -246,13 +246,16 @@ class ServerAgent:
         return weights
 
     @torch.no_grad()
-    def evaluate(self) -> Dict[str, float]:
+    def evaluate(self) -> Dict[str, Any]:
+        return self._evaluate_metrics()
+
+    def _evaluate_metrics(self) -> Dict[str, Any]:
         if not hasattr(self, "_val_dataset") or self._val_dataset is None:
-            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0}
+            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
         if len(self._val_dataset) == 0:
-            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0}
+            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
         if not hasattr(self, "model") or self.model is None:
-            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0}
+            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
 
         if not hasattr(self, "loss_fn") or self.loss_fn is None:
             self.loss_fn = torch.nn.CrossEntropyLoss()
@@ -270,29 +273,79 @@ class ServerAgent:
             )
 
         device = self.server_agent_config.server_configs.get("device", "cpu")
+        eval_metric_names = parse_metric_names(
+            self.server_agent_config.server_configs.get(
+                "eval_metrics",
+                self.server_agent_config.client_configs.train_configs.get(
+                    "eval_metrics", None
+                )
+                if hasattr(self.server_agent_config.client_configs, "train_configs")
+                else None,
+            )
+        )
+        default_eval_metric = str(
+            self.server_agent_config.server_configs.get(
+                "default_eval_metric",
+                self.server_agent_config.client_configs.train_configs.get(
+                    "default_eval_metric", "acc1"
+                )
+                if hasattr(self.server_agent_config.client_configs, "train_configs")
+                else "acc1",
+            )
+        )
+        if default_eval_metric.strip().lower() in {"none", "null"}:
+            default_eval_metric = ""
+
+        manager = MetricsManager(
+            eval_metrics=eval_metric_names,
+            default_eval_metric=default_eval_metric,
+        )
+        was_training = self.model.training
         self.model.to(device)
         self.model.eval()
 
-        total_loss = 0.0
         total_correct = 0
+        total_has_logits = False
         total_examples = 0
+        target_pred = []
+        target_true = []
         for inputs, targets in self._val_dataloader:
             inputs = inputs.to(device)
             targets = targets.to(device)
             logits = self.model(inputs)
             loss = self.loss_fn(logits, targets)
+            logits_cpu = logits.detach().cpu()
+            targets_cpu = targets.detach().cpu()
 
-            bs = targets.size(0)
+            manager.track(float(loss.item()), logits_cpu, targets_cpu)
+            bs = targets_cpu.size(0)
             total_examples += bs
-            total_loss += loss.item() * bs
-            total_correct += accuracy_from_logits(logits, targets, as_count=True)
+            target_pred.append(logits_cpu.numpy())
+            target_true.append(targets_cpu.numpy())
+            if logits_cpu.ndim > 1:
+                total_has_logits = True
+                total_correct += int(
+                    torch.eq(torch.argmax(logits_cpu, dim=1), targets_cpu.view(-1))
+                    .sum()
+                    .item()
+                )
 
+        result = manager.aggregate(total_len=total_examples)
+        if float(result.get("accuracy", -1.0)) < 0.0:
+            if total_has_logits:
+                result["accuracy"] = float(total_correct / max(total_examples, 1))
+            elif self.metric is not None and target_true and target_pred:
+                try:
+                    result["accuracy"] = float(
+                        self.metric(np.concatenate(target_true), np.concatenate(target_pred))
+                    )
+                except Exception:
+                    pass
+
+        if was_training:
+            self.model.train()
         self.model.to("cpu")
-        return {
-            "loss": float(total_loss / max(total_examples, 1)),
-            "accuracy": float(total_correct / max(total_examples, 1)),
-            "num_examples": int(total_examples),
-        }
+        return result
 
     def server_validate(self):
         """
@@ -678,26 +731,8 @@ class ServerAgent:
         Validate the model
         :return: loss, accuracy
         """
-        device = self.server_agent_config.server_configs.get("device", "cpu")
-        self.model.to(device)
-        self.model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            target_pred, target_true = [], []
-            for data, target in self._val_dataloader:
-                data, target = data.to(device), target.to(device)
-                output = self.model(data)
-                val_loss += self.loss_fn(output, target).item()
-                target_true.append(target.detach().cpu().numpy())
-                target_pred.append(output.detach().cpu().numpy())
-        val_loss /= len(self._val_dataloader)
-        val_accuracy = float(
-            self.metric(np.concatenate(target_true), np.concatenate(target_pred))
-        )
-        # Move the model back to the cpu for future aggregation
-        if device != "cpu":
-            self.model.to("cpu")
-        return val_loss, val_accuracy
+        stats = self._evaluate_metrics()
+        return float(stats["loss"]), float(stats["accuracy"])
 
     def _set_seed(self):
         """

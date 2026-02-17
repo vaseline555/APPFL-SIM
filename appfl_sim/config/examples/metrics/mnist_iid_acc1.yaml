@@ -1,0 +1,43 @@
+backend: serial
+exp_name: mnist-iid-acc1
+algorithm: fedavg
+
+dataset: MNIST
+dataset_loader: torchvision
+model_name: SimpleCNN
+
+num_clients: 3
+num_rounds: 2
+client_fraction: 1.0
+
+split_type: iid
+local_epochs: 1
+batch_size: 32
+
+optimizer: SGD
+criterion: CrossEntropyLoss
+lr: 0.01
+weight_decay: 0.0
+max_grad_norm: 0.0
+
+eval_metrics: [acc1]
+default_eval_metric: acc1
+
+enable_global_eval: true
+enable_federated_eval: true
+eval_every: 1
+federated_eval_every: 1
+federated_eval_scheme: holdout_dataset
+holdout_eval_num_clients: 0
+
+device: cpu
+server_device: cpu
+num_workers: 0
+
+download: true
+data_dir: ./data
+log_dir: ./logs
+
+logging_backend: file
+project_name: metrics-examples
+experiment_name: mnist-iid-acc1

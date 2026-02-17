@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 import json
+import logging
 import random
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -10,7 +12,11 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
-from appfl_sim.datasets.common import package_dataset_outputs, to_namespace
+from appfl_sim.datasets.common import (
+    package_dataset_outputs,
+    resolve_fixed_pool_clients,
+    to_namespace,
+)
 
 
 _TEXT_DATASETS = {"shakespeare", "sent140", "reddit"}
@@ -21,6 +27,96 @@ _DEFAULT_LEAF_META = {
     "celeba": {"num_classes": 2, "need_embedding": False},
     "reddit": {"num_classes": 10000, "need_embedding": True, "seq_len": 10, "num_embeddings": 10000},
 }
+_LEAF_SUPPORTED = set(_DEFAULT_LEAF_META.keys())
+
+logger = logging.getLogger(__name__)
+
+
+def _as_bool(value: Any, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
+
+def _has_json_files(directory: Path) -> bool:
+    return directory.exists() and any(directory.glob("*.json"))
+
+
+def _has_train_test_json(dataset_root: Path) -> bool:
+    return _has_json_files(dataset_root / "train") and _has_json_files(dataset_root / "test")
+
+
+def _is_leaf_ready(dataset_root: Path) -> bool:
+    return _has_train_test_json(dataset_root) or _has_json_files(dataset_root / "all_data")
+
+
+def _prepare_leaf_data(args, dataset_key: str) -> Path:
+    data_root = Path(str(args.data_dir)).expanduser()
+    dataset_root = data_root / dataset_key
+    if _is_leaf_ready(dataset_root):
+        return dataset_root
+
+    if dataset_key not in _LEAF_SUPPORTED:
+        raise ValueError(
+            f"Unsupported LEAF dataset `{dataset_key}`. "
+            f"Supported: {sorted(_LEAF_SUPPORTED)}"
+        )
+
+    if not _as_bool(getattr(args, "download", True), default=True):
+        raise FileNotFoundError(
+            f"LEAF dataset not found at {dataset_root}. "
+            "Set `download=true` to auto-download and preprocess."
+        )
+
+    from appfl_sim.datasets.leaf import download_data, postprocess_leaf
+
+    dataset_root.mkdir(parents=True, exist_ok=True)
+    raw_dir = dataset_root / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    if not any(raw_dir.iterdir()):
+        logger.info("[LOAD] [LEAF-%s] raw data not found, downloading.", dataset_key.upper())
+        download_data(download_root=str(raw_dir), dataset_name=dataset_key)
+
+    if not _has_json_files(dataset_root / "all_data"):
+        logger.info("[LOAD] [LEAF-%s] running preprocessing.", dataset_key.upper())
+        try:
+            preprocess_mod = importlib.import_module(
+                f"appfl_sim.datasets.leaf.preprocess.{dataset_key}"
+            )
+        except ModuleNotFoundError as exc:
+            if exc.name == "pandas":
+                raise ModuleNotFoundError(
+                    "LEAF Sent140 preprocessing requires `pandas`. "
+                    "Install it with: pip install pandas"
+                ) from exc
+            raise
+        preprocess_mod.preprocess(str(data_root))
+
+    if not _has_train_test_json(dataset_root):
+        logger.info("[LOAD] [LEAF-%s] creating train/test client splits.", dataset_key.upper())
+        postprocess_leaf(
+            dataset_name=dataset_key,
+            root=str(data_root),
+            seed=int(getattr(args, "seed", 42)),
+            raw_data_fraction=float(getattr(args, "leaf_raw_data_fraction", 1.0)),
+            min_samples_per_clients=int(getattr(args, "leaf_min_samples_per_client", 2)),
+            test_size=float(getattr(args, "test_size", 0.2)),
+        )
+
+    if not _is_leaf_ready(dataset_root):
+        raise RuntimeError(
+            f"LEAF preparation failed for `{dataset_key}` at {dataset_root}."
+        )
+    return dataset_root
 
 
 class LeafClientDataset(Dataset):
@@ -293,20 +389,21 @@ def fetch_leaf(args):
     """LEAF parser adapted from AAggFF processing flow with compact implementation."""
     args = to_namespace(args)
     dataset_key = str(args.dataset).strip().lower()
-
-    dataset_root = Path(str(args.data_dir)).expanduser() / dataset_key
-    if not dataset_root.exists():
-        raise FileNotFoundError(f"LEAF dataset root not found: {dataset_root}")
+    dataset_root = _prepare_leaf_data(args, dataset_key)
 
     train_obj, test_obj = _resolve_leaf_train_test(args, dataset_root, dataset_key)
     if not train_obj.get("users"):
         raise ValueError(f"No LEAF users available after processing: {dataset_root}")
 
-    if str(getattr(args, "num_clients", 0)).isdigit() and int(args.num_clients) > 0:
-        max_clients = min(int(args.num_clients), len(train_obj["users"]))
-        users = train_obj["users"][:max_clients]
-    else:
-        users = list(train_obj["users"])
+    users = resolve_fixed_pool_clients(
+        available_clients=list(train_obj["users"]),
+        args=args,
+        prefix="leaf",
+    )
+    if not users:
+        raise ValueError(
+            "No LEAF clients selected after applying num_clients/subsampling constraints."
+        )
 
     label_to_idx = _build_label_vocab(train_obj, test_obj)
     image_root = _resolve_image_root(args, dataset_root, dataset_key)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 from typing import Any, Dict, List, Tuple
 
-from appfl_sim.datasets.common import to_namespace
+from appfl_sim.datasets.common import resolve_fixed_pool_clients, to_namespace
 
 
 # Keep FLamby dataset scope aligned with AAggFF parser support.
@@ -88,17 +88,26 @@ def fetch_flamby(args):
         ) from e
 
     max_clients = int(cfg["max_clients"])
-    req_clients = int(args.num_clients)
-    if req_clients > max_clients:
+    selected_centers = resolve_fixed_pool_clients(
+        available_clients=list(range(max_clients)),
+        args=args,
+        prefix="flamby",
+    )
+    if not selected_centers:
         raise ValueError(
-            f"FLamby dataset '{key}' supports at most {max_clients} clients, got {req_clients}."
+            f"No FLamby clients selected for dataset '{key}'. "
+            "Check num_clients/subsampling settings."
         )
 
     split_map: Dict[int, int] = {}
     client_datasets: List[Tuple[Any, Any]] = []
-    for cid in range(req_clients):
-        train_ds = _instantiate_flamby_dataset(ds_class, train=True, center=cid, pooled=False)
-        test_ds = _instantiate_flamby_dataset(ds_class, train=False, center=cid, pooled=False)
+    for cid, center_id in enumerate(selected_centers):
+        train_ds = _instantiate_flamby_dataset(
+            ds_class, train=True, center=int(center_id), pooled=False
+        )
+        test_ds = _instantiate_flamby_dataset(
+            ds_class, train=False, center=int(center_id), pooled=False
+        )
         split_map[cid] = len(train_ds)
         client_datasets.append((train_ds, test_ds))
 
@@ -113,8 +122,9 @@ def fetch_flamby(args):
     except Exception:
         server_dataset = client_datasets[0][1] if client_datasets else None
 
-    args.num_clients = req_clients
-    args.K = req_clients
+    args.num_clients = len(client_datasets)
+    args.K = len(client_datasets)
+    args.flamby_center_ids = [int(c) for c in selected_centers]
     args.num_classes = int(cfg["num_classes"])
     args.need_embedding = False
     args.seq_len = None

@@ -53,10 +53,15 @@ MPI:
 
 ```bash
 # 3 clients
-mpiexec -n 4 python -m appfl_sim.runner \
+python -m appfl_sim.runner \
   --config appfl_sim/config/examples/split/mnist_iid.yaml \
   backend=mpi 
 ```
+
+- `backend=mpi` auto-launches MPI when not already inside an MPI job.
+- Worker ranks are auto-sized independently of logical `num_clients` (server rank is added automatically).
+- Pin worker count via `mpi_num_workers=<N>` when needed.
+- If you already run inside `mpiexec`/`mpirun` (e.g., scheduler scripts), auto-launch is skipped.
 
 - Rank `0`: server
 - Rank `1,...,n-1`: client workers (each rank can simulate multiple clients)
@@ -68,6 +73,7 @@ Default simulation config lives at:
 - `appfl_sim/config/examples/simulation.yaml`
 - Split examples: `appfl_sim/config/examples/split/*.yaml`
 - Logging examples: `appfl_sim/config/examples/logging/*.yaml`
+- Metrics examples: `appfl_sim/config/examples/metrics/*.yaml`
 - Algorithm placeholders: `appfl_sim/config/algorithms/*.yaml`
 - Evaluation-focused examples: `appfl_sim/config/algorithms/evaluation/*.yaml`
 - HF template: `appfl_sim/config/examples/external_datasets/hf/template.yaml`
@@ -106,7 +112,7 @@ Example (multi-node style launch):
 
 ```bash
 # 3 clients
-mpiexec -n 4 python -m appfl_sim.runner \
+python -m appfl_sim.runner \
   --config appfl_sim/config/examples/split/mnist_iid.yaml \
   backend=mpi device=cuda server_device=cpu \
   mpi_dataset_download_mode=local_rank0 \
@@ -122,7 +128,7 @@ Built-in dataset loader modes:
 - `external` (external data sources: `hf`, `timm`)
 - `torchvision`, `torchtext`, `torchaudio`, `medmnist`
 - `flamby` (adapted from APPFL example loader)
-- `leaf` (adapted LEAF preprocessed-json loader)
+- `leaf` (adapted LEAF loader with optional auto download+preprocess)
 - `tff` (from `tff.simulation.datasets`)
 
 FLamby note:
@@ -139,6 +145,21 @@ Internal parser modules live under `appfl_sim/datasets/`:
 - `flambyparser.py`
 - `leafparser.py`
 - `tffparser.py`
+- `customparser.py`
+- `externalparser.py`
+
+Fixed-pool dataset client selection knobs (`leaf` / `flamby` / `tff`):
+
+- `infer_num_clients=true` (or `<prefix>_infer_num_clients=true`) to use full available client pool.
+- `client_subsample_num` / `client_subsample_ratio` (or `<prefix>_...`) for pool subsampling.
+- `client_subsample_mode=random|first|last` and `client_subsample_seed` for deterministic selection.
+
+LEAF auto-bootstrap:
+
+- If `train/`, `test/`, or `all_data/` is missing and `download=true`, `leafparser` will:
+  download raw files using AAggFF LEAF URLs/MD5 rules, run dataset-specific preprocess,
+  and create train/test client splits automatically.
+- If data is missing and `download=false`, it raises a clear error.
 
 
 Custom dataset loader example:

@@ -1,6 +1,6 @@
 from appfl_sim.datasets.flambyparser import fetch_flamby
 from appfl_sim.datasets.customparser import fetch_custom_dataset
-from appfl_sim.datasets.externaparser import fetch_external_dataset
+from appfl_sim.datasets.externalparser import fetch_external_dataset
 from appfl_sim.datasets.leafparser import fetch_leaf, fetch_leaf_preprocessed
 from appfl_sim.datasets.medmnistparser import fetch_medmnist_dataset
 from appfl_sim.datasets.tffparser import fetch_tff_dataset

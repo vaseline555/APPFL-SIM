@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import os
+import shutil
+import subprocess
 import sys
 import time
 import random
@@ -22,6 +25,8 @@ from appfl_sim.agent import (
 from appfl_sim.logger import ServerAgentFileLogger, create_experiment_tracker
 from appfl_sim.loaders import load_dataset, load_model
 from appfl_sim.misc.utils import get_local_rank, resolve_rank_device, set_seed_everything
+
+_MPI_AUTO_LAUNCH_ENV = "APPFL_SIM_MPI_AUTOLAUNCHED"
 
 
 def _default_config_path() -> Path:
@@ -82,6 +87,12 @@ appfl[sim] runner
 Usage:
   python -m appfl_sim.runner --config /path/to/config.yaml
   appfl-sim backend=mpi dataset=MNIST num_clients=3 num_rounds=2
+
+MPI notes:
+  - When backend=mpi is set, runner auto-launches through mpiexec if needed.
+  - Worker-rank count is decoupled from logical `num_clients`.
+  - Set `mpi_num_workers` to pin MPI workers, otherwise auto mode uses available CPU capacity.
+  - Set `mpi_oversubscribe=true` to pass `--oversubscribe` to mpiexec.
 """.strip()
     )
 
@@ -100,6 +111,8 @@ def _weighted_mean(stats: Dict[int, Dict], key: str) -> float:
     total = 0.0
     count = 0
     for values in stats.values():
+        if key not in values or not isinstance(values.get(key), (int, float)):
+            continue
         n = int(values.get("num_examples", 0))
         total += float(values.get(key, 0.0)) * n
         count += n
@@ -215,6 +228,8 @@ def _build_train_cfg(config: DictConfig, device: str, run_log_dir: str) -> Dict:
         ),
         "do_pre_validation": _cfg_bool(config, "do_pre_validation", True),
         "do_validation": _cfg_bool(config, "do_validation", True),
+        "eval_metrics": config.get("eval_metrics", ["acc1"]),
+        "default_eval_metric": str(config.get("default_eval_metric", "acc1")),
     }
 
 
@@ -346,6 +361,10 @@ def _build_server(
             {
                 "train_configs": {
                     "loss_fn": str(config.criterion),
+                    "eval_metrics": config.get("eval_metrics", ["acc1"]),
+                    "default_eval_metric": str(
+                        config.get("default_eval_metric", "acc1")
+                    ),
                 },
                 "model_configs": {},
             }
@@ -358,6 +377,10 @@ def _build_server(
                 "device": str(config.server_device),
                 "eval_batch_size": int(config.get("eval_batch_size", config.batch_size)),
                 "num_workers": int(config.num_workers),
+                "eval_metrics": config.get("eval_metrics", ["acc1"]),
+                "default_eval_metric": str(
+                    config.get("default_eval_metric", "acc1")
+                ),
                 "aggregator": "FedAvgAggregator",
                 "aggregator_kwargs": {
                     "client_weights_mode": "sample_size",
@@ -457,11 +480,9 @@ def _log_round(
                 continue
             if key in {"num_clients", "num_examples"}:
                 continue
-            if key.endswith("_min") or key.endswith("_max"):
+            if key.endswith("_min") or key.endswith("_max") or key.endswith("_std"):
                 continue
-            if with_client_std and key in {"loss_std", "accuracy_std"}:
-                continue
-            if with_client_std and key in {"loss", "accuracy"}:
+            if with_client_std:
                 std_key = f"{key}_std"
                 if std_key in metrics and isinstance(metrics[std_key], (int, float)):
                     section_metrics[key] = {
@@ -482,31 +503,37 @@ def _log_round(
     def _append_federated_extrema(metrics: Optional[Dict[str, float]]) -> None:
         if metrics is None:
             return
-        if not (
-            "loss_min" in metrics
-            and "loss_max" in metrics
-            and "accuracy_min" in metrics
-            and "accuracy_max" in metrics
-        ):
+        extrema = {}
+        for key, value in metrics.items():
+            if (
+                not key.endswith("_min")
+                or not isinstance(value, (int, float))
+                or f"{key[:-4]}_max" not in metrics
+                or not isinstance(metrics[f"{key[:-4]}_max"], (int, float))
+            ):
+                continue
+            base = key[:-4]
+            extrema[base] = {
+                "min": float(value),
+                "max": float(metrics[f"{base}_max"]),
+            }
+        if not extrema:
             return
+        summary_keys = sorted(extrema.keys())
+        shown_keys = summary_keys[:4]
+        parts = [
+            f"{name}[min,max]=[{extrema[name]['min']:.4f},{extrema[name]['max']:.4f}]"
+            for name in shown_keys
+        ]
+        if len(summary_keys) > len(shown_keys):
+            parts.append(f"...(+{len(summary_keys) - len(shown_keys)} more)")
         lines.append(
             _entity_line(
                 "Federated Extrema:",
-                f"accuracy[min,max]=[{float(metrics['accuracy_min']):.4f},{float(metrics['accuracy_max']):.4f}]"
-                " | "
-                f"loss[min,max]=[{float(metrics['loss_min']):.4f},{float(metrics['loss_max']):.4f}]",
+                " | ".join(parts),
             )
         )
-        round_metrics["fed_extrema"] = {
-            "accuracy": {
-                "min": float(metrics["accuracy_min"]),
-                "max": float(metrics["accuracy_max"]),
-            },
-            "loss": {
-                "min": float(metrics["loss_min"]),
-                "max": float(metrics["loss_max"]),
-            },
-        }
+        round_metrics["fed_extrema"] = extrema
 
     do_pre_val = _cfg_bool(config, "do_pre_validation", True)
     do_post_val = _cfg_bool(config, "do_validation", True)
@@ -745,33 +772,66 @@ def _aggregate_eval_stats(stats: Dict[int, Dict]) -> Optional[Dict[str, float]]:
     if not stats:
         return None
     total_examples = sum(int(v.get("num_examples", 0)) for v in stats.values())
-    loss_vals = [float(v.get("loss", -1.0)) for v in stats.values() if "loss" in v]
-    acc_vals = [float(v.get("accuracy", -1.0)) for v in stats.values() if "accuracy" in v]
-    if total_examples <= 0:
-        return {
-            "loss": -1.0,
-            "accuracy": -1.0,
-            "loss_std": -1.0,
-            "accuracy_std": -1.0,
-            "num_examples": 0,
-            "num_clients": len(stats),
-            "loss_min": -1.0,
-            "loss_max": -1.0,
-            "accuracy_min": -1.0,
-            "accuracy_max": -1.0,
+    numeric_keys = sorted(
+        {
+            key
+            for values in stats.values()
+            for key, value in values.items()
+            if isinstance(value, (int, float))
+            and key not in {"num_examples", "num_clients"}
+            and not key.endswith("_std")
+            and not key.endswith("_min")
+            and not key.endswith("_max")
         }
-    return {
-        "loss": float(_weighted_mean(stats, "loss")),
-        "accuracy": float(_weighted_mean(stats, "accuracy")),
-        "loss_std": float(np.std(loss_vals)) if loss_vals else 0.0,
-        "accuracy_std": float(np.std(acc_vals)) if acc_vals else 0.0,
-        "num_examples": int(total_examples),
+    )
+
+    result: Dict[str, float] = {
+        "num_examples": int(max(total_examples, 0)),
         "num_clients": int(len(stats)),
-        "loss_min": float(min(loss_vals)) if loss_vals else -1.0,
-        "loss_max": float(max(loss_vals)) if loss_vals else -1.0,
-        "accuracy_min": float(min(acc_vals)) if acc_vals else -1.0,
-        "accuracy_max": float(max(acc_vals)) if acc_vals else -1.0,
     }
+
+    if total_examples <= 0:
+        for key in numeric_keys:
+            result[key] = -1.0
+            result[f"{key}_std"] = -1.0
+            result[f"{key}_min"] = -1.0
+            result[f"{key}_max"] = -1.0
+        if "loss" not in result:
+            result["loss"] = -1.0
+        if "accuracy" not in result:
+            result["accuracy"] = -1.0
+        result.setdefault("loss_std", -1.0)
+        result.setdefault("accuracy_std", -1.0)
+        result.setdefault("loss_min", -1.0)
+        result.setdefault("loss_max", -1.0)
+        result.setdefault("accuracy_min", -1.0)
+        result.setdefault("accuracy_max", -1.0)
+        return result
+
+    for key in numeric_keys:
+        values = [
+            float(client_stats[key])
+            for client_stats in stats.values()
+            if key in client_stats and isinstance(client_stats.get(key), (int, float))
+        ]
+        if not values:
+            continue
+        result[key] = float(_weighted_mean(stats, key))
+        result[f"{key}_std"] = float(np.std(values))
+        result[f"{key}_min"] = float(min(values))
+        result[f"{key}_max"] = float(max(values))
+
+    if "loss" not in result:
+        result["loss"] = -1.0
+    if "accuracy" not in result:
+        result["accuracy"] = -1.0
+    result.setdefault("loss_std", 0.0)
+    result.setdefault("accuracy_std", 0.0)
+    result.setdefault("loss_min", result["loss"])
+    result.setdefault("loss_max", result["loss"])
+    result.setdefault("accuracy_min", result["accuracy"])
+    result.setdefault("accuracy_max", result["accuracy"])
+    return result
 
 
 def _run_federated_eval_serial(
@@ -971,7 +1031,8 @@ def run_serial(config) -> None:
     tracker = create_experiment_tracker(config)
 
     loader_cfg = _cfg_to_dict(config)
-    loader_cfg["download"] = True
+    # Respect user-configured download policy in serial mode.
+    loader_cfg["download"] = _cfg_bool(config, "download", True)
     _, client_datasets, server_dataset, args = load_dataset(loader_cfg)
 
     runtime_cfg = _merge_runtime_cfg(config, args)
@@ -1302,8 +1363,91 @@ def parse_config(argv: list[str] | None = None) -> tuple[str, DictConfig]:
     return backend, cfg
 
 
-def main() -> None:
-    backend, config = parse_config()
+def _is_running_under_mpi_launcher() -> bool:
+    env_markers = (
+        "OMPI_COMM_WORLD_SIZE",
+        "OMPI_COMM_WORLD_RANK",
+        "PMI_SIZE",
+        "PMI_RANK",
+        "PMIX_RANK",
+        "MV2_COMM_WORLD_SIZE",
+        "MP_CHILD",
+        "HYDI_CONTROL_FD",
+    )
+    return any(key in os.environ for key in env_markers)
+
+
+def _resolve_mpi_nproc(config: DictConfig) -> int:
+    def _parse_int_prefix(text: str, default: int) -> int:
+        digits = []
+        for ch in str(text):
+            if ch.isdigit():
+                digits.append(ch)
+            else:
+                break
+        if not digits:
+            return default
+        return int("".join(digits))
+
+    def _detect_available_worker_slots() -> int:
+        # Best-effort scheduler hints before falling back to local CPU count.
+        for key in ("SLURM_CPUS_ON_NODE", "PBS_NP", "LSB_DJOB_NUMPROC"):
+            raw = os.environ.get(key, "").strip()
+            if raw:
+                value = _parse_int_prefix(raw, 0)
+                if value > 1:
+                    return max(1, value - 1)
+                if value == 1:
+                    return 1
+        return max(1, (os.cpu_count() or 2) - 1)
+
+    workers = int(config.get("mpi_num_workers", 0))
+    if workers <= 0:
+        cpu_workers = _detect_available_worker_slots()
+        configured_clients = int(config.get("num_clients", 0))
+        if configured_clients > 0:
+            workers = min(cpu_workers, configured_clients)
+        else:
+            workers = cpu_workers
+    workers = max(1, int(workers))
+    nproc = workers + 1  # server + worker ranks
+    return nproc
+
+
+def _maybe_autolaunch_mpi(
+    backend: str,
+    config: DictConfig,
+    cli_argv: list[str],
+) -> None:
+    if backend != "mpi":
+        return
+    if os.environ.get(_MPI_AUTO_LAUNCH_ENV, "0") == "1":
+        return
+    if _is_running_under_mpi_launcher():
+        return
+
+    launcher = shutil.which("mpiexec") or shutil.which("mpirun")
+    if launcher is None:
+        raise RuntimeError(
+            "backend=mpi requested, but no MPI launcher found in PATH "
+            "(expected 'mpiexec' or 'mpirun')."
+        )
+
+    nproc = _resolve_mpi_nproc(config)
+    cmd = [launcher]
+    if _cfg_bool(config, "mpi_oversubscribe", False):
+        cmd.append("--oversubscribe")
+    cmd.extend(["-n", str(nproc), sys.executable, "-m", "appfl_sim.runner", *cli_argv])
+    env = os.environ.copy()
+    env[_MPI_AUTO_LAUNCH_ENV] = "1"
+    completed = subprocess.run(cmd, env=env, check=False)
+    raise SystemExit(int(completed.returncode))
+
+
+def main(argv: list[str] | None = None) -> None:
+    cli_argv = list(sys.argv[1:] if argv is None else argv)
+    backend, config = parse_config(cli_argv)
+    _maybe_autolaunch_mpi(backend=backend, config=config, cli_argv=cli_argv)
     if backend == "serial":
         run_serial(config)
     else:

@@ -7,7 +7,7 @@ This spinoff is simulation-focused and MPI-backed.
 Run from:
 
 ```bash
-cd /Users/vaseline555/Desktop/workspace/APPFL_SIM/source
+cd /Users/vaseline555/Desktop/workspace/APPFL_SIM/APPFL-SIM
 ```
 
 Install package in editable mode (optional but recommended):
@@ -29,17 +29,20 @@ PYTHONPATH=. .venv/bin/python -m appfl_sim.runner \
 ### MPI parallel run
 
 ```bash
-PYTHONPATH=. mpiexec -n 4 .venv/bin/python -m appfl_sim.runner \
+PYTHONPATH=. .venv/bin/python -m appfl_sim.runner \
   --config appfl_sim/config/examples/split/mnist_iid.yaml \
   backend=mpi
 ```
 
 Notes:
-- `-n 4` means `1 server rank + 3 client ranks`.
+- With `backend=mpi`, runner auto-attaches MPI launch and auto-sizes worker ranks.
+- You can pin worker count with `mpi_num_workers=<N>`.
+- If already running inside `mpiexec`/`mpirun`, auto-launch is skipped.
 - Logs are written under `./logs`.
 - Default/base config is `appfl_sim/config/examples/simulation.yaml`.
 - Split examples live in `appfl_sim/config/examples/split/`.
 - Logging examples live in `appfl_sim/config/examples/logging/`.
+- Metrics examples live in `appfl_sim/config/examples/metrics/`.
 - Algorithm placeholders live in `appfl_sim/config/algorithms/`.
 - Model backend can be set with `model.source=appfl|timm|hf|auto`.
 - For multi-node PoC:
@@ -49,7 +52,7 @@ Notes:
 ## 3) Fast sanity run (MNIST)
 
 ```bash
-PYTHONPATH=. mpiexec -n 4 .venv/bin/python -m appfl_sim.runner \
+PYTHONPATH=. .venv/bin/python -m appfl_sim.runner \
   backend=mpi \
   dataset=MNIST \
   num_clients=3 \

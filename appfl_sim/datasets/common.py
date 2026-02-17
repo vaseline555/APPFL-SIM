@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -64,6 +65,11 @@ def to_namespace(args: Any) -> SimpleNamespace:
         "leaf_raw_data_fraction": 1.0,
         "leaf_min_samples_per_client": 2,
         "leaf_image_root": "",
+        "infer_num_clients": False,
+        "client_subsample_num": 0,
+        "client_subsample_ratio": 1.0,
+        "client_subsample_mode": "random",
+        "client_subsample_seed": None,
         "in_channels": None,
     }
     for k, v in defaults.items():
@@ -72,6 +78,116 @@ def to_namespace(args: Any) -> SimpleNamespace:
     if ns.K is None:
         ns.K = int(ns.num_clients)
     return ns
+
+
+def _prefixed_arg(
+    args: SimpleNamespace,
+    prefix: str,
+    key: str,
+    default: Any,
+) -> Any:
+    if prefix:
+        pref_key = f"{prefix}_{key}"
+        if hasattr(args, pref_key):
+            return getattr(args, pref_key)
+    return getattr(args, key, default)
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        if value is None:
+            return int(default)
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        if value is None:
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _safe_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(default)
+    return bool(value)
+
+
+def resolve_fixed_pool_clients(
+    available_clients: List[Any],
+    args: SimpleNamespace,
+    prefix: str = "",
+) -> List[Any]:
+    """Resolve client subset for fixed-pool datasets (LEAF/FLamby/TFF).
+
+    Rules:
+    - If `infer_num_clients=true` (global or `<prefix>_infer_num_clients`) or
+      `num_clients<=0`, start from full available pool.
+    - Otherwise cap to `num_clients`.
+    - Then apply optional subsampling controls:
+      - `<prefix>_client_subsample_num` / `client_subsample_num`
+      - `<prefix>_client_subsample_ratio` / `client_subsample_ratio`
+      - `<prefix>_client_subsample_mode` / `client_subsample_mode` (`random|first|last`)
+      - `<prefix>_client_subsample_seed` / `client_subsample_seed`
+    """
+    pool = list(available_clients)
+    if not pool:
+        return []
+
+    infer_clients = _safe_bool(
+        _prefixed_arg(args, prefix, "infer_num_clients", False), False
+    )
+    requested_num = _safe_int(getattr(args, "num_clients", 0), 0)
+    if infer_clients or requested_num <= 0:
+        requested_num = len(pool)
+    requested_num = max(1, min(requested_num, len(pool)))
+    base = pool[:requested_num]
+
+    subsample_num = _safe_int(
+        _prefixed_arg(args, prefix, "client_subsample_num", 0),
+        0,
+    )
+    subsample_ratio = _safe_float(
+        _prefixed_arg(args, prefix, "client_subsample_ratio", 1.0),
+        1.0,
+    )
+    subsample_mode = str(
+        _prefixed_arg(args, prefix, "client_subsample_mode", "random")
+    ).strip().lower()
+    subsample_seed = _safe_int(
+        _prefixed_arg(args, prefix, "client_subsample_seed", getattr(args, "seed", 42)),
+        _safe_int(getattr(args, "seed", 42), 42),
+    )
+
+    target = len(base)
+    if subsample_num > 0:
+        target = min(target, subsample_num)
+    elif 0.0 < subsample_ratio < 1.0:
+        target = max(1, int(round(len(base) * subsample_ratio)))
+
+    if target >= len(base):
+        return base
+
+    if subsample_mode in {"first", "head"}:
+        return base[:target]
+    if subsample_mode in {"last", "tail"}:
+        return base[-target:]
+
+    rng = random.Random(subsample_seed)
+    chosen_idx = set(rng.sample(range(len(base)), target))
+    # Preserve original order for reproducible client-id mapping.
+    return [item for idx, item in enumerate(base) if idx in chosen_idx]
 
 
 def infer_input_shape(dataset: Dataset) -> Tuple[int, ...]:

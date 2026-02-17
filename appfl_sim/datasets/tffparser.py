@@ -9,6 +9,7 @@ from appfl_sim.datasets.common import (
     TensorBackedDataset,
     extract_targets,
     package_dataset_outputs,
+    resolve_fixed_pool_clients,
     set_common_metadata,
     split_subset_for_client,
     to_namespace,
@@ -47,7 +48,13 @@ def fetch_tff_dataset(args):
 
     if tff_name == "emnist":
         train_cd, _ = tff.simulation.datasets.emnist.load_data()
-        client_ids = list(train_cd.client_ids)[: int(args.num_clients)]
+        client_ids = resolve_fixed_pool_clients(
+            available_clients=list(train_cd.client_ids),
+            args=args,
+            prefix="tff",
+        )
+        if not client_ids:
+            raise ValueError("No TFF clients selected for EMNIST.")
 
         split_map = {}
         client_datasets = []
@@ -86,7 +93,13 @@ def fetch_tff_dataset(args):
 
     if tff_name == "celeba":
         train_cd, _ = tff.simulation.datasets.celeba.load_data()
-        client_ids = list(train_cd.client_ids)[: int(args.num_clients)]
+        client_ids = resolve_fixed_pool_clients(
+            available_clients=list(train_cd.client_ids),
+            args=args,
+            prefix="tff",
+        )
+        if not client_ids:
+            raise ValueError("No TFF clients selected for CELEBA.")
 
         split_map = {}
         client_datasets = []
@@ -135,7 +148,13 @@ def fetch_tff_dataset(args):
         else:
             train_cd, _ = tff.simulation.datasets.stackoverflow.load_data()
 
-        client_ids = list(train_cd.client_ids)[: int(args.num_clients)]
+        client_ids = resolve_fixed_pool_clients(
+            available_clients=list(train_cd.client_ids),
+            args=args,
+            prefix="tff",
+        )
+        if not client_ids:
+            raise ValueError(f"No TFF clients selected for {tff_name}.")
         split_map = {}
         client_datasets = []
 
