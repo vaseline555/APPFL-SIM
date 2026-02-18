@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import Any, Dict, List, Tuple
 
-from appfl_sim.datasets.common import resolve_fixed_pool_clients, to_namespace
+from appfl_sim.datasets.common import make_load_tag, resolve_dataset_logger, resolve_fixed_pool_clients, to_namespace
 
 
 # Keep FLamby dataset scope aligned with AAggFF parser support.
@@ -30,6 +31,9 @@ _SUPPORTED_FLAMBY: Dict[str, Dict[str, Any]] = {
         "license": "https://brain-development.org/ixi-dataset/",
     },
 }
+
+
+logger = logging.getLogger(__name__)
 
 
 def _canonical_flamby_key(dataset_name: str) -> str:
@@ -62,6 +66,7 @@ def fetch_flamby(args):
     Others are rejected because additional data-provider approval is required.
     """
     args = to_namespace(args)
+    active_logger = resolve_dataset_logger(args, logger)
     key = _canonical_flamby_key(str(args.dataset))
     if not key:
         allowed = ", ".join(sorted(_SUPPORTED_FLAMBY.keys()))
@@ -71,6 +76,8 @@ def fetch_flamby(args):
         )
 
     cfg = _SUPPORTED_FLAMBY[key]
+    tag = make_load_tag(key, benchmark="FLAMBY")
+    active_logger.info("[%s] resolving dataset module.", tag)
     accepted = bool(getattr(args, "flamby_data_terms_accepted", False))
     if not accepted:
         raise PermissionError(
@@ -98,6 +105,7 @@ def fetch_flamby(args):
             f"No FLamby clients selected for dataset '{key}'. "
             "Check num_clients/subsampling settings."
         )
+    active_logger.info("[%s] selected %d centers.", tag, len(selected_centers))
 
     split_map: Dict[int, int] = {}
     client_datasets: List[Tuple[Any, Any]] = []
@@ -142,5 +150,7 @@ def fetch_flamby(args):
     else:
         args.input_shape = (1,)
         args.in_channels = 1
+
+    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
 
     return split_map, client_datasets, server_dataset, args

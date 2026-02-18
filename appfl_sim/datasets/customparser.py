@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -14,10 +15,15 @@ from appfl_sim.datasets.common import (
     TensorBackedDataset,
     clientize_raw_dataset,
     finalize_dataset_outputs,
+    make_load_tag,
     package_dataset_outputs,
+    resolve_dataset_logger,
     set_common_metadata,
     to_namespace,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _to_tensor_backed_dataset(payload: Any, name: str) -> Dataset:
@@ -227,14 +233,22 @@ def fetch_custom_dataset(args):
     - `custom_dataset_path=/path/to/data_or_artifact` local artifact contract.
     """
     args = to_namespace(args)
+    active_logger = resolve_dataset_logger(args, logger)
+    tag = make_load_tag(str(getattr(args, "dataset", "custom")), benchmark="CUSTOM")
 
     loader_spec = str(getattr(args, "custom_dataset_loader", "")).strip()
     dataset_path = str(getattr(args, "custom_dataset_path", "")).strip()
 
     if loader_spec:
-        return _load_from_callable(args)
+        active_logger.info("[%s] loading via custom callable.", tag)
+        out = _load_from_callable(args)
+        active_logger.info("[%s] finished loading.", tag)
+        return out
     if dataset_path:
-        return _load_from_path(args)
+        active_logger.info("[%s] loading from custom path.", tag)
+        out = _load_from_path(args)
+        active_logger.info("[%s] finished loading.", tag)
+        return out
 
     raise ValueError(
         "For dataset_loader=custom, set either custom_dataset_loader or custom_dataset_path."

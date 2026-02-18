@@ -10,37 +10,46 @@ logger = logging.getLogger(__name__)
 
 
 
-def postprocess_leaf(dataset_name, root, seed, raw_data_fraction, min_samples_per_clients, test_size):
+def postprocess_leaf(
+    dataset_name,
+    root,
+    seed,
+    raw_data_fraction,
+    min_samples_per_clients,
+    test_size,
+    logger=None,
+):
+    active_logger = logger or globals()["logger"]
     # check if raw data is prepared 
-    logger.info(f'[LOAD] [LEAF - {dataset_name.upper()}] Check pre-processing data...!')
+    active_logger.info(f'[LEAF-{dataset_name.upper()}] checking preprocessing artifacts.')
     if not os.path.exists(f'{root}/{dataset_name}/all_data'):
-        err = f'[LOAD] [LEAF - {dataset_name.upper()}] Please check if the raw data is correctly prepared in `{root}`!'
+        err = f'[LEAF-{dataset_name.upper()}] preprocessing artifacts are missing under `{root}`.'
         raise AssertionError(err)
-    logger.info(f'[LOAD] [LEAF - {dataset_name.upper()}] ...data pre-proceesing has been completed!')
+    active_logger.info(f'[LEAF-{dataset_name.upper()}] preprocessing artifacts are ready.')
     
     # create client datasets
-    logger.info(f'[LOAD] [LEAF - {dataset_name.upper()}] Sample clients from raw data...!')
+    active_logger.info(f'[LEAF-{dataset_name.upper()}] sampling clients from raw pool.')
     if not os.path.exists(f'{root}/{dataset_name}/sampled_data'):
         os.makedirs(f'{root}/{dataset_name}/sampled_data')
         sample_clients(dataset_name, root, seed, raw_data_fraction)
-    logger.info(f'[LOAD] [LEAF - {dataset_name.upper()}] ...done sampling clients from raw data!')
+    active_logger.info(f'[LEAF-{dataset_name.upper()}] sampled client pool is ready.')
     
     # remove clients with less than given `min_samples_per_clients`
-    logger.info(f'[LOAD] [LEAF - {dataset_name.upper()}] Filter out remaining clients...!')
+    active_logger.info(f'[LEAF-{dataset_name.upper()}] filtering clients by minimum sample threshold.')
     if not os.path.exists(f'{root}/{dataset_name}/rem_clients_data') and (raw_data_fraction < 1.):
         os.makedirs(f'{root}/{dataset_name}/rem_clients_data')
         filter_clients(dataset_name, root, min_samples_per_clients)
-    logger.info(f'[LOAD] [LEAF - {dataset_name.upper()}] ...done filtering remaining clients!')
+    active_logger.info(f'[LEAF-{dataset_name.upper()}] client filtering complete.')
     
     # create train-test split
-    logger.info(f'[LOAD] [LEAF - {dataset_name.upper()}] Split into training & test sets...!')
+    active_logger.info(f'[LEAF-{dataset_name.upper()}] splitting clients into train/test sets.')
     if (not os.path.exists(f'{root}/{dataset_name}/train')) or (not os.path.exists(f'{root}/{dataset_name}/test')):
         if not os.path.exists(f'{root}/{dataset_name}/train'):
             os.makedirs(f'{root}/{dataset_name}/train')
         if not os.path.exists(f'{root}/{dataset_name}/test'):
             os.makedirs(f'{root}/{dataset_name}/test')    
         split_datasets(dataset_name, root, seed, test_size)
-    logger.info(f'[LOAD] [LEAF - {dataset_name.upper()}] ...done splitting into training & test sets!')
+    active_logger.info(f'[LEAF-{dataset_name.upper()}] train/test split complete.')
 
     # get number of clients
     train_data = [file for file in os.listdir(os.path.join(root, dataset_name, 'train')) if file.endswith('.json')][0]

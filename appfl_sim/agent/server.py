@@ -12,7 +12,7 @@ from appfl_sim.logger import ServerAgentFileLogger
 from appfl_sim.algorithm.scheduler import BaseScheduler
 from appfl_sim.algorithm.aggregator import BaseAggregator
 from appfl_sim.metrics import MetricsManager, parse_metric_names
-from appfl_sim.misc.utils import (
+from appfl_sim.misc.runtime_utils import (
     create_instance_from_file,
     create_instance_from_file_source,
     get_function_from_file,
@@ -117,7 +117,7 @@ class ServerAgent:
             Otherwise, return the `Future` object of the updated global model and optional metadata.
         """
         if self.training_finished():
-            global_model = self.scheduler.get_parameters(init_model=False)
+            global_model = self.scheduler.get_parameters()
             return global_model
         else:
             if isinstance(local_model, bytes):
@@ -140,15 +140,11 @@ class ServerAgent:
     ) -> Union[Future, Dict, OrderedDict, Tuple[Union[Dict, OrderedDict], Dict]]:
         """
         Return the global model to the clients.
-        :param: `blocking`: The global model may not be immediately available (e.g. if the server wants to wait for all client
-            to send the `get_parameters` request before returning the global model for same model initialization).
+        :param: `blocking`: The global model may not be immediately available.
             Setting `blocking` to `True` will block the client until the global model is available.
-        :param: `kwargs`: Additional arguments for the method. Specifically,
-            - `init_model`: whether getting the initial model (which should be same among all clients, thus blocking)
-            - `serial_run`: set `True` if for serial simulation run, thus no blocking is needed.
-            - `globus_compute_run`: set `True` if for globus compute run, thus no blocking is needed.
         """
-        global_model = self.scheduler.get_parameters(**kwargs)
+        del kwargs
+        global_model = self.scheduler.get_parameters()
         if not isinstance(global_model, Future):
             return global_model
         if blocking:
@@ -286,23 +282,7 @@ class ServerAgent:
                 else None,
             )
         )
-        default_eval_metric = str(
-            self.server_agent_config.server_configs.get(
-                "default_eval_metric",
-                self.server_agent_config.client_configs.train_configs.get(
-                    "default_eval_metric", "acc1"
-                )
-                if hasattr(self.server_agent_config.client_configs, "train_configs")
-                else "acc1",
-            )
-        )
-        if default_eval_metric.strip().lower() in {"none", "null"}:
-            default_eval_metric = ""
-
-        manager = MetricsManager(
-            eval_metrics=eval_metric_names,
-            default_eval_metric=default_eval_metric,
-        )
+        manager = MetricsManager(eval_metrics=eval_metric_names)
         was_training = self.model.training
         self.model.to(device)
         if hasattr(self.loss_fn, "to"):
@@ -325,9 +305,9 @@ class ServerAgent:
             except Exception:
                 total_batches = None
             if round_idx is None:
-                desc = "appfl-sim: ✅[Server | Global Eval]"
+                desc = f"appfl-sim: ✅[Server | Evaluation (Global)]"
             else:
-                desc = f"appfl-sim: ✅[Server | Round {int(round_idx):04d} | Global Eval]"
+                desc = f"appfl-sim: ✅[Server (Round {int(round_idx):04d}) Evaluation (Global)]"
             progress_bar = _tqdm(
                 self._val_dataloader,
                 total=total_batches,

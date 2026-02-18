@@ -32,9 +32,11 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `dataset_dir` (default: `./data`): dataset root path.
 - `dataset_loader` (default: `auto`): loader mode (`auto`, `torchvision`, `torchtext`, `torchaudio`, `medmnist`, `leaf`, `flamby`, `tff`, `external`, `custom`).
 - `download` (default: `true`): download datasets if missing.
-- `infer_num_clients` (default: `false`): infer client count from fixed-pool datasets (`leaf`, `flamby`, `tff`).
+- `train_data_shuffle` (default: `true`): trainer train dataloader shuffle flag.
+- `val_data_shuffle` (default: `false`): trainer val dataloader shuffle flag.
 
 ### Dataset Split
+- `infer_num_clients` (default: `false`): infer client count from fixed-pool datasets (`leaf`, `flamby`, `tff`).
 - `split_type` (default: `iid`): split policy (`iid`, `dirichlet`, `pathological`, `unbalanced`).
 - `unbalanced_keep_min` (default: `0.5`): minimum keep ratio for unbalanced split.
 - `min_classes` (default: `2`): minimum unique classes per client for pathological split.
@@ -58,15 +60,20 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `leaf_min_samples_per_client` (default: `2`): LEAF per-client minimum samples.
 
 ## Model
-- `model` (default: `SimpleCNN`): model name to be used.
+- `model_source` (default: `auto`): model backend (`auto`, `appfl`, `timm`, `hf`).
+- `model_name` (default: `SimpleCNN`): exact model identifier/name.
 - `model_kwargs` (default: `{}`): backend-agnostic model kwargs.
+- `model_in_channels` (default: inferred from input shape): explicit input channels override.
+- `model_num_classes` (default: inferred from dataset): explicit class-count override.
 - `model_timm_pretrained` (default: `false`): timm pretrained flag override.
 - `model_timm_kwargs` (default: `{}`): timm kwargs.
+- `model_hf_pretrained` (default: `false`): HF pretrained checkpoint loading flag.
 - `model_hf_task` (default: `sequence_classification`): HF task type.
 - `model_hf_local_files_only` (default: `false`): HF local-only loading.
 - `model_hf_trust_remote_code` (default: `false`): HF remote-code trust.
 - `model_hf_gradient_checkpointing` (default: `false`): enable HF gradient checkpointing.
 - `model_hf_kwargs` (default: `{}`): HF kwargs.
+- `model_hf_config_overrides` (default: `{}`): HF config overrides for scratch configs.
 
 ### Model Configurations
 - `num_layers` (default: `2`): stacked layer count.
@@ -78,8 +85,6 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `crop` (default: `28`): image crop shape for augmentation.
 - `resize` (default: `28`): image resize shape for augmentation.
 - `dropout` (default: `0.0`): dropout probability.
-- `is_seq2seq` (default: `false`): sequence-to-sequence output mode.
-- `need_embedding` (default: `true`): whether model expects token embeddings.
 
 ## Optimization
 - `weight_decay` (default: `0.0`): optimizer weight decay.
@@ -99,8 +104,9 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `enable_global_eval` (default: `true`).
 - `enable_federated_eval` (default: `true`).
 - `federated_eval_scheme` (default: `holdout_dataset`): federated evaluation mode (`holdout_dataset` or `holdout_client`).
-- `holdout_dataset_ratio` (default: `[80,20]`): (when `federated_eval_scheme=holdout_dataset`) local dataset split r each client.  
-  (use `[80,20]` for train/test or `[80,10,10]` for train/val/test, also accepts 1.0 scale)
+- `holdout_dataset_ratio` (default: `[80,20]`): (when `federated_eval_scheme=holdout_dataset`) local dataset split for each client.  
+  (use `[100]` for train-only, `[80,20]` for train/test or `[80,10,10]` for train/val/test, also accepts 1.0 scale).  
+  Special case: `[100]` or `[1.0]` means train-only mode (no val/test, no global/federated eval).
 - `holdout_client_counts` (default: `0`): (when `federated_eval_scheme=holdout_client`) number of holdout clients.
 - `holdout_client_ratio` (default: `0.0`): (when `federated_eval_scheme=holdout_client`) ratio of holdout client size.
 
@@ -114,13 +120,13 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `project_name` (default: `appfl-sim`): project/log directory name (`tensorboard`) or project ID (`wandb`).
 - `logging_scheme` (default: `auto`): per-client logging policy (`auto`, `both`, `server_only`).  
   (`auto`: when `num_sampled_clients < num_clients`, per-cleint logging is forced off for performance, i.e., server-only logging)
+- `enable_wandb` (default: `false`): enable per-client wandb metric streaming.
 - `wandb_mode` (default: `online`): wandb mode (`online` or `offline`).
 - `wandb_entity` (default: `""`): wandb entity/team.
 
 ## Memory Usage
 - `stateful_clients` (default: `false`): keep client states across rounds (`true`; cross-silo FL) or stateless/sporadic clients (`false`; cross-device FL).
 - `client_processing_chunk_size` (default: `0`): chunk size for sampled/eval client processing (`<=0` enables auto sizing).
-- `offload_to_cpu_after_local_job` (default: `true`): offload model/loss to CPU after local train/eval to reduce VRAM.
 - `on_demand_num_workers` (default: `0`): DataLoader workers for on-demand (stateless) local training client builds.
 - `on_demand_workers` (default: alias fallback): backward-compatible alias for `on_demand_num_workers`.
 - `on_demand_eval_num_workers` (default: `0`): DataLoader workers for on-demand (stateless) federated evaluation client builds.
@@ -132,6 +138,20 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `mpi_log_rank_mapping` (default: `false`): print rank/device mapping in MPI workers.
 - `mpi_num_workers` (default: `0`): MPI worker ranks (`0` = auto).
 - `mpi_oversubscribe` (default: `false`): pass `--oversubscribe` to MPI launcher.
+
+## Advanced Configurations
+- `aggregator_kwargs` (default: `{}`): kwargs forwarded to aggregator class construction.
+- `scheduler_kwargs` (default: `{}`): kwargs forwarded to scheduler class construction.
+- `per_client_logging_warning_threshold` (default: `50`): warning threshold when per-client logging stays enabled.
+- `client_weights_mode` (default: `sample_ratio`): aggregation weighting mode (`uniform`, `sample_ratio`, `adaptive`).
+- `optimize_memory` (default: `true`): enable memory-saving cleanup paths in trainer/scheduler/aggregator.
+- `use_secure_agg` (default: `false`): toggles secure aggregation related runtime behavior.
+- `secure_agg_client_weights_mode` (default: `uniform`): secure-aggregation weighting mode (`uniform`, `sample_ratio`).
+- `use_dp` (default: `false`): toggles differential privacy related runtime behavior.
+- `dp_mechanism` (default: `laplace`): DP backend selector (`Opacus` path has special on-demand constraints).
+- `dp_config` (default: `{}`): DP backend-specific config (e.g., Opacus `noise_multiplier`, `max_grad_norm`).
+- `clip_grad` (default: auto from `max_grad_norm`): explicitly enable gradient clipping.
+- `clip_norm` (default: `2.0`): gradient norm type used by clip-grad.
 
 ## Purged/Deprecated
 The following arguments are removed and should not be used:

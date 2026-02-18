@@ -5,7 +5,7 @@ from omegaconf import DictConfig
 from appfl_sim.algorithm.aggregator import BaseAggregator
 from typing import Union, Dict, OrderedDict, Any, Optional
 from appfl_sim.privacy.secure_aggregator import SecureAggregator
-from appfl_sim.misc.memory_utils import (
+from appfl_sim.misc.system_utils import (
     clone_state_dict_optimized,
     safe_inplace_operation,
     optimize_memory_cleanup,
@@ -32,9 +32,10 @@ class FedAvgAggregator(BaseAggregator):
         self.model = model
         self.logger = logger
         self.aggregator_configs = aggregator_configs
-        self.client_weights_mode = aggregator_configs.get(
-            "client_weights_mode", "equal"
-        )
+        raw_mode = str(aggregator_configs.get("client_weights_mode", "sample_ratio")).strip().lower()
+        if raw_mode not in {"uniform", "sample_ratio", "adaptive"}:
+            raw_mode = "sample_ratio"
+        self.client_weights_mode = raw_mode
 
         # Check for optimize_memory in aggregator_configs, default to True
         self.optimize_memory = getattr(aggregator_configs, "optimize_memory", True)
@@ -49,6 +50,21 @@ class FedAvgAggregator(BaseAggregator):
         self.global_state = None  # Models parameters that are used for aggregation, this is unknown at the beginning
 
         self.step = {}
+
+    def _client_weight(self, client_id, total_clients: int) -> float:
+        mode = str(self.client_weights_mode).strip().lower()
+        if mode == "uniform":
+            return 1.0 / max(1, int(total_clients))
+
+        if mode in {"sample_ratio", "adaptive"}:
+            if hasattr(self, "client_sample_size") and client_id in self.client_sample_size:
+                total = float(sum(self.client_sample_size.values()))
+                if total > 0.0:
+                    return float(self.client_sample_size[client_id]) / total
+            if mode == "adaptive":
+                return 1.0 / max(1, int(total_clients))
+
+        return 1.0 / max(1, int(total_clients))
 
     def get_parameters(self, **kwargs) -> Dict:
         """
@@ -98,11 +114,11 @@ class FedAvgAggregator(BaseAggregator):
             device = torch.device(self.aggregator_configs.get("device", "cpu"))
             total_examples = sum(p["num_examples"] for _, p in payloads)
 
-            # compute weighted sum of masked flats (weights = num_examples / total_examples or equal)
+            # compute weighted sum of masked flats (weights = num_examples / total_examples or uniform)
             weighted_sum = None
             for client_id, p in payloads:
                 flat = p["flat"].to(device)
-                if self.client_weights_mode == "sample_size":
+                if self.client_weights_mode in {"sample_ratio", "adaptive"} and total_examples > 0:
                     w = float(p["num_examples"]) / float(total_examples)
                 else:
                     w = 1.0 / len(payloads)
@@ -263,16 +279,7 @@ class FedAvgAggregator(BaseAggregator):
                     self.step[name] = torch.zeros_like(self.global_state[name])
 
                 for client_id, model in local_models.items():
-                    if (
-                        self.client_weights_mode == "sample_size"
-                        and hasattr(self, "client_sample_size")
-                        and client_id in self.client_sample_size
-                    ):
-                        weight = self.client_sample_size[client_id] / sum(
-                            self.client_sample_size.values()
-                        )
-                    else:
-                        weight = 1.0 / len(local_models)
+                    weight = self._client_weight(client_id, len(local_models))
 
                     for name in model:
                         if name in self.step:
@@ -298,16 +305,7 @@ class FedAvgAggregator(BaseAggregator):
                 self.step[name] = torch.zeros_like(self.global_state[name])
 
             for client_id, model in local_models.items():
-                if (
-                    self.client_weights_mode == "sample_size"
-                    and hasattr(self, "client_sample_size")
-                    and client_id in self.client_sample_size
-                ):
-                    weight = self.client_sample_size[client_id] / sum(
-                        self.client_sample_size.values()
-                    )
-                else:
-                    weight = 1.0 / len(local_models)
+                weight = self._client_weight(client_id, len(local_models))
 
                 for name in model:
                     if name in self.step:

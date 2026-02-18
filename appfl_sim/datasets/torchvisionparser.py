@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from pathlib import Path
 
 from appfl_sim.datasets.common import (
     clientize_raw_dataset,
     finalize_dataset_outputs,
     infer_num_classes,
+    make_load_tag,
+    resolve_dataset_logger,
     to_namespace,
 )
 
@@ -16,6 +19,9 @@ try:
 except Exception:  # pragma: no cover
     tv_datasets = None
     transforms = None
+
+
+logger = logging.getLogger(__name__)
 
 
 def _resolve_torchvision_dataset(name: str):
@@ -67,6 +73,9 @@ def _instantiate_dataset(dataset_cls, root: str, split: str, download: bool, tra
 
 def fetch_torchvision_dataset(args):
     args = to_namespace(args)
+    active_logger = resolve_dataset_logger(args, logger)
+    tag = make_load_tag(str(args.dataset), benchmark="TORCHVISION")
+    active_logger.info("[%s] resolving dataset class.", tag)
     if tv_datasets is None:
         raise RuntimeError("torchvision is not installed.")
 
@@ -76,6 +85,8 @@ def fetch_torchvision_dataset(args):
 
     data_root = Path(str(args.data_dir)).expanduser()
     data_root.mkdir(parents=True, exist_ok=True)
+    if bool(args.download):
+        active_logger.info("[%s] downloading (if needed).", tag)
 
     transform = transforms.ToTensor() if transforms is not None else None
     raw_train = _instantiate_dataset(
@@ -95,6 +106,7 @@ def fetch_torchvision_dataset(args):
 
     _ensure_targets(raw_train)
     _ensure_targets(raw_test)
+    active_logger.info("[%s] building federated client splits.", tag)
 
     split_map, client_datasets = clientize_raw_dataset(raw_train, args)
     split_map, client_datasets, server_dataset, args = finalize_dataset_outputs(
@@ -111,4 +123,5 @@ def fetch_torchvision_dataset(args):
         args.num_classes = max(int(args.num_classes), int(len(raw_train.classes)))
     else:
         args.num_classes = int(infer_num_classes(raw_train))
+    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
     return split_map, client_datasets, server_dataset, args

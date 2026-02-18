@@ -15,8 +15,8 @@ from appfl_sim.privacy import (
 )
 from appfl_sim.algorithm.trainer.base_trainer import BaseTrainer
 from appfl_sim.metrics import MetricsManager, parse_metric_names
-from appfl_sim.misc.utils import parse_device_str, apply_model_device
-from appfl_sim.misc.memory_utils import (
+from appfl_sim.misc.system_utils import parse_device_str, apply_model_device
+from appfl_sim.misc.system_utils import (
     extract_model_state_optimized,
     safe_inplace_operation,
     optimize_memory_cleanup,
@@ -115,18 +115,15 @@ class VanillaTrainer(BaseTrainer):
             train_configs.optim = str(
                 train_configs.get("optimizer", train_configs.get("optim", "SGD"))
             )
-        if not hasattr(train_configs, "optim_args"):
-            train_configs.optim_args = {
-                "lr": float(train_configs.get("lr", 0.01)),
-                "weight_decay": float(train_configs.get("weight_decay", 0.0)),
-            }
-        if not hasattr(train_configs, "train_batch_size"):
-            train_configs.train_batch_size = int(
-                train_configs.get("batch_size", train_configs.get("train_batch_size", 32))
-            )
-        if not hasattr(train_configs, "val_batch_size"):
-            train_configs.val_batch_size = int(
-                train_configs.get("val_batch_size", train_configs.get("batch_size", 32))
+        if not hasattr(train_configs, "lr"):
+            train_configs.lr = float(train_configs.get("lr", 0.01))
+        if not hasattr(train_configs, "weight_decay"):
+            train_configs.weight_decay = float(train_configs.get("weight_decay", 0.0))
+        if not hasattr(train_configs, "batch_size"):
+            train_configs.batch_size = int(train_configs.get("batch_size", 32))
+        if not hasattr(train_configs, "eval_batch_size"):
+            train_configs.eval_batch_size = int(
+                train_configs.get("eval_batch_size", train_configs.get("batch_size", 32))
             )
         if (
             float(train_configs.get("max_grad_norm", 0.0)) > 0.0
@@ -143,11 +140,6 @@ class VanillaTrainer(BaseTrainer):
         self.eval_metric_names = parse_metric_names(
             self.train_configs.get("eval_metrics", None)
         )
-        self.default_eval_metric = str(
-            self.train_configs.get("default_eval_metric", "acc1")
-        )
-        if self.default_eval_metric.strip().lower() in {"none", "null"}:
-            self.default_eval_metric = ""
 
         self.privacy_engine = None
         if not hasattr(self.train_configs, "device"):
@@ -164,7 +156,7 @@ class VanillaTrainer(BaseTrainer):
 
         self.train_dataloader = _make_dataloader(
             self.train_dataset,
-            batch_size=self.train_configs.get("train_batch_size", 32),
+            batch_size=self.train_configs.get("batch_size", 32),
             shuffle=self.train_configs.get("train_data_shuffle", True),
             num_workers=num_workers,
             pin_memory=train_pin_memory,
@@ -174,7 +166,7 @@ class VanillaTrainer(BaseTrainer):
         self.val_dataloader = (
             _make_dataloader(
                 self.val_dataset,
-                batch_size=self.train_configs.get("val_batch_size", 32),
+                batch_size=self.train_configs.get("eval_batch_size", 32),
                 shuffle=self.train_configs.get("val_data_shuffle", False),
                 num_workers=num_workers,
                 pin_memory=eval_pin_memory,
@@ -188,7 +180,7 @@ class VanillaTrainer(BaseTrainer):
         self.test_dataloader = (
             _make_dataloader(
                 self.test_dataset,
-                batch_size=self.train_configs.get("val_batch_size", 32),
+                batch_size=self.train_configs.get("eval_batch_size", 32),
                 shuffle=False,
                 num_workers=num_workers,
                 pin_memory=eval_pin_memory,
@@ -222,15 +214,9 @@ class VanillaTrainer(BaseTrainer):
             self.privacy_engine = PrivacyEngine()
 
     def _new_metrics_manager(self) -> MetricsManager:
-        return MetricsManager(
-            eval_metrics=self.eval_metric_names,
-            default_eval_metric=self.default_eval_metric,
-        )
+        return MetricsManager(eval_metrics=self.eval_metric_names)
 
     def _primary_metric_name(self) -> str:
-        name = str(self.default_eval_metric).strip().lower()
-        if name and name not in {"none", "null"}:
-            return name
         if self.eval_metric_names:
             return str(self.eval_metric_names[0]).strip().lower()
         return "accuracy"
@@ -304,7 +290,7 @@ class VanillaTrainer(BaseTrainer):
 
     def _should_offload_after_local_job(self) -> bool:
         """Whether to move model/loss back to CPU after local train/eval."""
-        return bool(self.train_configs.get("offload_to_cpu_after_local_job", True))
+        return True
 
     def _offload_model_to_cpu(self) -> None:
         """Move model/loss to CPU to avoid VRAM accumulation across many clients."""
@@ -445,42 +431,30 @@ class VanillaTrainer(BaseTrainer):
             for metric_name in metric_names_for_log:
                 title.append(f"Test {_metric_title(metric_name)}")
 
-        if self.train_configs.get("client_log_title_each_round", True):
-            self.logger.log_title(title)
-        elif not hasattr(self.logger, "titles"):
-            self.logger.log_title(title)
+        self.logger.log_title(title)
         self.logger.set_title(title)
 
         if do_pre_validation:
-            if (
-                self.train_configs.get("use_secure_agg", False) and False
-            ):  # TODO: Check why skip evaluation in secure aggregation mode
-                # Skip evaluation in secure aggregation mode
-                val_loss, val_acc = None, None  # noqa F841
-                self.logger.info(
-                    f"Round {self.round} Pre-Validation skipped (secure aggregation enabled)"
+            val_stats = self._validate_metrics(split="val") if has_val_split else None
+            test_stats = (
+                self._validate_metrics(split="test") if has_test_split else None
+            )
+            if val_stats is not None:
+                self.val_results["pre_val_loss"] = float(val_stats["loss"])
+                self.val_results["pre_val_accuracy"] = float(val_stats["accuracy"])
+                self.val_results["pre_val_metric_value"] = float(
+                    self._metric_from_stats(val_stats)
                 )
-            else:
-                val_stats = self._validate_metrics(split="val") if has_val_split else None
-                test_stats = (
-                    self._validate_metrics(split="test") if has_test_split else None
+                self.val_results["pre_val_metrics"] = dict(val_stats.get("metrics", {}))
+            if test_stats is not None:
+                self.val_results["pre_test_loss"] = float(test_stats["loss"])
+                self.val_results["pre_test_accuracy"] = float(test_stats["accuracy"])
+                self.val_results["pre_test_metric_value"] = float(
+                    self._metric_from_stats(test_stats)
                 )
-                if val_stats is not None:
-                    self.val_results["pre_val_loss"] = float(val_stats["loss"])
-                    self.val_results["pre_val_accuracy"] = float(val_stats["accuracy"])
-                    self.val_results["pre_val_metric_value"] = float(
-                        self._metric_from_stats(val_stats)
-                    )
-                    self.val_results["pre_val_metrics"] = dict(val_stats.get("metrics", {}))
-                if test_stats is not None:
-                    self.val_results["pre_test_loss"] = float(test_stats["loss"])
-                    self.val_results["pre_test_accuracy"] = float(test_stats["accuracy"])
-                    self.val_results["pre_test_metric_value"] = float(
-                        self._metric_from_stats(test_stats)
-                    )
-                    self.val_results["pre_test_metrics"] = dict(
-                        test_stats.get("metrics", {})
-                    )
+                self.val_results["pre_test_metrics"] = dict(
+                    test_stats.get("metrics", {})
+                )
 
                 self.logger.log_content(
                     _build_log_row(
@@ -526,13 +500,8 @@ class VanillaTrainer(BaseTrainer):
         )
         optimizer = getattr(optim_module, optim_name)(
             self.model.parameters(),
-            **self.train_configs.get(
-                "optim_args",
-                {
-                    "lr": float(self.train_configs.get("lr", 0.01)),
-                    "weight_decay": float(self.train_configs.get("weight_decay", 0.0)),
-                },
-            ),
+            lr=float(self.train_configs.get("lr", 0.01)),
+            weight_decay=float(self.train_configs.get("weight_decay", 0.0)),
         )
         total_examples = 0
         total_correct = 0
@@ -683,7 +652,7 @@ class VanillaTrainer(BaseTrainer):
                 with BatchMemoryManager(
                     data_loader=self.train_dataloader,
                     max_physical_batch_size=self.train_configs.get(
-                        "train_batch_size", 32
+                        "batch_size", 32
                     ),
                     optimizer=optimizer,
                 ) as memory_safe_data_loader:
@@ -824,7 +793,7 @@ class VanillaTrainer(BaseTrainer):
                 "Using laplace differential privacy, and privacy budget (epsilon) must be specified"
             )
             sensitivity = (
-                2.0 * self.train_configs.clip_value * self.train_configs.optim_args.lr
+                2.0 * self.train_configs.clip_value * float(self.train_configs.get("lr", 0.01))
             )
             self.model_state = gaussian_mechanism_output_perturb(
                 self.model,
@@ -841,7 +810,7 @@ class VanillaTrainer(BaseTrainer):
                 "Using laplace differential privacy, and privacy budget (epsilon) must be specified"
             )
             sensitivity = (
-                2.0 * self.train_configs.clip_value * self.train_configs.optim_args.lr
+                2.0 * self.train_configs.clip_value * float(self.train_configs.get("lr", 0.01))
             )
             self.model_state = laplace_mechanism_output_perturb(
                 self.model,
@@ -868,21 +837,21 @@ class VanillaTrainer(BaseTrainer):
                 g = self.model_prev[k].to(local_state[k].device)
                 delta_state[k] = (local_state[k] - g).detach().clone()
 
-            # optional weighting (e.g., sample_size). If you want weighted aggregation,
+            # optional weighting (e.g., sample_ratio). If you want weighted aggregation,
             # pre-scale delta_state here by client weight w_i.
-            secure_agg_client_weights_mode = self.train_configs.get(
-                "secure_agg_client_weights_mode", "equal"
-            )  # "equal" or "num_examples"
-            if secure_agg_client_weights_mode == "num_examples":
+            secure_agg_client_weights_mode = str(
+                self.train_configs.get("secure_agg_client_weights_mode", "uniform")
+            ).strip().lower()
+            if secure_agg_client_weights_mode not in {"uniform", "sample_ratio"}:
+                secure_agg_client_weights_mode = "uniform"
+            if secure_agg_client_weights_mode == "sample_ratio":
                 # requires runtime_context["global_num_examples_sum"]
                 if "global_num_examples_sum" not in self.runtime_context:
                     raise RuntimeError(
-                        "global_num_examples_sum required in runtime_context for num_examples weighting"
+                        "global_num_examples_sum required in runtime_context for sample_ratio weighting"
                     )
                 local_n = float(
-                    self.runtime_context.get(
-                        "local_num_examples", len(self.train_dataset)
-                    )
+                    len(self.train_dataset)
                 )
                 total_n = float(self.runtime_context["global_num_examples_sum"])
                 w = local_n / total_n
@@ -911,9 +880,7 @@ class VanillaTrainer(BaseTrainer):
                 "flat": masked_flat.cpu(),  # send CPU tensors to aggregator/orchestrator
                 "shapes": shapes,
                 "num_examples": int(
-                    self.runtime_context.get(
-                        "local_num_examples", len(self.train_dataset)
-                    )
+                    len(self.train_dataset)
                 ),
             }
             if hasattr(self, "model_prev"):

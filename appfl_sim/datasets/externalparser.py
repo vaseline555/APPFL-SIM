@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from io import BytesIO
+import logging
 from typing import Any, Dict, Iterable, List, Tuple
 
 import numpy as np
@@ -13,8 +14,13 @@ from appfl_sim.datasets.common import (
     clientize_raw_dataset,
     finalize_dataset_outputs,
     infer_num_classes,
+    make_load_tag,
+    resolve_dataset_logger,
     to_namespace,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _as_text(value: Any) -> str:
@@ -268,6 +274,9 @@ def _parse_external_spec(args) -> Tuple[str, str]:
 
 
 def _fetch_hf_dataset(args, dataset_name: str):
+    active_logger = resolve_dataset_logger(args, logger)
+    tag = make_load_tag(dataset_name, benchmark="HF")
+    active_logger.info("[%s] loading remote dataset splits.", tag)
     try:
         from datasets import DatasetDict, load_dataset
     except Exception as e:  # pragma: no cover
@@ -340,6 +349,7 @@ def _fetch_hf_dataset(args, dataset_name: str):
     )
 
     split_map, client_datasets = clientize_raw_dataset(raw_train, args)
+    active_logger.info("[%s] building federated client splits.", tag)
     split_map, client_datasets, server_dataset, args = finalize_dataset_outputs(
         split_map=split_map,
         client_datasets=client_datasets,
@@ -348,6 +358,7 @@ def _fetch_hf_dataset(args, dataset_name: str):
         raw_train=raw_train,
     )
     args.num_classes = int(infer_num_classes(raw_train))
+    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
     return split_map, client_datasets, server_dataset, args
 
 
@@ -373,6 +384,9 @@ def _fetch_timm_dataset(args, dataset_name: str):
     # for lightweight simulation compatibility.
     from appfl_sim.datasets.torchvisionparser import fetch_torchvision_dataset
 
+    active_logger = resolve_dataset_logger(args, logger)
+    tag = make_load_tag(dataset_name, benchmark="TIMM")
+    active_logger.info("[%s] delegating to torchvision-compatible parser.", tag)
     tv_name = _normalize_timm_dataset_name(dataset_name)
     args.dataset = tv_name
     return fetch_torchvision_dataset(args)
@@ -386,9 +400,11 @@ def fetch_external_dataset(args):
     - `timm`: timm-style dataset names mapped to torchvision when applicable (`dataset='timm:<name>'`)
     """
     args = to_namespace(args)
+    active_logger = resolve_dataset_logger(args, logger)
     source, dataset_name = _parse_external_spec(args)
     args.external_source = source
     args.external_dataset_name = dataset_name
+    active_logger.info("[%s] starting external dataset parser.", make_load_tag(dataset_name, benchmark=source))
 
     if source == "hf":
         return _fetch_hf_dataset(args, dataset_name)

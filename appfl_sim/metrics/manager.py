@@ -42,11 +42,10 @@ class MetricsManager:
     def __init__(
         self,
         eval_metrics: Iterable[str] | str | None,
-        default_eval_metric: str = "acc1",
     ):
         metric_names = parse_metric_names(eval_metrics)
-        if not metric_names and default_eval_metric:
-            metric_names = [default_eval_metric]
+        if not metric_names:
+            metric_names = ["acc1"]
 
         unique_names: List[str] = []
         for name in metric_names:

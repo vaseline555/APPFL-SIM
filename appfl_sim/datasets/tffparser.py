@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 
 import numpy as np
 import torch
@@ -8,12 +9,17 @@ import torch
 from appfl_sim.datasets.common import (
     TensorBackedDataset,
     extract_targets,
+    make_load_tag,
     package_dataset_outputs,
+    resolve_dataset_logger,
     resolve_fixed_pool_clients,
     set_common_metadata,
     split_subset_for_client,
     to_namespace,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _tf_to_numpy(value):
@@ -29,6 +35,7 @@ def _stable_hash_to_mod(value: str, mod: int) -> int:
 
 def fetch_tff_dataset(args):
     args = to_namespace(args)
+    active_logger = resolve_dataset_logger(args, logger)
     try:
         import tensorflow_federated as tff
     except Exception as e:  # pragma: no cover
@@ -42,6 +49,8 @@ def fetch_tff_dataset(args):
     else:
         tff_name = str(args.dataset)
     tff_name = tff_name.lower()
+    tag = make_load_tag(tff_name, benchmark="TFF")
+    active_logger.info("[%s] loading federated client data.", tag)
 
     seq_len = int(args.seq_len)
     vocab_size = int(args.num_embeddings)
@@ -55,6 +64,7 @@ def fetch_tff_dataset(args):
         )
         if not client_ids:
             raise ValueError("No TFF clients selected for EMNIST.")
+        active_logger.info("[%s] selected %d clients.", tag, len(client_ids))
 
         split_map = {}
         client_datasets = []
@@ -89,6 +99,7 @@ def fetch_tff_dataset(args):
         args.need_embedding = False
         args.seq_len = None
         args.num_embeddings = None
+        active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
         return package_dataset_outputs(split_map, client_datasets, None, args)
 
     if tff_name == "celeba":
@@ -100,6 +111,7 @@ def fetch_tff_dataset(args):
         )
         if not client_ids:
             raise ValueError("No TFF clients selected for CELEBA.")
+        active_logger.info("[%s] selected %d clients.", tag, len(client_ids))
 
         split_map = {}
         client_datasets = []
@@ -140,6 +152,7 @@ def fetch_tff_dataset(args):
         args.need_embedding = False
         args.seq_len = None
         args.num_embeddings = None
+        active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
         return package_dataset_outputs(split_map, client_datasets, None, args)
 
     if tff_name in {"shakespeare", "stackoverflow"}:
@@ -155,6 +168,7 @@ def fetch_tff_dataset(args):
         )
         if not client_ids:
             raise ValueError(f"No TFF clients selected for {tff_name}.")
+        active_logger.info("[%s] selected %d clients.", tag, len(client_ids))
         split_map = {}
         client_datasets = []
 
@@ -216,6 +230,7 @@ def fetch_tff_dataset(args):
         args.num_embeddings = vocab_size
         args.need_embedding = True
         args.seq_len = seq_len
+        active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
         return package_dataset_outputs(split_map, client_datasets, None, args)
 
     raise NotImplementedError(

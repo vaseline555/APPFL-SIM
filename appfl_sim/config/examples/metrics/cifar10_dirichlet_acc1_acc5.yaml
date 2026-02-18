@@ -22,13 +22,12 @@ weight_decay: 0.0
 max_grad_norm: 0.0
 
 eval_metrics: [acc1, acc5]
-default_eval_metric: acc1
 
 enable_global_eval: true
 enable_federated_eval: true
 eval_every: 1
 federated_eval_scheme: holdout_dataset
-holdout_eval_num_clients: 0
+holdout_client_counts: 0
 
 device: cpu
 server_device: cpu

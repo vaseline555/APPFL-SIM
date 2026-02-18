@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from pathlib import Path
 from typing import Dict
 
@@ -12,8 +13,13 @@ from appfl_sim.datasets.common import (
     clientize_raw_dataset,
     finalize_dataset_outputs,
     infer_num_classes,
+    make_load_tag,
+    resolve_dataset_logger,
     to_namespace,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class GenericAudioDataset(Dataset):
@@ -129,6 +135,9 @@ def _instantiate_dataset(ds_cls, root: str, split: str, download: bool):
 
 def fetch_torchaudio_dataset(args):
     args = to_namespace(args)
+    active_logger = resolve_dataset_logger(args, logger)
+    tag = make_load_tag(str(args.dataset), benchmark="TORCHAUDIO")
+    active_logger.info("[%s] resolving dataset class.", tag)
     ds_cls, ta = _resolve_torchaudio_dataset(args.dataset)
     if ta is None:
         raise RuntimeError("torchaudio is not installed.")
@@ -137,6 +146,8 @@ def fetch_torchaudio_dataset(args):
 
     data_root = Path(str(args.data_dir)).expanduser()
     data_root.mkdir(parents=True, exist_ok=True)
+    if bool(args.download):
+        active_logger.info("[%s] downloading (if needed).", tag)
 
     train_base = _instantiate_dataset(
         ds_cls,
@@ -154,6 +165,7 @@ def fetch_torchaudio_dataset(args):
     max_frames = int(getattr(args, "audio_num_frames", 16000))
     raw_train = GenericAudioDataset(train_base, fixed_num_frames=max_frames)
     raw_test = GenericAudioDataset(test_base, fixed_num_frames=max_frames)
+    active_logger.info("[%s] building federated client splits.", tag)
 
     split_map, client_datasets = clientize_raw_dataset(raw_train, args)
     split_map, client_datasets, server_dataset, args = finalize_dataset_outputs(
@@ -167,4 +179,5 @@ def fetch_torchaudio_dataset(args):
     args.need_embedding = False
     args.seq_len = None
     args.num_embeddings = None
+    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
     return split_map, client_datasets, server_dataset, args

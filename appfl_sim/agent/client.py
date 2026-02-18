@@ -14,7 +14,7 @@ from appfl_sim.algorithm.trainer import BaseTrainer
 from omegaconf import DictConfig, OmegaConf
 from typing import Union, Dict, OrderedDict, Tuple, Optional
 from appfl_sim.logger import ClientAgentFileLogger
-from appfl_sim.misc.utils import (
+from appfl_sim.misc.runtime_utils import (
     create_instance_from_file,
     run_function_from_file,
     get_function_from_file,
@@ -510,16 +510,8 @@ class ClientAgent:
             )
         if hasattr(self.client_agent_config, "experiment_id"):
             kwargs["experiment_id"] = self.client_agent_config.experiment_id
-        kwargs["title_every_n"] = (
-            self.client_agent_config.train_configs.get("client_log_title_every", 1)
-            if hasattr(self.client_agent_config, "train_configs")
-            else 1
-        )
-        kwargs["show_titles"] = (
-            self.client_agent_config.train_configs.get("client_log_show_titles", False)
-            if hasattr(self.client_agent_config, "train_configs")
-            else False
-        )
+        kwargs["title_every_n"] = 1
+        kwargs["show_titles"] = True
         self.logger = ClientAgentFileLogger(**kwargs)
 
     def _load_data(self) -> None:

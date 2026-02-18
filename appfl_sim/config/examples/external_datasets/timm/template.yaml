@@ -15,12 +15,11 @@ split_type: iid
 local_epochs: 1
 batch_size: 16
 
-model:
-  source: timm
-  # Exact timm model name (required).
-  # Override from CLI, e.g. model.name=mobilevit_xxs
-  name: resnet18
-  pretrained: false
+model_source: timm
+# Exact timm model name (required).
+# Override from CLI, e.g. model_name=mobilevit_xxs
+model_name: resnet18
+model_timm_pretrained: false
 
 logging_backend: file
 project_name: timm-sim

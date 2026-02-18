@@ -10,6 +10,15 @@ scheduler_kwargs: {}
 trainer: ""
 dataset: MNIST
 model_name: SimpleCNN
+model_source: auto
+model_kwargs: {}
+model_timm_pretrained: false
+model_timm_kwargs: {}
+model_hf_task: sequence_classification
+model_hf_local_files_only: false
+model_hf_trust_remote_code: false
+model_hf_gradient_checkpointing: false
+model_hf_kwargs: {}
 dataset_loader: auto
 download: true
 custom_dataset_loader: ""
@@ -23,21 +32,6 @@ external_test_split: test
 external_feature_key: ""
 external_label_key: ""
 flamby_data_terms_accepted: false
-model:
-  source: auto
-  name: ""
-  kwargs: {}
-  appfl:
-    kwargs: {}
-  timm:
-    pretrained: false
-    kwargs: {}
-  hf:
-    task: sequence_classification
-    local_files_only: false
-    trust_remote_code: false
-    gradient_checkpointing: false
-    kwargs: {}
 
 num_clients: 20
 num_rounds: 20
@@ -63,13 +57,11 @@ eval_every: 1
 enable_global_eval: true
 enable_federated_eval: true
 federated_eval_scheme: holdout_dataset
-holdout_eval_num_clients: 0
-holdout_eval_client_ratio: 0.0
+holdout_client_counts: 0
+holdout_client_ratio: 0.0
 show_eval_progress: true
 stateful_clients: false
 client_processing_chunk_size: 0
-offload_to_cpu_after_local_job: true
-clear_cuda_cache_after_chunk: false
 on_demand_num_workers: 0
 on_demand_eval_num_workers: 0
 
@@ -93,7 +85,6 @@ data_dir: ./data
 log_dir: ./logs
 logging_backend: file
 logging_scheme: auto
-per_client_logging_threshold: 10
 per_client_logging_warning_threshold: 50
 project_name: appfl-sim
 experiment_name: appfl-sim
@@ -108,6 +99,3 @@ num_embeddings: 10000
 embedding_size: 128
 seq_len: 128
 use_model_tokenizer: false
-use_pt_model: false
-is_seq2seq: false
-need_embedding: true

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 import torch
 
@@ -15,7 +15,7 @@ from appfl_sim.datasets import (
     fetch_torchtext_dataset,
     fetch_torchvision_dataset,
 )
-from appfl_sim.datasets.common import extract_targets, simulate_split, split_subset_for_client, to_namespace
+from appfl_sim.datasets.common import to_namespace
 
 
 LEAF_DATASETS = {"FEMNIST", "SHAKESPEARE", "SENT140", "CELEBA", "REDDIT"}
@@ -109,49 +109,3 @@ def load_dataset(args: Any):
         return fetch_torchaudio_dataset(args)
 
     return fetch_torchvision_dataset(args)
-
-
-# Backward-compatible wrappers
-
-
-def load_global_dataset(cfg: Dict[str, Any]):
-    _, client_datasets, server_dataset, args = load_dataset(cfg)
-    pooled_train = torch.utils.data.ConcatDataset([tr for tr, _ in client_datasets])
-    return pooled_train, server_dataset, args.num_classes, args.input_shape
-
-
-def make_client_splits(train_dataset, cfg: Dict[str, Any]) -> dict[int, Any]:
-    args = to_namespace(cfg)
-
-    targets = extract_targets(train_dataset)
-    return simulate_split(
-        labels=targets,
-        num_clients=int(args.num_clients),
-        split_type=str(args.split_type),
-        seed=int(args.seed),
-        min_classes=int(args.min_classes),
-        dirichlet_alpha=float(args.dirichlet_alpha),
-        unbalanced_keep_min=float(args.unbalanced_keep_min),
-    )
-
-
-def build_local_client_datasets(
-    train_dataset,
-    split_map: dict[int, Any],
-    local_client_ids,
-    local_val_ratio: float,
-    seed: int,
-):
-    train_sets = {}
-    val_sets = {}
-    for cid in local_client_ids:
-        tr_ds, te_ds = split_subset_for_client(
-            raw_train=train_dataset,
-            sample_indices=split_map[int(cid)],
-            client_id=int(cid),
-            test_size=float(local_val_ratio),
-            seed=int(seed),
-        )
-        train_sets[int(cid)] = tr_ds
-        val_sets[int(cid)] = te_ds
-    return train_sets, val_sets

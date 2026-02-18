@@ -17,10 +17,16 @@ class ModelSpec:
     in_channels: int
     input_shape: Tuple[int, ...]
     context: Dict[str, Any]
-    kwargs: Dict[str, Any]
-    appfl: Dict[str, Any]
-    timm: Dict[str, Any]
-    hf: Dict[str, Any]
+    model_kwargs: Dict[str, Any]
+    timm_pretrained: bool
+    timm_kwargs: Dict[str, Any]
+    hf_task: str
+    hf_pretrained: bool
+    hf_local_files_only: bool
+    hf_trust_remote_code: bool
+    hf_gradient_checkpointing: bool
+    hf_kwargs: Dict[str, Any]
+    hf_config_overrides: Dict[str, Any]
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -91,10 +97,6 @@ def _default_model_context(
         "embedding_size": _safe_int(cfg.get("embedding_size", 128), 128),
         "seq_len": _safe_int(cfg.get("seq_len", 128), 128),
         "B": _safe_int(cfg.get("batch_size", 32), 32),
-        "use_pt_model": _safe_bool(cfg.get("use_pt_model", False), False),
-        "is_seq2seq": _safe_bool(cfg.get("is_seq2seq", False), False),
-        "need_embedding": _safe_bool(cfg.get("need_embedding", True), True),
-        "glove_emb": cfg.get("glove_emb", None),
     }
     context.update(cfg)
     return context
@@ -106,21 +108,15 @@ def _parse_model_spec(
     num_classes: int,
 ) -> ModelSpec:
     context = _default_model_context(cfg, input_shape=input_shape, num_classes=num_classes)
-    model_cfg = _as_dict(cfg.get("model", {}))
-
-    source = str(model_cfg.get("source", "auto")).lower()
-    raw_name = str(model_cfg.get("name", "")).strip()
-    if source in {"timm", "hf"} and not raw_name:
+    source = str(cfg.get("model_source", "auto")).lower()
+    name = str(cfg.get("model_name", "SimpleCNN")).strip()
+    if source in {"timm", "hf"} and not name:
         raise ValueError(
-            f"model.source={source} requires model.name to be set to the exact backend name/card."
+            f"model_source={source} requires model_name to be set to the exact backend name/card."
         )
-    if source in {"timm", "hf"}:
-        name = raw_name
-    else:
-        name = str(cfg.get("model_name", "SimpleCNN"))
-    in_channels = int(model_cfg.get("in_channels", context.get("in_channels", 1)))
+    in_channels = int(cfg.get("model_in_channels", context.get("in_channels", 1)))
     resolved_num_classes = int(
-        model_cfg.get("num_classes", context.get("num_classes", num_classes))
+        cfg.get("model_num_classes", context.get("num_classes", num_classes))
     )
 
     return ModelSpec(
@@ -130,10 +126,18 @@ def _parse_model_spec(
         in_channels=in_channels,
         input_shape=tuple(input_shape),
         context=context,
-        kwargs=_as_dict(model_cfg.get("kwargs", {})),
-        appfl=_as_dict(model_cfg.get("appfl", {})),
-        timm=_as_dict(model_cfg.get("timm", {})),
-        hf=_as_dict(model_cfg.get("hf", {})),
+        model_kwargs=_as_dict(cfg.get("model_kwargs", {})),
+        timm_pretrained=_safe_bool(cfg.get("model_timm_pretrained", False), False),
+        timm_kwargs=_as_dict(cfg.get("model_timm_kwargs", {})),
+        hf_task=str(cfg.get("model_hf_task", "sequence_classification")).strip().lower(),
+        hf_pretrained=_safe_bool(cfg.get("model_hf_pretrained", False), False),
+        hf_local_files_only=_safe_bool(cfg.get("model_hf_local_files_only", False), False),
+        hf_trust_remote_code=_safe_bool(cfg.get("model_hf_trust_remote_code", False), False),
+        hf_gradient_checkpointing=_safe_bool(
+            cfg.get("model_hf_gradient_checkpointing", False), False
+        ),
+        hf_kwargs=_as_dict(cfg.get("model_hf_kwargs", {})),
+        hf_config_overrides=_as_dict(cfg.get("model_hf_config_overrides", {})),
     )
 
 
@@ -141,21 +145,17 @@ def _load_appfl_model(spec: ModelSpec):
     if spec.name not in MODEL_REGISTRY:
         available = ", ".join(sorted(MODEL_REGISTRY.keys()))
         raise ValueError(
-            f"model.source=appfl requires an exact local model name. "
+            f"model_source=appfl requires an exact local model name. "
             f"Got '{spec.name}'. Available: {available}"
         )
 
     model_class = get_model_class(spec.name)
 
     context = dict(spec.context)
-    context.update(spec.kwargs)
-    context.update(_as_dict(spec.appfl.get("kwargs", {})))
+    context.update(spec.model_kwargs)
     context["model_name"] = spec.name
     context["num_classes"] = spec.num_classes
     context["in_channels"] = spec.in_channels
-    context["use_pt_model"] = bool(
-        spec.appfl.get("pretrained", spec.context.get("use_pt_model", False))
-    )
 
     signature = inspect.signature(model_class.__init__)
     model_args: Dict[str, Any] = {}
@@ -193,19 +193,19 @@ def _load_timm_model(spec: ModelSpec):
         ) from e
 
     timm_name = _resolve_timm_model_name(spec)
-    create_kwargs = _as_dict(spec.kwargs)
-    create_kwargs.update(_as_dict(spec.timm.get("kwargs", {})))
+    create_kwargs = dict(spec.model_kwargs)
+    create_kwargs.update(spec.timm_kwargs)
 
     create_kwargs.setdefault("num_classes", int(spec.num_classes))
     create_kwargs.setdefault("in_chans", int(spec.in_channels))
-    pretrained = bool(spec.timm.get("pretrained", False))
+    pretrained = bool(spec.timm_pretrained)
 
     try:
         return timm.create_model(timm_name, pretrained=pretrained, **create_kwargs)
     except Exception as e:
         raise ValueError(
             f"Failed to create timm model '{timm_name}'. "
-            "Provide an exact timm model name in model.name."
+            "Provide an exact timm model name in model_name."
         ) from e
 
 
@@ -256,7 +256,7 @@ def _resolve_hf_model_id(spec: ModelSpec) -> str:
 
 
 def _resolve_hf_task(spec: ModelSpec) -> str:
-    task = str(spec.hf.get("task", "")).strip().lower()
+    task = str(spec.hf_task).strip().lower()
     if task:
         return task
     if len(spec.input_shape) >= 2:
@@ -267,21 +267,21 @@ def _resolve_hf_task(spec: ModelSpec) -> str:
 def _build_hf_scratch_config(model_id: str, spec: ModelSpec, task: str):
     from transformers import AutoConfig
 
-    overrides = _as_dict(spec.hf.get("config_overrides", {}))
+    overrides = dict(spec.hf_config_overrides)
     overrides.setdefault("num_labels", int(spec.num_classes))
     if task in {"sequence_classification", "token_classification", "causal_lm"}:
         overrides.setdefault("vocab_size", int(spec.context.get("num_embeddings", 10000)))
     try:
         return AutoConfig.from_pretrained(
             model_id,
-            local_files_only=bool(spec.hf.get("local_files_only", False)),
-            trust_remote_code=bool(spec.hf.get("trust_remote_code", False)),
+            local_files_only=bool(spec.hf_local_files_only),
+            trust_remote_code=bool(spec.hf_trust_remote_code),
             **overrides,
         )
     except Exception as e:
         raise ValueError(
-            "pretrained=false requires accessible HF config for model.name. "
-            "Use hf.local_files_only=false to allow download, or cache the model config first."
+            "pretrained=false requires accessible HF config for model_name. "
+            "Use model_hf_local_files_only=false to allow download, or cache the model config first."
         ) from e
 
 
@@ -301,12 +301,12 @@ def _load_hf_model(spec: ModelSpec):
 
     task = _resolve_hf_task(spec)
     model_id = _resolve_hf_model_id(spec)
-    pretrained = bool(spec.hf.get("pretrained", False))
-    local_files_only = bool(spec.hf.get("local_files_only", False))
-    trust_remote_code = bool(spec.hf.get("trust_remote_code", False))
+    pretrained = bool(spec.hf_pretrained)
+    local_files_only = bool(spec.hf_local_files_only)
+    trust_remote_code = bool(spec.hf_trust_remote_code)
 
-    common_kwargs = _as_dict(spec.kwargs)
-    common_kwargs.update(_as_dict(spec.hf.get("kwargs", {})))
+    common_kwargs = dict(spec.model_kwargs)
+    common_kwargs.update(spec.hf_kwargs)
 
     if task == "sequence_classification":
         model_cls = AutoModelForSequenceClassification
@@ -334,7 +334,7 @@ def _load_hf_model(spec: ModelSpec):
         config = _build_hf_scratch_config(model_id, spec, task)
         model = model_cls.from_config(config)
 
-    if bool(spec.hf.get("gradient_checkpointing", False)) and hasattr(
+    if bool(spec.hf_gradient_checkpointing) and hasattr(
         model, "gradient_checkpointing_enable"
     ):
         model.gradient_checkpointing_enable()
@@ -360,7 +360,7 @@ def _resolve_source(spec: ModelSpec) -> str:
     if source in {"appfl", "timm", "hf"}:
         return source
     if source != "auto":
-        raise ValueError("model.source must be one of: auto, appfl, timm, hf")
+        raise ValueError("model_source must be one of: auto, appfl, timm, hf")
 
     if spec.name in MODEL_REGISTRY:
         return "appfl"
@@ -371,7 +371,7 @@ def _resolve_source(spec: ModelSpec) -> str:
 
     raise ValueError(
         f"Unable to resolve model source for exact name '{spec.name}'. "
-        "Set model.source explicitly and provide exact backend model name/card."
+        "Set model_source explicitly and provide exact backend model name/card."
     )
 
 
@@ -384,8 +384,8 @@ def load_model(
 
     Backends:
     - ``appfl``: local models in ``appfl_sim.models``.
-    - ``timm``: exact model name via ``model.name``.
-    - ``hf``: exact model card id via ``model.name``.
+    - ``timm``: exact model name via ``model_name``.
+    - ``hf``: exact model card id via ``model_name``.
 
     Aliases are intentionally disabled to avoid implicit behavior.
     """

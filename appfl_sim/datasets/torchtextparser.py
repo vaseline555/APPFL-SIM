@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import logging
 from pathlib import Path
 
 import torch
@@ -10,8 +11,13 @@ from appfl_sim.datasets.common import (
     clientize_raw_dataset,
     finalize_dataset_outputs,
     infer_num_classes,
+    make_load_tag,
+    resolve_dataset_logger,
     to_namespace,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def _tokenizer_from_args(args):
@@ -81,6 +87,9 @@ def _unpack_rows(rows):
 
 def fetch_torchtext_dataset(args):
     args = to_namespace(args)
+    active_logger = resolve_dataset_logger(args, logger)
+    tag = make_load_tag(str(args.dataset), benchmark="TORCHTEXT")
+    active_logger.info("[%s] resolving dataset class.", tag)
     try:
         import torchtext
     except Exception as e:  # pragma: no cover
@@ -88,6 +97,7 @@ def fetch_torchtext_dataset(args):
 
     data_root = Path(str(args.data_dir)).expanduser()
     data_root.mkdir(parents=True, exist_ok=True)
+    active_logger.info("[%s] reading train/test splits.", tag)
 
     if not hasattr(torchtext.datasets, args.dataset):
         raise ValueError(f"Unknown torchtext dataset: {args.dataset}")
@@ -144,6 +154,7 @@ def fetch_torchtext_dataset(args):
 
     raw_train = TensorBackedDataset(tr_ids, tr_labels, name=f"[{args.dataset}] TRAIN")
     raw_test = TensorBackedDataset(te_ids, te_labels, name=f"[{args.dataset}] TEST")
+    active_logger.info("[%s] building federated client splits.", tag)
 
     split_map, client_datasets = clientize_raw_dataset(raw_train, args)
     args.need_embedding = True
@@ -158,4 +169,5 @@ def fetch_torchtext_dataset(args):
     args.input_shape = tuple(tr_ids.shape[1:])
     args.seq_len = int(tr_ids.shape[1]) if tr_ids.ndim >= 2 else int(args.seq_len)
     args.need_embedding = True
+    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
     return split_map, client_datasets, server_dataset, args

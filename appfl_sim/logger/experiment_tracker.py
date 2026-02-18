@@ -34,9 +34,7 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
     experiment_name = str(
         cfg.get("experiment_name", cfg.get("exp_name", project_name))
     )
-    run_timestamp = str(cfg.get("run_timestamp", "")).strip()
-    if run_timestamp == "":
-        run_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    run_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     log_dir = str(cfg.get("log_dir", "./logs"))
     wandb_entity = str(cfg.get("wandb_entity", ""))
     wandb_mode = str(cfg.get("wandb_mode", "online")).lower()
@@ -68,8 +66,10 @@ def _has_wandb_api_credential() -> bool:
 class ExperimentTracker:
     """Track experiment metrics for file-only, TensorBoard, or Weights & Biases backends."""
 
-    def __init__(self, config: DictConfig | dict):
+    def __init__(self, config: DictConfig | dict, run_timestamp: str | None = None):
         cfg = _extract_tracker_config(config)
+        if run_timestamp is not None and str(run_timestamp).strip():
+            cfg.run_timestamp = str(run_timestamp).strip()
         self.backend = cfg.backend
         self._writer = None
         self._wandb = None
@@ -216,5 +216,7 @@ class ExperimentTracker:
             self._run = None
 
 
-def create_experiment_tracker(config: DictConfig | dict) -> ExperimentTracker:
-    return ExperimentTracker(config)
+def create_experiment_tracker(
+    config: DictConfig | dict, run_timestamp: str | None = None
+) -> ExperimentTracker:
+    return ExperimentTracker(config, run_timestamp=run_timestamp)

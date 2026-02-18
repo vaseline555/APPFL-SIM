@@ -1,12 +1,59 @@
 from __future__ import annotations
 
 import random
+import logging
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset, Subset
+
+
+class _DatasetLoggerAdapter:
+    """Adapter for APPFL custom loggers to stdlib-like interface."""
+
+    def __init__(self, target):
+        self._target = target
+
+    @staticmethod
+    def _fmt(msg: str, *args) -> str:
+        if args:
+            try:
+                return str(msg) % args
+            except Exception:
+                return f"{msg} {' '.join(str(a) for a in args)}"
+        return str(msg)
+
+    def info(self, msg, *args, **kwargs):
+        self._target.info(self._fmt(msg, *args))
+
+    def warning(self, msg, *args, **kwargs):
+        if hasattr(self._target, "warning"):
+            self._target.warning(self._fmt(msg, *args))
+        else:
+            self._target.info(self._fmt(msg, *args))
+
+    def error(self, msg, *args, **kwargs):
+        if hasattr(self._target, "error"):
+            self._target.error(self._fmt(msg, *args))
+        else:
+            self._target.info(self._fmt(msg, *args))
+
+
+def resolve_dataset_logger(args: Any, default_logger: logging.Logger):
+    candidate = getattr(args, "logger", None)
+    if candidate is None:
+        return default_logger
+    if isinstance(candidate, logging.Logger):
+        return candidate
+    return _DatasetLoggerAdapter(candidate)
+
+
+def make_load_tag(dataset_name: str, benchmark: str | None = None) -> str:
+    ds = str(dataset_name).strip().upper()
+    bench = str(benchmark or "").strip().upper()
+    return f"{bench}-{ds}" if bench else ds
 
 
 class TensorBackedDataset(Dataset):

@@ -17,8 +17,8 @@ enable_global_eval: true
 enable_federated_eval: true
 federated_eval_scheme: holdout_dataset
 eval_every: 2
-holdout_eval_num_clients: 0
-holdout_eval_client_ratio: 0.0
+holdout_client_counts: 0
+holdout_client_ratio: 0.0
 
 local_epochs: 1
 batch_size: 32

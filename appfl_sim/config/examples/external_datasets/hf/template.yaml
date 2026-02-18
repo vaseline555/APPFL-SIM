@@ -23,21 +23,19 @@ lr: 0.005
 optimizer: AdamW
 criterion: CrossEntropyLoss
 
-model:
-  source: hf
-  # Exact HF model card id (required).
-  # Override from CLI, e.g. model.name=bert-base-uncased
-  name: distilbert-base-uncased
-  pretrained: false
-  hf:
-    task: sequence_classification
-    local_files_only: true
-    config_overrides:
-      dim: 64
-      hidden_dim: 128
-      n_layers: 2
-      n_heads: 4
-      dropout: 0.1
+model_source: hf
+# Exact HF model card id (required).
+# Override from CLI, e.g. model_name=bert-base-uncased
+model_name: distilbert-base-uncased
+model_hf_pretrained: false
+model_hf_task: sequence_classification
+model_hf_local_files_only: true
+model_hf_config_overrides:
+  dim: 64
+  hidden_dim: 128
+  n_layers: 2
+  n_heads: 4
+  dropout: 0.1
 
 logging_backend: file
 project_name: hf-sim

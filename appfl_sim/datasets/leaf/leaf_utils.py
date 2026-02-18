@@ -219,15 +219,16 @@ def _download_from_source(download_root: Path, source: str, resource):
         )
 
 
-def _ensure_resource(download_root: Path, dataset_name: str, resource):
+def _ensure_resource(download_root: Path, dataset_name: str, resource, logger_override=None):
+    active_logger = logger_override or logger
     if _resource_ready(download_root, resource):
         return
 
     errors = []
     for source in resource.get("sources", []):
         try:
-            logger.info(
-                "[LOAD] [LEAF-%s] downloading `%s` from %s",
+            active_logger.info(
+                "[LEAF-%s] downloading `%s` from %s",
                 dataset_name.upper(),
                 resource.get("name", resource["filename"]),
                 source,
@@ -241,12 +242,13 @@ def _ensure_resource(download_root: Path, dataset_name: str, resource):
     name = resource.get("name", resource["filename"])
     details = "\n".join(errors) if errors else "no source candidates configured"
     raise RuntimeError(
-        f"[LOAD] [LEAF-{dataset_name.upper()}] failed to download `{name}`.\n{details}"
+        f"[LEAF-{dataset_name.upper()}] failed to download `{name}`.\n{details}"
     )
 
 
-def download_data(download_root, dataset_name):
+def download_data(download_root, dataset_name, logger=None):
     """Download LEAF raw data with fallback mirrors for brittle/stale links."""
+    active_logger = logger or globals()["logger"]
     dataset_name = str(dataset_name).strip().lower()
     if dataset_name not in RESOURCE_MAP:
         raise ValueError(
@@ -257,7 +259,7 @@ def download_data(download_root, dataset_name):
     root = Path(download_root).expanduser()
     root.mkdir(parents=True, exist_ok=True)
 
-    logger.info("[LOAD] [LEAF-%s] start downloading.", dataset_name.upper())
+    active_logger.info("[LEAF-%s] start downloading.", dataset_name.upper())
     for resource in RESOURCE_MAP[dataset_name]:
-        _ensure_resource(root, dataset_name, resource)
-    logger.info("[LOAD] [LEAF-%s] finished downloading.", dataset_name.upper())
+        _ensure_resource(root, dataset_name, resource, logger_override=active_logger)
+    active_logger.info("[LEAF-%s] finished downloading.", dataset_name.upper())

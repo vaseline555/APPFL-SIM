@@ -4,6 +4,7 @@ import importlib
 import json
 import logging
 import random
+import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -30,6 +31,62 @@ _DEFAULT_LEAF_META = {
 _LEAF_SUPPORTED = set(_DEFAULT_LEAF_META.keys())
 
 logger = logging.getLogger(__name__)
+
+
+class _LeafLoggerAdapter:
+    """Adapter that normalizes APPFL custom loggers to stdlib-like logger methods."""
+
+    def __init__(self, target):
+        self._target = target
+
+    def _fmt(self, msg: str, *args) -> str:
+        if args:
+            try:
+                return str(msg) % args
+            except Exception:
+                return f"{msg} {' '.join(str(a) for a in args)}"
+        return str(msg)
+
+    def info(self, msg, *args, **kwargs):
+        self._target.info(self._fmt(msg, *args))
+
+    def debug(self, msg, *args, **kwargs):
+        if hasattr(self._target, "debug"):
+            self._target.debug(self._fmt(msg, *args))
+        else:
+            self._target.info(self._fmt(msg, *args))
+
+    def warning(self, msg, *args, **kwargs):
+        if hasattr(self._target, "warning"):
+            self._target.warning(self._fmt(msg, *args))
+        else:
+            self._target.info(self._fmt(msg, *args))
+
+    def error(self, msg, *args, **kwargs):
+        if hasattr(self._target, "error"):
+            self._target.error(self._fmt(msg, *args))
+        else:
+            self._target.info(self._fmt(msg, *args))
+
+    def exception(self, msg, *args, **kwargs):
+        text = self._fmt(msg, *args)
+        exc_text = traceback.format_exc()
+        if exc_text and exc_text.strip() != "NoneType: None":
+            text = f"{text}\n{exc_text}"
+        if hasattr(self._target, "error"):
+            self._target.error(text)
+        else:
+            self._target.info(text)
+
+
+def _resolve_leaf_logger(args):
+    candidate = getattr(args, "logger", None)
+    if candidate is None:
+        return logger
+    # Preserve standard loggers, adapt custom APPFL loggers.
+    if isinstance(candidate, logging.Logger):
+        return candidate
+    return _LeafLoggerAdapter(candidate)
 
 
 def _as_bool(value: Any, default: bool = True) -> bool:
@@ -61,6 +118,7 @@ def _is_leaf_ready(dataset_root: Path) -> bool:
 def _prepare_leaf_data(args, dataset_key: str) -> Path:
     data_root = Path(str(args.data_dir)).expanduser()
     dataset_root = data_root / dataset_key
+    leaf_logger = _resolve_leaf_logger(args)
     if _is_leaf_ready(dataset_root):
         return dataset_root
 
@@ -83,11 +141,15 @@ def _prepare_leaf_data(args, dataset_key: str) -> Path:
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     if not any(raw_dir.iterdir()):
-        logger.info("[LOAD] [LEAF-%s] raw data not found, downloading.", dataset_key.upper())
-        download_data(download_root=str(raw_dir), dataset_name=dataset_key)
+        leaf_logger.info("[LEAF-%s] raw artifacts missing; downloading.", dataset_key.upper())
+        download_data(
+            download_root=str(raw_dir),
+            dataset_name=dataset_key,
+            logger=leaf_logger,
+        )
 
     if not _has_json_files(dataset_root / "all_data"):
-        logger.info("[LOAD] [LEAF-%s] running preprocessing.", dataset_key.upper())
+        leaf_logger.info("[LEAF-%s] preprocessing raw artifacts.", dataset_key.upper())
         try:
             preprocess_mod = importlib.import_module(
                 f"appfl_sim.datasets.leaf.preprocess.{dataset_key}"
@@ -99,10 +161,15 @@ def _prepare_leaf_data(args, dataset_key: str) -> Path:
                     "Install it with: pip install pandas"
                 ) from exc
             raise
-        preprocess_mod.preprocess(str(data_root))
+        if hasattr(preprocess_mod, "logger"):
+            preprocess_mod.logger = leaf_logger
+        try:
+            preprocess_mod.preprocess(str(data_root), logger=leaf_logger)
+        except TypeError:
+            preprocess_mod.preprocess(str(data_root))
 
     if not _has_train_test_json(dataset_root):
-        logger.info("[LOAD] [LEAF-%s] creating train/test client splits.", dataset_key.upper())
+        leaf_logger.info("[LEAF-%s] building train/test client splits.", dataset_key.upper())
         postprocess_leaf(
             dataset_name=dataset_key,
             root=str(data_root),
@@ -110,6 +177,7 @@ def _prepare_leaf_data(args, dataset_key: str) -> Path:
             raw_data_fraction=float(getattr(args, "leaf_raw_data_fraction", 1.0)),
             min_samples_per_clients=int(getattr(args, "leaf_min_samples_per_client", 2)),
             test_size=float(getattr(args, "test_size", 0.2)),
+            logger=leaf_logger,
         )
 
     if not _is_leaf_ready(dataset_root):
@@ -466,7 +534,9 @@ def _pretokenize_leaf_text_data(
 def fetch_leaf(args):
     """LEAF parser adapted from AAggFF processing flow with compact implementation."""
     args = to_namespace(args)
+    leaf_logger = _resolve_leaf_logger(args)
     dataset_key = str(args.dataset).strip().lower()
+    leaf_logger.info("[LEAF-%s] load processed dataset.", dataset_key.upper())
     dataset_root = _prepare_leaf_data(args, dataset_key)
 
     train_obj, test_obj = _resolve_leaf_train_test(args, dataset_root, dataset_key)
@@ -482,6 +552,7 @@ def fetch_leaf(args):
         raise ValueError(
             "No LEAF clients selected after applying num_clients/subsampling constraints."
         )
+    leaf_logger.info("[LEAF-%s] set up %d clients.", dataset_key.upper(), len(users))
 
     label_to_idx = _build_label_vocab(train_obj, test_obj)
     image_root = _resolve_image_root(args, dataset_root, dataset_key)
@@ -554,6 +625,11 @@ def fetch_leaf(args):
     else:
         args.in_channels = 1
 
+    leaf_logger.info(
+        "[LEAF-%s] finished loading (%d clients).",
+        dataset_key.upper(),
+        int(args.num_clients),
+    )
     return package_dataset_outputs(split_map, client_datasets, None, args)
 
 

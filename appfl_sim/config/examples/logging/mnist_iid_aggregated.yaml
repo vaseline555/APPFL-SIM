@@ -15,7 +15,6 @@ batch_size: 32
 
 logging_backend: file
 logging_scheme: server_only
-per_client_logging_threshold: 10
 per_client_logging_warning_threshold: 50
 
 project_name: mnist-aggregated-log

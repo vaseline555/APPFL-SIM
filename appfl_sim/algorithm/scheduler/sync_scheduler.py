@@ -6,7 +6,7 @@ from omegaconf import DictConfig
 
 from appfl_sim.algorithm.scheduler.base_scheduler import BaseScheduler
 from appfl_sim.algorithm.aggregator import BaseAggregator
-from appfl_sim.misc.memory_utils import optimize_memory_cleanup
+from appfl_sim.misc.system_utils import optimize_memory_cleanup
 
 
 class SyncScheduler(BaseScheduler):
