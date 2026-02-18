@@ -1,11 +1,10 @@
 from .base_scheduler import BaseScheduler
-from .sync_scheduler import SyncScheduler
-from .async_scheduler import AsyncScheduler
-from .compass_scheduler import CompassScheduler
 
-__all__ = [
-    "BaseScheduler",
-    "SyncScheduler",
-    "AsyncScheduler",
-    "CompassScheduler",
-]
+__all__ = ["BaseScheduler"]
+
+try:
+    from .sync_scheduler import SyncScheduler
+
+    __all__.append("SyncScheduler")
+except Exception:  # pragma: no cover
+    SyncScheduler = None

@@ -53,8 +53,10 @@ Most new FL methods need these pieces:
 - Add: `appfl_sim/config/algorithms/<algo>.yaml`
 
 Important current note:
-- The simulation runner currently uses a FedAvg-style loop by default.
-- If your algorithm needs different server behavior, route `config.algorithm` to your custom server path in `appfl_sim/runner.py`.
+- You do **not** need to edit `runner.py` for new algorithms.
+- Add your classes under `appfl_sim/algorithm/...`, then set config keys:
+  - `algorithm=<algo_label>` (metadata + default class-name inference)
+  - optional explicit overrides: `aggregator`, `scheduler`, `trainer`
 
 ---
 
@@ -76,6 +78,9 @@ Minimum idea:
 
 ```yaml
 algorithm: <algo>
+aggregator: <YourAggregatorClass>
+scheduler: SyncScheduler
+trainer: VanillaTrainer
 num_clients: 3
 num_rounds: 2
 num_sampled_clients: 3

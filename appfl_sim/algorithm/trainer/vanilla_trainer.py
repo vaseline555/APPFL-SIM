@@ -46,6 +46,28 @@ logging.getLogger().handlers.clear()
 logging.getLogger().setLevel(logging.WARNING)
 
 
+def _make_dataloader(
+    dataset,
+    *,
+    batch_size: int,
+    shuffle: bool,
+    num_workers: int,
+    pin_memory: bool,
+    persistent_workers: bool,
+    prefetch_factor: int,
+):
+    kwargs = {
+        "batch_size": int(batch_size),
+        "shuffle": bool(shuffle),
+        "num_workers": int(num_workers),
+        "pin_memory": bool(pin_memory),
+    }
+    if int(num_workers) > 0:
+        kwargs["persistent_workers"] = bool(persistent_workers)
+        kwargs["prefetch_factor"] = max(2, int(prefetch_factor))
+    return DataLoader(dataset, **kwargs)
+
+
 def _default_classification_accuracy(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """Fallback accuracy metric when no metric is configured."""
     if y_true.size == 0 or y_pred.size == 0:
@@ -87,15 +109,8 @@ class VanillaTrainer(BaseTrainer):
             logger=logger,
             **kwargs,
         )
-        # Backward compatibility with sim-style train config keys.
         if not hasattr(train_configs, "mode"):
             train_configs.mode = "epoch"
-        if (
-            train_configs.mode == "epoch"
-            and not hasattr(train_configs, "num_local_epochs")
-            and hasattr(train_configs, "local_epochs")
-        ):
-            train_configs.num_local_epochs = int(train_configs.local_epochs)
         if not hasattr(train_configs, "optim"):
             train_configs.optim = str(
                 train_configs.get("optimizer", train_configs.get("optim", "SGD"))
@@ -137,29 +152,48 @@ class VanillaTrainer(BaseTrainer):
         self.privacy_engine = None
         if not hasattr(self.train_configs, "device"):
             self.train_configs.device = "cpu"
-        self.train_dataloader = DataLoader(
+        num_workers = int(self.train_configs.get("num_workers", 0))
+        train_pin_memory = bool(self.train_configs.get("train_pin_memory", False))
+        eval_pin_memory = bool(
+            self.train_configs.get("eval_pin_memory", train_pin_memory)
+        )
+        persistent_workers = bool(
+            self.train_configs.get("dataloader_persistent_workers", False)
+        )
+        prefetch_factor = int(self.train_configs.get("dataloader_prefetch_factor", 2))
+
+        self.train_dataloader = _make_dataloader(
             self.train_dataset,
             batch_size=self.train_configs.get("train_batch_size", 32),
             shuffle=self.train_configs.get("train_data_shuffle", True),
-            num_workers=self.train_configs.get("num_workers", 0),
+            num_workers=num_workers,
+            pin_memory=train_pin_memory,
+            persistent_workers=persistent_workers,
+            prefetch_factor=prefetch_factor,
         )
         self.val_dataloader = (
-            DataLoader(
+            _make_dataloader(
                 self.val_dataset,
                 batch_size=self.train_configs.get("val_batch_size", 32),
                 shuffle=self.train_configs.get("val_data_shuffle", False),
-                num_workers=self.train_configs.get("num_workers", 0),
+                num_workers=num_workers,
+                pin_memory=eval_pin_memory,
+                persistent_workers=persistent_workers,
+                prefetch_factor=prefetch_factor,
             )
             if self.val_dataset is not None
             else None
         )
         self.test_dataset = getattr(self, "test_dataset", None)
         self.test_dataloader = (
-            DataLoader(
+            _make_dataloader(
                 self.test_dataset,
                 batch_size=self.train_configs.get("val_batch_size", 32),
                 shuffle=False,
-                num_workers=self.train_configs.get("num_workers", 0),
+                num_workers=num_workers,
+                pin_memory=eval_pin_memory,
+                persistent_workers=persistent_workers,
+                prefetch_factor=prefetch_factor,
             )
             if self.test_dataset is not None
             else None

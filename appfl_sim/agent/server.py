@@ -201,10 +201,6 @@ class ServerAgent:
                 return future
         return None
 
-    @property
-    def client_fraction(self) -> float:
-        return float(self.server_agent_config.server_configs.get("client_fraction", 1.0))
-
     def aggregate(
         self,
         local_states: Dict[Union[int, str], Union[Dict, OrderedDict]],

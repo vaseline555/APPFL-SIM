@@ -3,6 +3,11 @@ exp_name: appfl-sim
 seed: 42
 
 algorithm: fedavg
+aggregator: ""
+aggregator_kwargs: {}
+scheduler: ""
+scheduler_kwargs: {}
+trainer: ""
 dataset: MNIST
 model_name: SimpleCNN
 dataset_loader: auto
@@ -21,7 +26,6 @@ flamby_data_terms_accepted: false
 model:
   source: auto
   name: ""
-  pretrained: false
   kwargs: {}
   appfl:
     kwargs: {}
@@ -88,10 +92,9 @@ client_subsample_seed: 42
 data_dir: ./data
 log_dir: ./logs
 logging_backend: file
-client_logging_scheme: auto
+logging_scheme: auto
 per_client_logging_threshold: 10
 per_client_logging_warning_threshold: 50
-aggregated_logging_scheme: server_only
 project_name: appfl-sim
 experiment_name: appfl-sim
 wandb_entity: ""

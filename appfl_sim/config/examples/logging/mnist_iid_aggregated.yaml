@@ -14,8 +14,7 @@ local_epochs: 1
 batch_size: 32
 
 logging_backend: file
-client_logging_scheme: aggregated
-aggregated_logging_scheme: server_only
+logging_scheme: server_only
 per_client_logging_threshold: 10
 per_client_logging_warning_threshold: 50
 

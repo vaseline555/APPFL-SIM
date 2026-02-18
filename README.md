@@ -100,16 +100,14 @@ MPI runtime knobs for multi-node/multi-GPU:
 
 Client logging scale knobs (applies to serial and MPI):
 
-- `client_logging_scheme=auto|per_client|aggregated` (default: `auto`)
+- `logging_scheme=auto|both|server_only` (default: `auto`)
   - `auto`: per-client logging is enabled only when `num_clients <= per_client_logging_threshold`.
-  - `per_client`: always log per client.
-  - `aggregated`: disable per-client files and keep server-side metrics only.
+  - `both`: always log per client.
+  - `server_only`: disable per-client files and keep server-side metrics only.
 - `per_client_logging_threshold` (default: `10`)
-  - cutoff used by `client_logging_scheme=auto`.
+  - cutoff used by `logging_scheme=auto`.
 - `per_client_logging_warning_threshold` (default: `50`)
-  - warning threshold when `client_logging_scheme=per_client`.
-- `aggregated_logging_scheme=server_only` (default: `server_only`)
-  - currently supported aggregated mode.
+  - warning threshold when `logging_scheme=both`.
 
 Example (multi-node style launch):
 

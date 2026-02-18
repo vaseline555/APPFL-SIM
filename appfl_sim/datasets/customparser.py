@@ -90,9 +90,7 @@ def _normalize_loader_result(result: Any, args: Any):
 
 
 def _load_from_callable(args):
-    loader_spec = str(
-        getattr(args, "custom_dataset_loader", getattr(args, "external_dataset_loader", ""))
-    ).strip()
+    loader_spec = str(getattr(args, "custom_dataset_loader", "")).strip()
     if ":" not in loader_spec:
         raise ValueError(
             "custom_dataset_loader must be in 'package.module:function' format."
@@ -104,7 +102,7 @@ def _load_from_callable(args):
     kwargs_raw = getattr(
         args,
         "custom_dataset_kwargs",
-        getattr(args, "external_dataset_kwargs", "{}"),
+        "{}",
     )
     if isinstance(kwargs_raw, str):
         kwargs = json.loads(kwargs_raw) if kwargs_raw.strip() else {}
@@ -230,9 +228,7 @@ def fetch_custom_dataset(args):
     """
     args = to_namespace(args)
 
-    loader_spec = str(
-        getattr(args, "custom_dataset_loader", getattr(args, "external_dataset_loader", ""))
-    ).strip()
+    loader_spec = str(getattr(args, "custom_dataset_loader", "")).strip()
     dataset_path = str(getattr(args, "custom_dataset_path", "")).strip()
 
     if loader_spec:

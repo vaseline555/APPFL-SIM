@@ -41,8 +41,11 @@ server_device: cuda:0
 # Large-client scalability knobs
 stateful_clients: false
 client_processing_chunk_size: 16
-on_demand_workers: 0
+on_demand_num_workers: 0
 on_demand_eval_num_workers: 0
+pin_memory: true
+dataloader_persistent_workers: false
+dataloader_prefetch_factor: 2
 
 download: false
 data_dir: ./data

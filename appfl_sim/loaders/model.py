@@ -13,7 +13,6 @@ from appfl_sim.models import MODEL_REGISTRY, get_model_class
 class ModelSpec:
     source: str
     name: str
-    pretrained: bool
     num_classes: int
     in_channels: int
     input_shape: Tuple[int, ...]
@@ -109,14 +108,16 @@ def _parse_model_spec(
     context = _default_model_context(cfg, input_shape=input_shape, num_classes=num_classes)
     model_cfg = _as_dict(cfg.get("model", {}))
 
-    source = str(model_cfg.get("source", cfg.get("model_source", "auto"))).lower()
+    source = str(model_cfg.get("source", "auto")).lower()
     raw_name = str(model_cfg.get("name", "")).strip()
     if source in {"timm", "hf"} and not raw_name:
         raise ValueError(
             f"model.source={source} requires model.name to be set to the exact backend name/card."
         )
-    name = raw_name or str(cfg.get("model_name", "SimpleCNN"))
-    pretrained = bool(model_cfg.get("pretrained", cfg.get("use_pt_model", False)))
+    if source in {"timm", "hf"}:
+        name = raw_name
+    else:
+        name = str(cfg.get("model_name", "SimpleCNN"))
     in_channels = int(model_cfg.get("in_channels", context.get("in_channels", 1)))
     resolved_num_classes = int(
         model_cfg.get("num_classes", context.get("num_classes", num_classes))
@@ -125,7 +126,6 @@ def _parse_model_spec(
     return ModelSpec(
         source=source,
         name=name,
-        pretrained=pretrained,
         num_classes=resolved_num_classes,
         in_channels=in_channels,
         input_shape=tuple(input_shape),
@@ -153,7 +153,9 @@ def _load_appfl_model(spec: ModelSpec):
     context["model_name"] = spec.name
     context["num_classes"] = spec.num_classes
     context["in_channels"] = spec.in_channels
-    context["use_pt_model"] = bool(spec.appfl.get("pretrained", spec.pretrained))
+    context["use_pt_model"] = bool(
+        spec.appfl.get("pretrained", spec.context.get("use_pt_model", False))
+    )
 
     signature = inspect.signature(model_class.__init__)
     model_args: Dict[str, Any] = {}
@@ -196,7 +198,7 @@ def _load_timm_model(spec: ModelSpec):
 
     create_kwargs.setdefault("num_classes", int(spec.num_classes))
     create_kwargs.setdefault("in_chans", int(spec.in_channels))
-    pretrained = bool(spec.timm.get("pretrained", spec.pretrained))
+    pretrained = bool(spec.timm.get("pretrained", False))
 
     try:
         return timm.create_model(timm_name, pretrained=pretrained, **create_kwargs)
@@ -299,7 +301,7 @@ def _load_hf_model(spec: ModelSpec):
 
     task = _resolve_hf_task(spec)
     model_id = _resolve_hf_model_id(spec)
-    pretrained = bool(spec.hf.get("pretrained", spec.pretrained))
+    pretrained = bool(spec.hf.get("pretrained", False))
     local_files_only = bool(spec.hf.get("local_files_only", False))
     trust_remote_code = bool(spec.hf.get("trust_remote_code", False))
 

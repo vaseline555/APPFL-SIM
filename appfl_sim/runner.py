@@ -9,6 +9,8 @@ import sys
 import time
 import random
 import ast
+import importlib
+import re
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +19,7 @@ from typing import Any, Dict, Sequence, Tuple, List, Optional
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import ConcatDataset, random_split
+from torch.utils.data import ConcatDataset, DataLoader, random_split
 
 from appfl_sim.agent import (
     ClientAgent,
@@ -91,18 +93,18 @@ def _resolve_config_path(config_path: str) -> Path:
 def _print_help() -> None:
     print(
         """
-appfl[sim] runner
+        APPFL-SIM runner
 
-Usage:
-  python -m appfl_sim.runner --config /path/to/config.yaml
-  appfl-sim backend=mpi dataset=MNIST num_clients=3 num_rounds=2
+        Usage:
+        python -m appfl_sim.runner --config /path/to/config.yaml
+        appfl-sim backend=serial dataset=MNIST num_clients=3 num_rounds=2
 
-MPI notes:
-  - When backend=mpi is set, runner auto-launches through mpiexec if needed.
-  - Worker-rank count is decoupled from logical `num_clients`.
-  - Set `mpi_num_workers` to pin MPI workers, otherwise auto mode uses available CPU capacity.
-  - Set `mpi_oversubscribe=true` to pass `--oversubscribe` to mpiexec.
-""".strip()
+        MPI notes:
+        - When backend=mpi is set, runner auto-launches through mpiexec if needed.
+        - Worker-rank count is decoupled from logical `num_clients`.
+        - Set `mpi_num_workers` to pin MPI workers, otherwise auto mode uses available CPU capacity.
+        - Set `mpi_oversubscribe=true` to pass `--oversubscribe` to mpiexec.
+        """.strip()
     )
 
 
@@ -114,6 +116,27 @@ def _cfg_to_dict(cfg) -> Dict:
     if isinstance(cfg, dict):
         return dict(cfg)
     return dict(vars(cfg))
+
+
+def _ensure_model_cfg(cfg: DictConfig) -> None:
+    if "model" in cfg and isinstance(cfg.model, DictConfig):
+        return
+    cfg.model = OmegaConf.create(
+        {
+            "source": "auto",
+            "name": "",
+            "kwargs": {},
+            "appfl": {"kwargs": {}},
+            "timm": {"pretrained": False, "kwargs": {}},
+            "hf": {
+                "task": "sequence_classification",
+                "local_files_only": False,
+                "trust_remote_code": False,
+                "gradient_checkpointing": False,
+                "kwargs": {},
+            },
+        }
+    )
 
 
 def _weighted_mean(stats: Dict[int, Dict], key: str) -> float:
@@ -156,7 +179,7 @@ def _new_progress(total: int, desc: str, enabled: bool):
 
 
 def _parse_dataset_split_ratio(config: DictConfig) -> Optional[List[float]]:
-    raw = config.get("dataset_split_ratio", config.get("split_ratio", None))
+    raw = config.get("dataset_split_ratio", None)
     if raw is None:
         return None
     if isinstance(raw, str):
@@ -255,13 +278,7 @@ def _apply_local_dataset_split_ratio(
 
 def _mpi_download_mode(config: DictConfig) -> str:
     raw_mode = str(config.get("mpi_dataset_download_mode", "rank0")).strip().lower()
-    aliases = {
-        "rank0_then_barrier": "rank0",
-        "root": "rank0",
-        "local_rank0_then_barrier": "local_rank0",
-        "node_leader": "local_rank0",
-    }
-    mode = aliases.get(raw_mode, raw_mode)
+    mode = raw_mode
     supported = {"rank0", "local_rank0", "all", "none"}
     if mode not in supported:
         raise ValueError(
@@ -337,13 +354,30 @@ def _build_train_cfg(
         num_workers = int(config.num_workers)
     else:
         num_workers = max(0, int(num_workers_override))
-    return {
+    device_text = str(device).strip().lower()
+    default_pin_memory = device_text.startswith("cuda")
+    pin_memory = _cfg_bool(config, "pin_memory", default_pin_memory)
+    update_base_raw = str(config.get("update_base", "epoch")).strip().lower()
+    if update_base_raw in {"iter", "step"}:
+        mode = "step"
+        local_iters = int(config.get("local_iters", 1))
+        local_iters = max(1, local_iters)
+    else:
+        mode = "epoch"
+        local_epochs = int(config.get("local_epochs", 1))
+        local_epochs = max(1, local_epochs)
+    train_cfg = {
         "device": device,
-        "mode": "epoch",
-        "num_local_epochs": int(config.local_epochs),
+        "mode": mode,
         "train_batch_size": int(config.batch_size),
         "val_batch_size": int(config.get("eval_batch_size", config.batch_size)),
         "num_workers": int(num_workers),
+        "train_pin_memory": _cfg_bool(config, "train_pin_memory", pin_memory),
+        "eval_pin_memory": _cfg_bool(config, "eval_pin_memory", pin_memory),
+        "dataloader_persistent_workers": _cfg_bool(
+            config, "dataloader_persistent_workers", False
+        ),
+        "dataloader_prefetch_factor": int(config.get("dataloader_prefetch_factor", 2)),
         "optim": str(config.optimizer),
         "optim_args": {
             "lr": float(config.lr),
@@ -364,6 +398,11 @@ def _build_train_cfg(
         "eval_metrics": config.get("eval_metrics", ["acc1"]),
         "default_eval_metric": str(config.get("default_eval_metric", "acc1")),
     }
+    if mode == "epoch":
+        train_cfg["num_local_epochs"] = local_epochs
+    else:
+        train_cfg["num_local_steps"] = local_iters
+    return train_cfg
 
 
 def _resolve_client_logging_policy(
@@ -371,38 +410,34 @@ def _resolve_client_logging_policy(
     num_clients: int,
     num_sampled_clients: int,
 ) -> Dict[str, object]:
-    scheme = str(config.get("client_logging_scheme", "auto")).strip().lower()
+    scheme = str(config.get("logging_scheme", "auto")).strip().lower()
     threshold = int(config.get("per_client_logging_threshold", 10))
     warning_threshold = int(config.get("per_client_logging_warning_threshold", 50))
-    agg_scheme = str(config.get("aggregated_logging_scheme", "server_only")).strip().lower()
 
-    if scheme not in {"auto", "per_client", "aggregated"}:
+    if scheme not in {"auto", "both", "server_only"}:
         raise ValueError(
-            "client_logging_scheme must be one of: auto, per_client, aggregated"
+            "logging_scheme must be one of: auto, both, server_only"
         )
-    if agg_scheme != "server_only":
-        raise ValueError("aggregated_logging_scheme currently supports only: server_only")
 
     basis_clients = max(1, int(num_sampled_clients))
 
-    if scheme == "aggregated":
-        effective = "aggregated"
-    elif scheme == "per_client":
-        effective = "per_client"
+    if scheme == "server_only":
+        effective = "server_only"
+    elif scheme == "both":
+        effective = "both"
     else:
-        effective = "per_client" if basis_clients <= threshold else "aggregated"
+        effective = "both" if basis_clients <= threshold else "server_only"
 
     forced_server_only = int(num_sampled_clients) < int(num_clients)
     if forced_server_only:
-        effective = "aggregated"
+        effective = "server_only"
 
     return {
         "requested_scheme": scheme,
         "effective_scheme": effective,
-        "client_logging_enabled": effective == "per_client",
+        "client_logging_enabled": effective == "both",
         "threshold": threshold,
         "warning_threshold": warning_threshold,
-        "aggregated_scheme": agg_scheme,
         "basis_clients": basis_clients,
         "total_clients": int(num_clients),
         "forced_server_only": bool(forced_server_only),
@@ -418,7 +453,6 @@ def _emit_logging_policy_message(
     effective = str(policy["effective_scheme"])
     threshold = int(policy["threshold"])
     warning_threshold = int(policy["warning_threshold"])
-    agg_scheme = str(policy["aggregated_scheme"])
     basis_clients = int(policy.get("basis_clients", num_clients))
     total_clients = int(policy.get("total_clients", num_clients))
     forced_server_only = bool(policy.get("forced_server_only", False))
@@ -442,24 +476,22 @@ def _emit_logging_policy_message(
         )
         return
 
-    if requested == "auto" and effective == "aggregated":
+    if requested == "auto" and effective == "server_only":
         _info(
             f"Client logging auto-disabled: sampled_clients={basis_clients} > "
             f"per_client_logging_threshold={threshold} (total_clients={total_clients}). "
-            f"Using aggregated_logging_scheme={agg_scheme} (server-side metrics only)."
+            "Using logging_scheme=server_only (server-side metrics only)."
         )
         return
-    if requested == "aggregated":
-        _info(
-            f"Using aggregated_logging_scheme={agg_scheme} (server-side metrics only)."
-        )
+    if requested == "server_only":
+        _info("Using logging_scheme=server_only (server-side metrics only).")
         return
-    if requested == "per_client" and int(basis_clients) > warning_threshold:
+    if requested == "both" and int(basis_clients) > warning_threshold:
         _warn(
             f"Per-client logging is explicitly enabled with "
             f"sampled_clients={basis_clients} (> {warning_threshold}, total_clients={total_clients}). "
             "This may produce large I/O overhead. "
-            "Suggestion: set client_logging_scheme=auto or aggregated."
+            "Suggestion: set logging_scheme=auto or server_only."
         )
 
 
@@ -469,24 +501,9 @@ def _resolve_client_state_policy(config: DictConfig) -> Dict[str, object]:
     Default is stateless (on-demand): instantiate sampled client(s), run, then free.
     Stateful mode is explicit via `stateful_clients=true`.
 
-    Backward compatibility:
-    - `client_init_mode=eager|stateful` -> stateful.
-    - `effective=eager|stateful` -> stateful.
     """
-    if "stateful_clients" in config:
-        stateful = _cfg_bool(config, "stateful_clients", False)
-        source = "stateful_clients"
-    else:
-        legacy_mode = str(
-            config.get(
-                "client_init_mode",
-                config.get("effective", "on_demand"),
-            )
-        ).strip().lower()
-        if legacy_mode not in {"auto", "eager", "on_demand", "stateful", "stateless"}:
-            legacy_mode = "on_demand"
-        stateful = legacy_mode in {"eager", "stateful"}
-        source = "legacy_client_init_mode"
+    stateful = _cfg_bool(config, "stateful_clients", False)
+    source = "stateful_clients"
 
     return {
         "stateful_clients": bool(stateful),
@@ -548,7 +565,10 @@ def _resolve_on_demand_worker_policy(
     logger: Optional[ServerAgentFileLogger] = None,
 ) -> Dict[str, int]:
     base_workers = max(0, int(config.get("num_workers", 0)))
-    train_workers = max(0, int(config.get("on_demand_num_workers", 0)))
+    train_workers = max(
+        0,
+        int(config.get("on_demand_num_workers", 0)),
+    )
     eval_workers = max(0, int(config.get("on_demand_eval_num_workers", 0)))
     if logger is not None and base_workers > 0:
         if "on_demand_num_workers" not in config:
@@ -564,6 +584,266 @@ def _resolve_on_demand_worker_policy(
     return {"train": train_workers, "eval": eval_workers}
 
 
+def _to_pascal_case(name: str) -> str:
+    text = str(name or "").strip()
+    if text == "":
+        return ""
+    chunks = re.split(r"[^0-9a-zA-Z]+", text)
+    chunks = [c for c in chunks if c]
+    if not chunks:
+        return text
+    return "".join(c[:1].upper() + c[1:] for c in chunks)
+
+
+def _module_has_class(module_path: str, class_name: str) -> bool:
+    if str(class_name).strip() == "":
+        return False
+    try:
+        mod = importlib.import_module(module_path)
+    except Exception:
+        return False
+    if hasattr(mod, class_name):
+        return True
+
+    class_text = str(class_name)
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", class_text).lower()
+    compact = snake.replace("_", "")
+    candidates = [snake, compact]
+
+    suffix_map = {
+        "Aggregator": "_aggregator",
+        "Scheduler": "_scheduler",
+        "Trainer": "_trainer",
+    }
+    for suffix, file_suffix in suffix_map.items():
+        if class_text.endswith(suffix):
+            base = class_text[: -len(suffix)]
+            base_snake = re.sub(r"(?<!^)(?=[A-Z])", "_", base).lower()
+            base_compact = base_snake.replace("_", "")
+            candidates.append(f"{base_snake}{file_suffix}")
+            candidates.append(f"{base_compact}{file_suffix}")
+            break
+
+    unique_candidates = []
+    seen = set()
+    for item in candidates:
+        key = str(item).strip(".")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        unique_candidates.append(key)
+
+    module_candidates = [f"{module_path}.{name}" for name in unique_candidates]
+    for submodule_path in module_candidates:
+        try:
+            submodule = importlib.import_module(submodule_path)
+        except Exception:
+            continue
+        if hasattr(submodule, class_name):
+            setattr(mod, class_name, getattr(submodule, class_name))
+            return True
+    return False
+
+
+def _resolve_algorithm_components(config: DictConfig) -> Dict[str, Any]:
+    algorithm = str(config.get("algorithm", "fedavg")).strip().lower()
+    explicit_aggregator = str(config.get("aggregator", "")).strip()
+    explicit_scheduler = str(config.get("scheduler", "")).strip()
+    explicit_trainer = str(config.get("trainer", "")).strip()
+
+    if explicit_aggregator:
+        aggregator_name = explicit_aggregator
+    elif algorithm == "fedavg":
+        aggregator_name = "FedAvgAggregator"
+    else:
+        aggregator_name = f"{_to_pascal_case(algorithm)}Aggregator"
+
+    if explicit_scheduler:
+        scheduler_name = explicit_scheduler
+    elif algorithm == "fedavg":
+        scheduler_name = "SyncScheduler"
+    else:
+        scheduler_name = f"{_to_pascal_case(algorithm)}Scheduler"
+
+    if explicit_trainer:
+        trainer_name = explicit_trainer
+    elif algorithm == "fedavg":
+        trainer_name = "VanillaTrainer"
+    else:
+        trainer_name = f"{_to_pascal_case(algorithm)}Trainer"
+
+    if not _module_has_class("appfl_sim.algorithm.aggregator", aggregator_name):
+        if algorithm == "fedavg":
+            aggregator_name = "FedAvgAggregator"
+        else:
+            raise ValueError(
+                f"Aggregator class '{aggregator_name}' not found for algorithm='{algorithm}'. "
+                "Implement it under appfl_sim/algorithm/aggregator and expose/import it."
+            )
+    if not _module_has_class("appfl_sim.algorithm.scheduler", scheduler_name):
+        scheduler_name = "SyncScheduler"
+    if not _module_has_class("appfl_sim.algorithm.trainer", trainer_name):
+        trainer_name = "VanillaTrainer"
+
+    agg_kwargs_raw = config.get("aggregator_kwargs", {})
+    sched_kwargs_raw = config.get("scheduler_kwargs", {})
+    aggregator_kwargs = (
+        _cfg_to_dict(agg_kwargs_raw) if agg_kwargs_raw is not None else {}
+    )
+    scheduler_kwargs = _cfg_to_dict(sched_kwargs_raw) if sched_kwargs_raw is not None else {}
+
+    if aggregator_name == "FedAvgAggregator":
+        aggregator_kwargs.setdefault("client_weights_mode", "sample_size")
+    if scheduler_name == "SyncScheduler":
+        scheduler_kwargs.setdefault("same_init_model", False)
+
+    return {
+        "algorithm": algorithm,
+        "aggregator_name": aggregator_name,
+        "aggregator_kwargs": aggregator_kwargs,
+        "scheduler_name": scheduler_name,
+        "scheduler_kwargs": scheduler_kwargs,
+        "trainer_name": trainer_name,
+    }
+
+
+def _allow_reusable_on_demand_pool(
+    config: DictConfig,
+    *,
+    client_logging_enabled: bool,
+) -> bool:
+    if bool(client_logging_enabled):
+        return False
+    if _cfg_bool(config, "use_secure_agg", False):
+        return False
+    if _cfg_bool(config, "use_dp", False):
+        mechanism = str(config.get("dp_mechanism", "laplace")).strip().lower()
+        if mechanism == "opacus":
+            return False
+    return True
+
+
+def _rebind_client_for_on_demand_job(
+    client: ClientAgent,
+    *,
+    client_id: int,
+    client_datasets: Sequence,
+    num_workers_override: Optional[int] = None,
+) -> None:
+    dataset_entry = client_datasets[int(client_id)]
+    if len(dataset_entry) == 2:
+        train_ds, test_ds = dataset_entry
+        val_ds = None
+    elif len(dataset_entry) == 3:
+        train_ds, val_ds, test_ds = dataset_entry
+    else:
+        raise ValueError(
+            "Each client dataset entry must be tuple(train,test) or tuple(train,val,test)."
+        )
+
+    client.id = int(client_id)
+    client.client_agent_config.client_id = str(int(client_id))
+    client.train_dataset = train_ds
+    client.val_dataset = val_ds
+    client.test_dataset = test_ds
+
+    trainer = getattr(client, "trainer", None)
+    if trainer is None:
+        return
+    trainer.client_id = str(int(client_id))
+    trainer.train_dataset = train_ds
+    trainer.val_dataset = val_ds
+    trainer.test_dataset = test_ds
+
+    cfg = client.client_agent_config.train_configs
+    if num_workers_override is None:
+        num_workers = int(cfg.get("num_workers", 0))
+    else:
+        num_workers = max(0, int(num_workers_override))
+    train_bs = int(cfg.get("train_batch_size", 32))
+    val_bs = int(cfg.get("val_batch_size", train_bs))
+    train_shuffle = bool(cfg.get("train_data_shuffle", True))
+    val_shuffle = bool(cfg.get("val_data_shuffle", False))
+    train_pin_memory = bool(cfg.get("train_pin_memory", False))
+    eval_pin_memory = bool(cfg.get("eval_pin_memory", train_pin_memory))
+    persistent_workers = bool(cfg.get("dataloader_persistent_workers", False))
+    prefetch_factor = int(cfg.get("dataloader_prefetch_factor", 2))
+
+    common_train_kwargs = {
+        "batch_size": max(1, train_bs),
+        "shuffle": train_shuffle,
+        "num_workers": num_workers,
+        "pin_memory": train_pin_memory,
+    }
+    common_eval_kwargs = {
+        "batch_size": max(1, val_bs),
+        "num_workers": num_workers,
+        "pin_memory": eval_pin_memory,
+    }
+    if num_workers > 0:
+        common_train_kwargs["persistent_workers"] = persistent_workers
+        common_eval_kwargs["persistent_workers"] = persistent_workers
+        common_train_kwargs["prefetch_factor"] = max(2, prefetch_factor)
+        common_eval_kwargs["prefetch_factor"] = max(2, prefetch_factor)
+
+    trainer.train_dataloader = DataLoader(
+        train_ds,
+        **common_train_kwargs,
+    )
+    trainer.val_dataloader = (
+        DataLoader(
+            val_ds,
+            shuffle=val_shuffle,
+            **common_eval_kwargs,
+        )
+        if val_ds is not None
+        else None
+    )
+    trainer.test_dataloader = (
+        DataLoader(
+            test_ds,
+            shuffle=False,
+            **common_eval_kwargs,
+        )
+        if test_ds is not None
+        else None
+    )
+
+
+def _build_on_demand_worker_pool(
+    config: DictConfig,
+    model,
+    client_datasets: Sequence,
+    local_client_ids: Sequence[int],
+    device: str,
+    run_log_dir: str,
+    client_logging_enabled: bool,
+    trainer_name: str,
+    pool_size: int,
+    num_workers_override: Optional[int] = None,
+) -> List[ClientAgent]:
+    if int(pool_size) <= 0:
+        return []
+    available_ids = [int(cid) for cid in local_client_ids]
+    if not available_ids:
+        return []
+    ids: List[int] = []
+    for idx in range(int(pool_size)):
+        ids.append(int(available_ids[idx % len(available_ids)]))
+    return _build_clients(
+        config=config,
+        model=model,
+        client_datasets=client_datasets,
+        local_client_ids=np.asarray(ids).astype(int),
+        device=device,
+        run_log_dir=run_log_dir,
+        client_logging_enabled=client_logging_enabled,
+        trainer_name=trainer_name,
+        share_model=True,
+        num_workers_override=num_workers_override,
+    )
+
+
 def _build_clients(
     config: DictConfig,
     model,
@@ -572,6 +852,7 @@ def _build_clients(
     device: str,
     run_log_dir: str,
     client_logging_enabled: bool = True,
+    trainer_name: str = "VanillaTrainer",
     share_model: bool = False,
     num_workers_override: Optional[int] = None,
 ):
@@ -611,7 +892,7 @@ def _build_clients(
         client.train_dataset = train_ds
         client.val_dataset = val_ds
         client.test_dataset = test_ds
-        client.client_agent_config.train_configs.trainer = "VanillaTrainer"
+        client.client_agent_config.train_configs.trainer = str(trainer_name)
         client._load_trainer()
         client.id = int(cid)
         clients.append(
@@ -628,6 +909,7 @@ def _build_single_client(
     device: str,
     run_log_dir: str,
     client_logging_enabled: bool = True,
+    trainer_name: str = "VanillaTrainer",
     share_model: bool = False,
     num_workers_override: Optional[int] = None,
 ):
@@ -639,6 +921,7 @@ def _build_single_client(
         device=device,
         run_log_dir=run_log_dir,
         client_logging_enabled=bool(client_logging_enabled),
+        trainer_name=str(trainer_name),
         share_model=bool(share_model),
         num_workers_override=num_workers_override,
     )
@@ -652,10 +935,12 @@ def _build_server(
     runtime_cfg: Dict,
     model,
     server_dataset,
+    algorithm_components: Optional[Dict[str, Any]] = None,
 ) -> ServerAgent:
+    if algorithm_components is None:
+        algorithm_components = _resolve_algorithm_components(config)
     num_clients = int(runtime_cfg["num_clients"])
     num_sampled_clients = _resolve_num_sampled_clients(config, num_clients=num_clients)
-    sampled_fraction = float(num_sampled_clients / max(1, num_clients))
     server_cfg = ServerAgentConfig(
         client_configs=OmegaConf.create(
             {
@@ -674,8 +959,6 @@ def _build_server(
                 "num_clients": num_clients,
                 "num_global_epochs": int(config.num_rounds),
                 "num_sampled_clients": int(num_sampled_clients),
-                # Kept for APPFL compatibility.
-                "client_fraction": float(sampled_fraction),
                 "device": str(config.server_device),
                 "eval_show_progress": _cfg_bool(config, "show_eval_progress", True),
                 "eval_batch_size": int(config.get("eval_batch_size", config.batch_size)),
@@ -684,14 +967,12 @@ def _build_server(
                 "default_eval_metric": str(
                     config.get("default_eval_metric", "acc1")
                 ),
-                "aggregator": "FedAvgAggregator",
-                "aggregator_kwargs": {
-                    "client_weights_mode": "sample_size",
-                },
-                "scheduler": "SyncScheduler",
+                "aggregator": str(algorithm_components["aggregator_name"]),
+                "aggregator_kwargs": dict(algorithm_components["aggregator_kwargs"]),
+                "scheduler": str(algorithm_components["scheduler_name"]),
                 "scheduler_kwargs": {
+                    **dict(algorithm_components["scheduler_kwargs"]),
                     "num_clients": num_clients,
-                    "same_init_model": False,
                 },
             }
         ),
@@ -1149,15 +1430,7 @@ def _resolve_num_sampled_clients(config: DictConfig, num_clients: int) -> int:
         if n > 0:
             return max(1, min(int(num_clients), n))
 
-    # Backward compatibility: derive from client_fraction if present.
-    try:
-        fraction = float(config.get("client_fraction", 1.0))
-    except Exception:
-        fraction = 1.0
-    n = int(fraction * int(num_clients))
-    if n <= 0:
-        n = 1
-    return max(1, min(int(num_clients), n))
+    return int(num_clients)
 
 
 def _sample_train_clients(train_client_ids: List[int], num_sampled_clients: int) -> List[int]:
@@ -1237,6 +1510,10 @@ def _iter_id_chunks(ids: Sequence[int], chunk_size: int):
 
 
 def _release_clients(clients, clear_cuda_cache: bool = False) -> None:
+    if clients is None:
+        return
+    if isinstance(clients, list):
+        clients.clear()
     del clients
     gc.collect()
     if clear_cuda_cache and torch.cuda.is_available():
@@ -1769,6 +2046,7 @@ def _run_client_mpi(
     device: str,
     run_log_dir: str,
     client_logging_enabled: bool,
+    trainer_name: str,
     use_on_demand: bool,
     on_demand_train_num_workers: Optional[int] = None,
     on_demand_eval_num_workers: Optional[int] = None,
@@ -1793,6 +2071,7 @@ def _run_client_mpi(
         phase="train",
     )
     eager_clients = None
+    worker_pool: Optional[List[ClientAgent]] = None
     if not use_on_demand:
         eager_clients = _build_clients(
             config=config,
@@ -1802,7 +2081,25 @@ def _run_client_mpi(
             device=device,
             run_log_dir=run_log_dir,
             client_logging_enabled=client_logging_enabled,
+            trainer_name=trainer_name,
         )
+    else:
+        if _allow_reusable_on_demand_pool(
+            config,
+            client_logging_enabled=client_logging_enabled,
+        ):
+            worker_pool = _build_on_demand_worker_pool(
+                config=config,
+                model=on_demand_model if on_demand_model is not None else model,
+                client_datasets=client_datasets,
+                local_client_ids=sorted(local_client_set),
+                device=device,
+                run_log_dir=run_log_dir,
+                client_logging_enabled=client_logging_enabled,
+                trainer_name=trainer_name,
+                pool_size=chunk_size,
+                num_workers_override=on_demand_train_num_workers,
+            )
 
     while True:
         incoming = communicator.recv_global_model_from_server(source=0)
@@ -1867,17 +2164,28 @@ def _run_client_mpi(
                     }
             else:
                 for chunk_ids in _iter_id_chunks(sorted(selected), chunk_size):
-                    chunk_clients = _build_clients(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        local_client_ids=np.asarray(chunk_ids).astype(int),
-                        device=device,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=client_logging_enabled,
-                        share_model=True,
-                        num_workers_override=on_demand_train_num_workers,
-                    )
+                    if worker_pool:
+                        chunk_clients = worker_pool[: len(chunk_ids)]
+                        for client, cid in zip(chunk_clients, chunk_ids):
+                            _rebind_client_for_on_demand_job(
+                                client,
+                                client_id=int(cid),
+                                client_datasets=client_datasets,
+                                num_workers_override=on_demand_train_num_workers,
+                            )
+                    else:
+                        chunk_clients = _build_clients(
+                            config=config,
+                            model=on_demand_model if on_demand_model is not None else model,
+                            client_datasets=client_datasets,
+                            local_client_ids=np.asarray(chunk_ids).astype(int),
+                            device=device,
+                            run_log_dir=run_log_dir,
+                            client_logging_enabled=client_logging_enabled,
+                            trainer_name=trainer_name,
+                            share_model=True,
+                            num_workers_override=on_demand_train_num_workers,
+                        )
                     for client in chunk_clients:
                         client.download(global_state)
                         train_result = client.update(round_idx=round_idx)
@@ -1889,17 +2197,19 @@ def _run_client_mpi(
                             "num_examples": int(train_result.get("num_examples", 0)),
                             "stats": train_result,
                         }
-                    _release_clients(
-                        chunk_clients,
-                        clear_cuda_cache=_cfg_bool(
-                            config, "clear_cuda_cache_after_chunk", False
-                        ),
-                    )
+                    if not worker_pool:
+                        _release_clients(chunk_clients)
+                    if _cfg_bool(config, "clear_cuda_cache_after_chunk", False):
+                        gc.collect()
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
 
         communicator.send_local_models_to_server(local_payload, dest=0)
 
     if eager_clients is not None:
         _release_clients(eager_clients)
+    if worker_pool is not None:
+        _release_clients(worker_pool)
     communicator.barrier()
 
 
@@ -1924,6 +2234,7 @@ def run_serial(config) -> None:
 
     runtime_cfg = _merge_runtime_cfg(config, args)
     _validate_loader_output(client_datasets, runtime_cfg)
+    algorithm_components = _resolve_algorithm_components(config)
     num_clients = int(runtime_cfg["num_clients"])
     state_policy = _resolve_client_state_policy(config)
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
@@ -1939,6 +2250,13 @@ def run_serial(config) -> None:
         logging_policy, num_clients=num_clients, logger=server_logger
     )
     _emit_client_state_policy_message(state_policy, logger=server_logger)
+    server_logger.info(
+        "Algorithm wiring: "
+        f"algorithm={algorithm_components['algorithm']} "
+        f"aggregator={algorithm_components['aggregator_name']} "
+        f"scheduler={algorithm_components['scheduler_name']} "
+        f"trainer={algorithm_components['trainer_name']}"
+    )
     on_demand_workers = _resolve_on_demand_worker_policy(config, logger=server_logger)
     enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
@@ -1957,6 +2275,7 @@ def run_serial(config) -> None:
         runtime_cfg=runtime_cfg,
         model=model,
         server_dataset=server_dataset,
+        algorithm_components=algorithm_components,
     )
 
     client_device = resolve_rank_device(str(config.device), rank=1, world_size=2)
@@ -1968,6 +2287,7 @@ def run_serial(config) -> None:
         phase="train",
     )
     eager_clients = None
+    worker_pool: Optional[List[ClientAgent]] = None
     use_on_demand = bool(state_policy["use_on_demand"])
     on_demand_model = copy.deepcopy(model) if use_on_demand else None
 
@@ -1980,7 +2300,25 @@ def run_serial(config) -> None:
             device=client_device,
             run_log_dir=run_log_dir,
             client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+            trainer_name=str(algorithm_components["trainer_name"]),
         )
+    else:
+        if _allow_reusable_on_demand_pool(
+            config,
+            client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+        ):
+            worker_pool = _build_on_demand_worker_pool(
+                config=config,
+                model=on_demand_model if on_demand_model is not None else model,
+                client_datasets=client_datasets,
+                local_client_ids=np.arange(num_clients).astype(int),
+                device=client_device,
+                run_log_dir=run_log_dir,
+                client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+                trainer_name=str(algorithm_components["trainer_name"]),
+                pool_size=chunk_size,
+                num_workers_override=on_demand_workers["train"],
+            )
 
     server_logger.info(
         _start_summary_lines(
@@ -2024,17 +2362,28 @@ def run_serial(config) -> None:
                 stats[client.id] = train_result
         else:
             for chunk_ids in _iter_id_chunks(selected_ids, chunk_size):
-                chunk_clients = _build_clients(
-                    config=config,
-                    model=on_demand_model if on_demand_model is not None else model,
-                    client_datasets=client_datasets,
-                    local_client_ids=np.asarray(chunk_ids).astype(int),
-                    device=client_device,
-                    run_log_dir=run_log_dir,
-                    client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-                    share_model=True,
-                    num_workers_override=on_demand_workers["train"],
-                )
+                if worker_pool:
+                    chunk_clients = worker_pool[: len(chunk_ids)]
+                    for client, cid in zip(chunk_clients, chunk_ids):
+                        _rebind_client_for_on_demand_job(
+                            client,
+                            client_id=int(cid),
+                            client_datasets=client_datasets,
+                            num_workers_override=on_demand_workers["train"],
+                        )
+                else:
+                    chunk_clients = _build_clients(
+                        config=config,
+                        model=on_demand_model if on_demand_model is not None else model,
+                        client_datasets=client_datasets,
+                        local_client_ids=np.asarray(chunk_ids).astype(int),
+                        device=client_device,
+                        run_log_dir=run_log_dir,
+                        client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+                        trainer_name=str(algorithm_components["trainer_name"]),
+                        share_model=True,
+                        num_workers_override=on_demand_workers["train"],
+                    )
                 for client in chunk_clients:
                     client.download(global_state)
                     train_result = client.update(round_idx=round_idx)
@@ -2044,10 +2393,12 @@ def run_serial(config) -> None:
                     updates[client.id] = state
                     sample_sizes[client.id] = int(train_result["num_examples"])
                     stats[client.id] = train_result
-                _release_clients(
-                    chunk_clients,
-                    clear_cuda_cache=_cfg_bool(config, "clear_cuda_cache_after_chunk", False),
-                )
+                if not worker_pool:
+                    _release_clients(chunk_clients)
+                if _cfg_bool(config, "clear_cuda_cache_after_chunk", False):
+                    gc.collect()
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
         weights = server.aggregate(updates, sample_sizes)
         global_eval_metrics = None
@@ -2172,6 +2523,8 @@ def run_serial(config) -> None:
     server_logger.info(f"Finished serial simulation in {time.time() - t0:.2f}s.")
     if eager_clients is not None:
         _release_clients(eager_clients)
+    if worker_pool is not None:
+        _release_clients(worker_pool)
     if tracker is not None:
         tracker.close()
 
@@ -2208,6 +2561,7 @@ def run_mpi(config) -> None:
 
     runtime_cfg = _merge_runtime_cfg(config, args)
     _validate_loader_output(client_datasets, runtime_cfg)
+    algorithm_components = _resolve_algorithm_components(config)
 
     num_clients = int(runtime_cfg["num_clients"])
     state_policy = _resolve_client_state_policy(config)
@@ -2250,6 +2604,13 @@ def run_mpi(config) -> None:
             logging_policy, num_clients=num_clients, logger=server_logger
         )
         _emit_client_state_policy_message(state_policy, logger=server_logger)
+        server_logger.info(
+            "Algorithm wiring: "
+            f"algorithm={algorithm_components['algorithm']} "
+            f"aggregator={algorithm_components['aggregator_name']} "
+            f"scheduler={algorithm_components['scheduler_name']} "
+            f"trainer={algorithm_components['trainer_name']}"
+        )
         on_demand_workers = _resolve_on_demand_worker_policy(config, logger=server_logger)
         server_logger.info(
             f"MPI context: world_size={world_size} rank={rank} local_rank={local_rank} "
@@ -2261,6 +2622,7 @@ def run_mpi(config) -> None:
             runtime_cfg=runtime_cfg,
             model=model,
             server_dataset=server_dataset,
+            algorithm_components=algorithm_components,
         )
         _run_server_mpi(
             config,
@@ -2309,6 +2671,7 @@ def run_mpi(config) -> None:
         device=client_device,
         run_log_dir=run_log_dir,
         client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+        trainer_name=str(algorithm_components["trainer_name"]),
         use_on_demand=bool(state_policy["use_on_demand"]),
         on_demand_train_num_workers=int(on_demand_workers["train"]),
         on_demand_eval_num_workers=int(on_demand_workers["eval"]),
@@ -2340,17 +2703,6 @@ def _extract_config_path(argv: list[str]) -> tuple[str | None, list[str]]:
     return config_path, remaining
 
 
-def _legacy_client_mode_to_stateful_flag(value: str) -> bool:
-    mode = str(value).strip().lower()
-    if mode in {"eager", "stateful", "persistent"}:
-        return True
-    if mode in {"on_demand", "stateless", "auto"}:
-        return False
-    if mode in {"true", "1", "yes", "y", "on"}:
-        return True
-    return False
-
-
 def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
     backend = None
     out: list[str] = []
@@ -2369,30 +2721,12 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
             if "=" in keyval:
                 key, value = keyval.split("=", 1)
                 key = key.replace("-", "_")
-                if key in {"effective", "client_init_mode"}:
-                    stateful = _legacy_client_mode_to_stateful_flag(value)
-                    out.append(
-                        f"stateful_clients={'true' if stateful else 'false'}"
-                    )
-                else:
-                    out.append(f"{key.replace('-', '_')}={value}")
+                out.append(f"{key.replace('-', '_')}={value}")
                 idx += 1
                 continue
             key = keyval.replace("-", "_")
-            if key in {"effective", "client_init_mode"}:
-                key = "stateful_clients"
-            if key == "no_need_embedding":
-                out.append("need_embedding=false")
-                idx += 1
-                continue
             if idx + 1 < len(tokens) and not tokens[idx + 1].startswith("--"):
-                if key == "stateful_clients":
-                    stateful = _legacy_client_mode_to_stateful_flag(tokens[idx + 1])
-                    out.append(
-                        f"stateful_clients={'true' if stateful else 'false'}"
-                    )
-                else:
-                    out.append(f"{key}={tokens[idx + 1]}")
+                out.append(f"{key}={tokens[idx + 1]}")
                 idx += 2
             else:
                 out.append(f"{key}=true")
@@ -2403,16 +2737,8 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
             key = key.replace("-", "_")
             if key == "backend":
                 backend = value
-            elif key == "no_need_embedding":
-                out.append("need_embedding=false")
             else:
-                if key in {"effective", "client_init_mode"}:
-                    stateful = _legacy_client_mode_to_stateful_flag(value)
-                    out.append(
-                        f"stateful_clients={'true' if stateful else 'false'}"
-                    )
-                else:
-                    out.append(f"{key}={value}")
+                out.append(f"{key}={value}")
         idx += 1
     return backend, out
 
@@ -2432,6 +2758,7 @@ def parse_config(argv: list[str] | None = None) -> tuple[str, DictConfig]:
         cfg = OmegaConf.merge(cfg, OmegaConf.load(cfg_path))
     if dotlist:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(dotlist))
+    _ensure_model_cfg(cfg)
     if backend_override is not None:
         cfg.backend = backend_override
 

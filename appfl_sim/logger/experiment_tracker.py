@@ -28,7 +28,7 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
     else:
         cfg = dict(config)
 
-    backend = str(cfg.get("logging_backend", cfg.get("logger_backend", "file"))).lower()
+    backend = str(cfg.get("logging_backend", "file")).lower()
     project_name = str(cfg.get("project_name", cfg.get("exp_name", "appfl-sim")))
     exp_name = str(cfg.get("exp_name", project_name))
     experiment_name = str(

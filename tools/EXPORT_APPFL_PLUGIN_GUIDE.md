@@ -46,8 +46,7 @@ PYTHONPATH=. .venv/bin/python tools/export_appfl_plugin.py \
 ### B) Direct mode (writes into APPFL fork)
 
 ```bash
-cd /Users/vaseline555/Desktop/workspace/APPFL_SIM/APPFL-SIM
-PYTHONPATH=. .venv/bin/python tools/export_appfl_plugin.py \
+python tools/export_appfl_plugin.py \
   --algorithm myalgo \
   --aggregator-source appfl_sim/algorithm/aggregator/myalgo_aggregator.py \
   --aggregator-class MyAlgoAggregator \
@@ -94,30 +93,30 @@ If `unresolved_appfl_imports` is empty, import compatibility check passed.
 If you use Artifact mode, move files as follows:
 
 1. Aggregator module
-- From: `build/appfl_plugin_<algo>/src/appfl/algorithm/aggregator/*.py`
+- From: <`<APPFL PATH>/src/appfl/algorithm/aggregator/*.py`
 - To: `<APPFL_FORK>/src/appfl/algorithm/aggregator/`
 
 2. Trainer module
-- From: `build/appfl_plugin_<algo>/src/appfl/algorithm/trainer/*.py`
+- From: <`<APPFL PATH>/src/appfl/algorithm/trainer/*.py`
 - To: `<APPFL_FORK>/src/appfl/algorithm/trainer/`
 
 3. Scheduler module
-- From: `build/appfl_plugin_<algo>/src/appfl/algorithm/scheduler/*.py`
+- From: <`<APPFL PATH>/src/appfl/algorithm/scheduler/*.py`
 - To: `<APPFL_FORK>/src/appfl/algorithm/scheduler/`
 
 4. Metrics support module (only when generated)
-- From: `build/appfl_plugin_<algo>/src/appfl/metrics/*.py`
+- From: <`<APPFL PATH>/src/appfl/metrics/*.py`
 - To: `<APPFL_FORK>/src/appfl/metrics/`
 
 5. `__init__.py` patches
-- Apply snippets in: `build/appfl_plugin_<algo>/patches/*.txt`
+- Apply snippets in: <`<APPFL PATH>/patches/*.txt`
 - Target files:
   - `<APPFL_FORK>/src/appfl/algorithm/aggregator/__init__.py`
   - `<APPFL_FORK>/src/appfl/algorithm/trainer/__init__.py`
   - `<APPFL_FORK>/src/appfl/algorithm/scheduler/__init__.py`
 
 6. Config template
-- Generated at: `build/appfl_plugin_<algo>/config/algorithms/<algo>.yaml`
+- Generated at: <`<APPFL PATH>/config/algorithms/<algo>.yaml`
 - Suggested placement in APPFL fork:
   - `<APPFL_FORK>/examples/resources/configs/` (for runnable examples), or
   - your own experiment config folder.

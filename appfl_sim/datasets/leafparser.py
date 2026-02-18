@@ -141,6 +141,24 @@ class LeafClientDataset(Dataset):
         self.seq_len = int(seq_len) if seq_len is not None else None
         self.num_embeddings = int(num_embeddings) if num_embeddings is not None else None
         self.image_root = image_root
+        self._text_inputs: torch.Tensor | None = None
+
+        # Text datasets are pre-tokenized before per-client dataset construction.
+        if self.dataset_key in _TEXT_DATASETS:
+            if self.x:
+                first = self.x[0]
+                if (
+                    isinstance(first, (list, tuple))
+                    and all(isinstance(v, (int, np.integer)) for v in first)
+                ):
+                    self._text_inputs = torch.tensor(self.x, dtype=torch.long)
+                else:
+                    self._text_inputs = torch.stack(
+                        [self._encode_text(v) for v in self.x], dim=0
+                    )
+            else:
+                seq_len = int(self.seq_len or 32)
+                self._text_inputs = torch.zeros((0, seq_len), dtype=torch.long)
 
     def __len__(self) -> int:
         return len(self.x)
@@ -215,7 +233,10 @@ class LeafClientDataset(Dataset):
         yi = self.targets[index]
 
         if self.dataset_key in _TEXT_DATASETS:
-            x = self._encode_text(xi)
+            if self._text_inputs is None:
+                x = self._encode_text(xi)
+            else:
+                x = self._text_inputs[index]
         elif self.dataset_key == "celeba":
             x = self._encode_image_like(xi, rgb=True)
         elif self.dataset_key == "femnist":
@@ -385,6 +406,63 @@ def _build_label_vocab(train_obj: Dict[str, Any], test_obj: Dict[str, Any]) -> D
     return {label: idx for idx, label in enumerate(unique)}
 
 
+def _text_to_token_ids(
+    value: Any,
+    *,
+    dataset_key: str,
+    seq_len: int,
+    num_embeddings: int,
+) -> List[int]:
+    vocab = max(8, int(num_embeddings))
+    if isinstance(value, (list, tuple)) and value and all(
+        isinstance(v, (int, np.integer)) for v in value
+    ):
+        ids = [int(v) % vocab for v in value]
+    else:
+        if isinstance(value, bytes):
+            text = value.decode("utf-8", errors="ignore")
+        elif isinstance(value, str):
+            text = value
+        elif isinstance(value, (list, tuple)):
+            text = " ".join(str(v) for v in value)
+        else:
+            text = str(value)
+        tokens = list(text) if dataset_key == "shakespeare" else text.split()
+        ids = [abs(hash(tok)) % vocab for tok in tokens]
+    if len(ids) < seq_len:
+        ids += [0] * (seq_len - len(ids))
+    return ids[:seq_len]
+
+
+def _pretokenize_leaf_text_data(
+    *,
+    dataset_key: str,
+    train_obj: Dict[str, Any],
+    test_obj: Dict[str, Any],
+    users: List[str],
+    seq_len: int,
+    num_embeddings: int,
+) -> None:
+    if dataset_key not in _TEXT_DATASETS:
+        return
+    for obj in (train_obj, test_obj):
+        user_data = obj.get("user_data", {})
+        for user in users:
+            records = user_data.get(user, None)
+            if not isinstance(records, dict):
+                continue
+            raw_x = list(records.get("x", []))
+            records["x"] = [
+                _text_to_token_ids(
+                    item,
+                    dataset_key=dataset_key,
+                    seq_len=int(seq_len),
+                    num_embeddings=int(num_embeddings),
+                )
+                for item in raw_x
+            ]
+
+
 def fetch_leaf(args):
     """LEAF parser adapted from AAggFF processing flow with compact implementation."""
     args = to_namespace(args)
@@ -412,6 +490,14 @@ def fetch_leaf(args):
     seq_len = int(getattr(args, "seq_len", defaults.get("seq_len", 32)))
     num_embeddings = int(
         getattr(args, "num_embeddings", defaults.get("num_embeddings", 10000))
+    )
+    _pretokenize_leaf_text_data(
+        dataset_key=dataset_key,
+        train_obj=train_obj,
+        test_obj=test_obj,
+        users=users,
+        seq_len=seq_len,
+        num_embeddings=num_embeddings,
     )
 
     split_map: Dict[int, int] = {}
