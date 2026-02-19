@@ -8,8 +8,9 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
   `appfl_sim/config/examples/simulation.yaml`.
 - `exp_name` (default: `appfl-sim`): experiment name; used in output paths.
 - `seed` (default: `42`): global random seed.
-- `device` (default: `cpu`), `server_device` (default: `cpu`).
-- `backend` (default: `serial`): execution backend (`serial` or `mpi`).
+- `device` (default: `cpu`): device for clients. 
+- `server_device` (default: `cpu`): device for server.
+- `backend` (default: `serial`): execution backend (`serial`, `nccl`, or `gloo`).
 - `dataset` (default: `MNIST`): dataset name.
 - `model` (default: `SimpleCNN`): local APPFL model name.
 - `num_rounds` (default: `20`): number of federated rounds.
@@ -26,7 +27,6 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `trainer` (default: `"vanilla"`): explicit client trainer class name (optional).
 - `aggregator` (default: `"fedavg"`): algorithm name used for federated learning simulation (optional).
 - `scheduler` (default: `"sync"`): explicit scheduler class name (optional).
-
 
 ## Dataset
 - `dataset_dir` (default: `./data`): dataset root path.
@@ -131,13 +131,14 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `on_demand_workers` (default: alias fallback): backward-compatible alias for `on_demand_num_workers`.
 - `on_demand_eval_num_workers` (default: `0`): DataLoader workers for on-demand (stateless) federated evaluation client builds.
 
-## Device and MPI
-- `mpi_dataset_download_mode` (default: `rank0`): dataset download policy (`rank0`, `local_rank0`, `all`, `none`).
-- `mpi_use_local_rank_device` (default: `true`): map device by local rank in MPI.
-- `mpi_respect_explicit_cuda_index` (default: `false`): when false, MPI local-rank mapping overrides explicit `device=cuda:<idx>` to avoid all ranks pinning one GPU.
-- `mpi_log_rank_mapping` (default: `false`): print rank/device mapping in MPI workers.
-- `mpi_num_workers` (default: `0`): MPI worker ranks (`0` = auto).
-- `mpi_oversubscribe` (default: `false`): pass `--oversubscribe` to MPI launcher.
+## Device and Distributed Backends
+- `backend=serial`: single-process baseline (recommended for single-node/single-GPU small runs).
+- `backend=nccl`: multi-process multi-GPU runtime via `torch.distributed` + NCCL.
+- `backend=gloo`: CPU-oriented multi-process runtime via `torch.distributed` + Gloo.
+- `device=cuda` is recommended for `nccl` to map ranks across available GPUs.
+- `device=cpu` is recommended for `gloo`.
+- GPU subset control for `nccl`: set `CUDA_VISIBLE_DEVICES` before launch.  
+  Example: `CUDA_VISIBLE_DEVICES=1,3 appfl-sim --config appfl_sim/config/examples/backend/nccl.yaml`
 
 ## Advanced Configurations
 - `aggregator_kwargs` (default: `{}`): kwargs forwarded to aggregator class construction.

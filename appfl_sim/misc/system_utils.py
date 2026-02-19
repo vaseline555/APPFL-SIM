@@ -3,6 +3,7 @@ import gc
 import os
 import random
 import re
+import warnings
 from typing import Any, Dict, List, Optional, Sequence, Union
 import numpy as np
 import torch
@@ -34,7 +35,7 @@ def _read_int_env(keys: List[str]) -> Optional[int]:
 
 
 def get_local_rank(default: int = 0) -> int:
-    """Best-effort local rank detection across common MPI launchers."""
+    """Best-effort local rank detection across common distributed launchers."""
     detected = _read_int_env(
         [
             "LOCAL_RANK",
@@ -77,6 +78,47 @@ def resolve_rank_device(
         local_rank = get_local_rank(default=max(rank - 1, 0))
     gpu_idx = int(local_rank) % num_gpus
     return f"cuda:{gpu_idx}"
+
+
+def validate_backend_device_consistency(backend: str, config: DictConfig) -> None:
+    device = str(config.get("device", "cpu")).strip().lower()
+    server_device = str(config.get("server_device", "cpu")).strip().lower()
+    cuda_available = bool(torch.cuda.is_available())
+    visible_gpus = int(torch.cuda.device_count()) if cuda_available else 0
+
+    if backend == "nccl":
+        if not cuda_available:
+            raise ValueError("backend=nccl requires CUDA, but CUDA is unavailable.")
+        if not device.startswith("cuda"):
+            raise ValueError("backend=nccl requires `device` to be CUDA (e.g., `cuda`).")
+        if server_device.startswith("cuda"):
+            if visible_gpus <= 2:
+                warnings.warn(
+                    "`server_device` is CUDA with backend=nccl and limited visible GPUs; "
+                    "server may reduce client GPU memory headroom.",
+                    stacklevel=2,
+                )
+            else:
+                warnings.warn(
+                    "`server_device` is CUDA with backend=nccl; prefer `server_device=cpu` "
+                    "unless server-side GPU eval is required.",
+                    stacklevel=2,
+                )
+        return
+
+    if backend == "gloo" and device.startswith("cuda"):
+        warnings.warn(
+            "`backend=gloo` with CUDA device is valid but unusual for FL simulation throughput. "
+            "Use `backend=nccl` for multi-GPU CUDA runs.",
+            stacklevel=2,
+        )
+
+    if backend == "serial" and device == "cpu" and cuda_available:
+        warnings.warn(
+            "CUDA is available but `device=cpu` in serial mode. "
+            "Set `device=cuda` for faster local training if desired.",
+            stacklevel=2,
+        )
 
 
 def parse_device_str(devices_str: str):

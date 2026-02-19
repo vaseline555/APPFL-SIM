@@ -65,11 +65,10 @@ def _print_help() -> None:
         python -m appfl_sim.runner --config /path/to/config.yaml
         appfl-sim backend=serial dataset=MNIST num_clients=3 num_rounds=2
 
-        MPI notes:
-        - When backend=mpi is set, runner auto-launches through mpiexec if needed.
-        - Worker-rank count is decoupled from logical `num_clients`.
-        - Set `mpi_num_workers` to pin MPI workers, otherwise auto mode uses available CPU capacity.
-        - Set `mpi_oversubscribe=true` to pass `--oversubscribe` to mpiexec.
+        Distributed notes:
+        - backend=nccl uses one process per visible GPU.
+        - backend=gloo uses CPU processes (auto-sized by CPU capacity and num_clients).
+        - backend=serial is the default for lightweight experiments.
         """.strip()
     )
 
@@ -416,7 +415,7 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
         if tok in {"-h", "--help"}:
             _print_help()
             raise SystemExit(0)
-        if tok in {"serial", "mpi"}:
+        if tok in {"serial", "nccl", "gloo"}:
             backend = tok
             idx += 1
             continue

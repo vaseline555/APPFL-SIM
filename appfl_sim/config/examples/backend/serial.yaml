@@ -1,0 +1,28 @@
+backend: serial
+exp_name: appfl-sim-serial
+seed: 42
+
+algorithm: fedavg
+dataset: MNIST
+model_name: SimpleCNN
+
+num_clients: 100
+num_rounds: 500
+num_sampled_clients: 5
+
+update_base: epoch
+local_epochss: 1
+lr: 0.1
+batch_size: 16
+eval_batch_size: 256
+eval_every: 100
+
+split_type: pathological
+min_classes: 2
+
+device: cuda:0
+server_device: cuda
+num_workers: 0
+
+data_dir: ./data
+log_dir: ./logs

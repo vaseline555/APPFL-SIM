@@ -112,14 +112,12 @@ def _emit_federated_eval_policy_message(
     else:
         print(msg)
 
-def _warn_if_workers_pinned_to_single_gpu(
+def _warn_if_workers_pinned_to_single_device(
     config: DictConfig,
     world_size: int,
     logger: Optional[ServerAgentFileLogger] = None,
 ) -> None:
-    if world_size <= 2:
-        return
-    if not _cfg_bool(config, "mpi_use_local_rank_device", True):
+    if world_size <= 1:
         return
     dev = str(config.get("device", "cpu")).strip().lower()
     if not dev.startswith("cuda:"):
@@ -128,9 +126,8 @@ def _warn_if_workers_pinned_to_single_gpu(
     if not suffix.isdigit():
         return
     msg = (
-        f"MPI device warning: `device={dev}` pins all client ranks to the same GPU index. "
-        "For multi-rank GPU spreading, use `device=cuda` (or `cuda:local`) with "
-        "`mpi_use_local_rank_device=true`."
+        f"Device warning: `device={dev}` pins all ranks to the same GPU index. "
+        "For multi-rank GPU spreading, use `device=cuda`."
     )
     if logger is not None:
         logger.warning(msg)
@@ -421,8 +418,8 @@ def _new_server_logger(config: DictConfig, mode: str, run_ts: str) -> ServerAgen
     run_dir = Path(str(config.log_dir)) / str(config.exp_name) / run_ts
     mode_text = str(mode).strip().lower()
     file_name = "server.log"
-    if mode_text.startswith("mpi-rank"):
-        suffix = mode_text[len("mpi-rank") :].strip("-_ ")
+    if "-rank" in mode_text:
+        suffix = mode_text.split("-rank", 1)[1].strip("-_ ")
         if suffix.isdigit():
             file_name = f"server-rank{suffix}.log"
     return ServerAgentFileLogger(

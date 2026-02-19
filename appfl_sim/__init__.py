@@ -1,10 +1,10 @@
-"""appfl[sim]: MPI-backed FL simulation package."""
+"""appfl[sim]: simulation-focused FL package."""
 
 
-def run_mpi(config) -> None:
-    from appfl_sim.runner import run_mpi as _run_mpi
+def run_distributed(config, backend: str = "gloo") -> None:
+    from appfl_sim.runner import run_distributed as _run_distributed
 
-    _run_mpi(config)
+    _run_distributed(config, backend=backend)
 
 
 def run_serial(config) -> None:
@@ -13,4 +13,4 @@ def run_serial(config) -> None:
     _run_serial(config)
 
 
-__all__ = ["run_mpi", "run_serial"]
+__all__ = ["run_distributed", "run_serial"]

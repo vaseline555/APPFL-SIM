@@ -1,4 +1,4 @@
-backend: mpi
+backend: serial
 exp_name: appfl-sim
 seed: 42
 
@@ -68,12 +68,6 @@ on_demand_eval_num_workers: 0
 device: cpu
 server_device: cpu
 num_workers: 0
-mpi_dataset_download_mode: rank0
-mpi_use_local_rank_device: true
-mpi_respect_explicit_cuda_index: false
-mpi_log_rank_mapping: false
-mpi_num_workers: 0
-mpi_oversubscribe: false
 
 infer_num_clients: false
 client_subsample_num: 0

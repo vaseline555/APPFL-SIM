@@ -129,7 +129,7 @@ def _build_federated_eval_plan(
         "out_ids": [],
     }
 
-def _run_federated_eval_mpi(
+def _run_federated_eval_distributed(
     config: DictConfig,
     communicator,
     model_state,
