@@ -56,7 +56,7 @@ train:
   dataloader_prefetch_factor: 2
 
 algorithm:
-  algorithm: fedavg
+  name: fedavg
   mix_coefs: sample_ratio
   optimize_memory: true
   aggregator: ""

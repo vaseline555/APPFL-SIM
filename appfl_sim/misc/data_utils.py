@@ -48,8 +48,13 @@ def _parse_holdout_dataset_ratio(config: DictConfig) -> Optional[List[float]]:
     return ratios
 
 def _validate_bandit_dataset_ratio(config: DictConfig) -> None:
-    algorithm = str(_cfg_get(config, "algorithm.algorithm", "fedavg")).strip().lower()
-    if algorithm not in {"swucb", "swts"}:
+    algorithm = str(_cfg_get(config, "algorithm.name", "fedavg")).strip().lower()
+    scheduler_name = str(_cfg_get(config, "algorithm.scheduler", "")).strip().lower()
+    is_bandit = algorithm in {"swucb", "swts"} or scheduler_name in {
+        "swucbscheduler",
+        "swtsscheduler",
+    }
+    if not is_bandit:
         return
     ratios = _parse_holdout_dataset_ratio(config)
     if ratios is None:

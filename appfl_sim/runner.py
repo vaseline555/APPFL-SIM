@@ -274,7 +274,11 @@ def run_serial(config) -> None:
                     if not worker_pool:
                         _release_clients(chunk_clients)
 
-            weights = server.aggregate(updates, sample_sizes)
+            weights = server.aggregate(
+                updates,
+                sample_sizes,
+                client_train_stats=stats,
+            )
             round_gen_error = _weighted_global_gen_error(stats, sample_sizes)
             round_gen_reward = None
             if round_gen_error is not None:
@@ -716,7 +720,11 @@ def run_distributed(config, backend: str) -> None:
                         updates[int(cid)] = state
                         sample_sizes[int(cid)] = int(payload_item.get("num_examples", 0))
                         stats[int(cid)] = payload_item.get("stats", {})
-                weights = server.aggregate(updates, sample_sizes)
+                weights = server.aggregate(
+                    updates,
+                    sample_sizes,
+                    client_train_stats=stats,
+                )
                 round_gen_error = _weighted_global_gen_error(stats, sample_sizes)
                 if round_gen_error is not None:
                     observed_reward = _maybe_observe_round_gen_error(

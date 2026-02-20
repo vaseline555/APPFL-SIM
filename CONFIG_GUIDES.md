@@ -69,12 +69,12 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `dataloader_prefetch_factor` (default: `2`): pass-through to `DataLoader` `prefetch_factor` when `num_workers > 0`.
 
 ## Algorithm (`algorithm`)
-- `algorithm` (default: `fedavg`): algorithm label used for component inference.
+- `name` (default: `fedavg`): algorithm label used for component inference.
 - `mix_coefs` (default: `sample_ratio`): aggregation coefficients (`uniform`, `sample_ratio`, `adaptive`).
 - `optimize_memory` (default: `true`): enable memory-saving cleanup paths in trainer/scheduler/aggregator.
-- `aggregator` (default: `"fedavg"`): algorithm name used for federated learning simulation (optional).
-- `scheduler` (default: `"sync"`): explicit scheduler class name (optional).
-- `trainer` (default: `"vanilla"`): explicit client trainer class name (optional).
+- `aggregator` (default: `""`): explicit aggregator class name (optional).
+- `scheduler` (default: `""`): explicit scheduler class name (optional).
+- `trainer` (default: `""`): explicit trainer class name (optional).
 - `aggregator_kwargs` (default: `{}`): configs forwarded to aggregator class construction.
 - `scheduler_kwargs` (default: `{}`): configs forwarded to scheduler class construction.
 - `trainer_kwargs` (default: `{}`): configs forwarded to trainer class construction.

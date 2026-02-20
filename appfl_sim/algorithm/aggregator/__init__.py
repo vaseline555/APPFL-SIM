@@ -3,6 +3,7 @@ from .base_aggregator import BaseAggregator
 # Optional APPFL aggregators for broad compatibility.
 _OPTIONAL = {
     "FedAvgAggregator": ".fedavg_aggregator",
+    "FedNovaAggregator": ".fednova_aggregator",
     "FedAvgMAggregator": ".fedavgm_aggregator",
     "FedAdamAggregator": ".fedadam_aggregator",
     "FedYogiAggregator": ".fedyogi_aggregator",

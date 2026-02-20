@@ -333,7 +333,7 @@ def _module_has_class(module_path: str, class_name: str) -> bool:
     return False
 
 def _resolve_algorithm_components(config: DictConfig) -> Dict[str, Any]:
-    algorithm = str(_cfg_get(config, "algorithm.algorithm", "fedavg")).strip().lower()
+    algorithm = str(_cfg_get(config, "algorithm.name", "fedavg")).strip().lower()
     explicit_aggregator = str(_cfg_get(config, "algorithm.aggregator", "")).strip()
     explicit_scheduler = str(_cfg_get(config, "algorithm.scheduler", "")).strip()
     explicit_trainer = str(_cfg_get(config, "algorithm.trainer", "")).strip()
@@ -342,6 +342,8 @@ def _resolve_algorithm_components(config: DictConfig) -> Dict[str, Any]:
         aggregator_name = explicit_aggregator
     elif algorithm == "fedavg":
         aggregator_name = "FedAvgAggregator"
+    elif algorithm == "fednova":
+        aggregator_name = "FedNovaAggregator"
     else:
         aggregator_name = f"{_to_pascal_case(algorithm)}Aggregator"
 

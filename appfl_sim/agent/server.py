@@ -201,6 +201,7 @@ class ServerAgent:
         self,
         local_states: Dict[Union[int, str], Union[Dict, OrderedDict]],
         sample_sizes: Dict[Union[int, str], int],
+        client_train_stats: Optional[Dict[Union[int, str], Dict[str, Any]]] = None,
     ) -> Dict[int, float]:
         """
         Aggregate local client updates using the configured APPFL aggregator.
@@ -231,7 +232,10 @@ class ServerAgent:
         for cid, size in sample_sizes.items():
             self.aggregator.set_client_sample_size(cid, int(size))
 
-        aggregated = self.aggregator.aggregate(local_states)
+        aggregated = self.aggregator.aggregate(
+            local_states,
+            client_train_stats=client_train_stats or {},
+        )
         if isinstance(aggregated, tuple):
             aggregated = aggregated[0]
         if (

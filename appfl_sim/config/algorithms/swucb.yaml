@@ -29,7 +29,7 @@ train:
   shuffle: true
   eval_batch_size: 256
 algorithm:
-  algorithm: swucb
+  name: swucb
   mix_coefs: sample_ratio
   optimize_memory: true
   aggregator: FedAvgAggregator
