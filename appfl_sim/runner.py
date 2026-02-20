@@ -526,10 +526,7 @@ def run_distributed(config, backend: str) -> None:
     worker_pool: Optional[List[ClientAgent]] = None
     use_on_demand = not bool(state_policy["stateful"])
     on_demand_model = copy.deepcopy(model) if use_on_demand else None
-    # Under NCCL backend, keep logging artifacts only on rank0 to reduce I/O noise.
     local_client_logging_enabled = bool(logging_policy["client_logging_enabled"])
-    if backend == "nccl" and rank != 0:
-        local_client_logging_enabled = False
 
     if not use_on_demand:
         eager_clients = _build_clients(

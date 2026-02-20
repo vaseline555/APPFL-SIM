@@ -42,7 +42,7 @@ algorithm:
 optimization:
   optimizer: SGD
   criterion: CrossEntropyLoss
-  lr: 0.01
+  lr: 0.00316227766
   lr_decay:
     enable: true
     type: exponential
@@ -67,8 +67,6 @@ eval:
     - 80
     - 10
     - 10
-    client_ratio: 0.0
-    client_counts: 0
 logging:
   path: ./logs
   name: genfl_fedavg

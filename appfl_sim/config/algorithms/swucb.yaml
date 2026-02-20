@@ -39,13 +39,13 @@ algorithm:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
     action_space: [1, 5, 10]
-    window_size: 10
-    exploration_alpha: 0.5
+    window_size: 5
+    exploration_alpha: 0.1
   trainer_kwargs: {}
 optimization:
   optimizer: SGD
   criterion: CrossEntropyLoss
-  lr: 0.01
+  lr: 0.00316227766
   lr_decay:
     enable: true
     type: exponential
@@ -70,10 +70,10 @@ eval:
     - 80
     - 10
     - 10
-    client_ratio: 0.0
-    client_counts: 0
 logging:
   path: ./logs
   name: genfl_swucb
   backend: file
   type: both
+  configs:
+    track_gen_rewards: true
