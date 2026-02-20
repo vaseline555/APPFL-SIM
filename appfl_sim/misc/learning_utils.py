@@ -44,15 +44,36 @@ def _weighted_global_gen_error(
         return None
     return float(accum / total)
 
-def _maybe_observe_round_gen_error(server, global_gen_error: float, round_idx: int):
+def _weighted_global_pre_val_error(
+    stats: dict,
+    sample_sizes: dict,
+) -> float | None:
+    if not stats:
+        return None
+    total = 0.0
+    accum = 0.0
+    for cid, client_stats in stats.items():
+        if not isinstance(client_stats, dict):
+            continue
+        value = client_stats.get("pre_val_loss", None)
+        if not isinstance(value, (int, float)):
+            continue
+        weight = float(sample_sizes.get(cid, 0))
+        if weight <= 0.0:
+            weight = 1.0
+        accum += weight * float(value)
+        total += weight
+    if total <= 0.0:
+        return None
+    return float(accum / total)
+
+
+def _maybe_adapt_round_pre_val_error(server, pre_val_error: float):
     scheduler = getattr(server, "scheduler", None)
-    if scheduler is None or not hasattr(scheduler, "observe_global_gen_error"):
+    if scheduler is None or not hasattr(scheduler, "adapt"):
         return None
     try:
-        return scheduler.observe_global_gen_error(
-            global_gen_error=float(global_gen_error),
-            round_idx=int(round_idx),
-        )
+        return scheduler.adapt(pre_val_error=float(pre_val_error))
     except Exception:
         return None
 

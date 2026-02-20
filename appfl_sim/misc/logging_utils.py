@@ -138,6 +138,7 @@ def _log_round(
     stats,
     weights,
     round_local_steps: Optional[int] = None,
+    global_gen_error: Optional[float] = None,
     global_eval_metrics: Optional[Dict[str, float]] = None,
     federated_eval_metrics: Optional[Dict[str, float]] = None,
     federated_eval_in_metrics: Optional[Dict[str, float]] = None,
@@ -363,6 +364,18 @@ def _log_round(
             )
         )
 
+    def _append_global_gen_error() -> None:
+        if not isinstance(global_gen_error, (int, float)):
+            return
+        value = float(global_gen_error)
+        round_metrics["global_gen_error"] = value
+        lines.append(
+            _entity_line(
+                "Global Gen. Error:",
+                _join_metric_parts([f"err.: {value:.4f}"]),
+            )
+        )
+
     def _append_gen_reward() -> None:
         if not track_gen_rewards:
             return
@@ -399,6 +412,7 @@ def _log_round(
     if do_post_val:
         _append_local_eval_block("Local Post-test.", "local_post_test", "post_test_")
     _append_local_gen_error()
+    _append_global_gen_error()
     _append_gen_reward()
 
     _append_eval_block(

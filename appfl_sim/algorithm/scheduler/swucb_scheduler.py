@@ -26,18 +26,17 @@ class SwucbScheduler(SyncScheduler):
         )
         if not self.action_space:
             self.action_space = [1]
-        self.window_size = max(1, int(scheduler_configs.get("window_size", 50)))
-        self.exploration_alpha = float(scheduler_configs.get("exploration_alpha", 0.5))
+        self.window_size = max(1, int(scheduler_configs.get("window_size", 5)))
+        self.exploration_alpha = float(scheduler_configs.get("exploration_alpha", 0.1))
         self.history: Deque[Tuple[int, float]] = deque(maxlen=self.window_size)
         self.pending_actions: Deque[int] = deque()
-        self.prev_global_gen_error: Optional[float] = None
+        self.prev_pre_val_error: Optional[float] = None
         self.current_round: int = 0
         self.last_selected_action: int = int(self.action_space[0])
         self.last_reward: Optional[float] = None
 
-    def select_local_steps(self, round_idx: int) -> int:
-        t = max(1, int(round_idx))
-        self.current_round = t
+    def pull(self, round_idx: int) -> int:
+        self.current_round = max(1, int(round_idx))
         counts: Dict[int, int] = {a: 0 for a in self.action_space}
         sums: Dict[int, float] = {a: 0.0 for a in self.action_space}
         for action, reward in self.history:
@@ -46,36 +45,34 @@ class SwucbScheduler(SyncScheduler):
 
         missing = [a for a in self.action_space if counts[a] == 0]
         if missing:
-            chosen = int(missing[0])
+            chosen = int(self._rng.choice(missing))
         else:
-            best_action = int(self.action_space[0])
+            chosen = None
             best_score = float("-inf")
             for action in self.action_space:
                 n = max(1, counts[action])
                 mean_reward = sums[action] / n
-                bonus = self.exploration_alpha * math.sqrt(max(0.0, math.log(float(t))) / n)
-                score = mean_reward + bonus
+                ucb = self.exploration_alpha * math.sqrt(max(0.0, math.log(float(self.current_round))) / n)
+                score = mean_reward + ucb
                 if score > best_score:
                     best_score = score
-                    best_action = int(action)
-            chosen = best_action
+                    chosen = int(action)
+            if chosen is None:
+               chosen = self._rng.choice(self.action_space)
 
         self.pending_actions.append(chosen)
         self.last_selected_action = int(chosen)
         return int(chosen)
 
-    def observe_global_gen_error(
-        self, global_gen_error: float, round_idx: Optional[int] = None
-    ) -> Optional[float]:
-        _ = round_idx
-        current = float(global_gen_error)
-        if self.prev_global_gen_error is None:
-            self.prev_global_gen_error = current
+    def adapt(self, pre_val_error: float) -> Optional[float]:
+        current = float(pre_val_error)
+        if self.prev_pre_val_error is None:
+            self.prev_pre_val_error = current
             self.last_reward = None
             return None
 
-        reward = -(current - self.prev_global_gen_error)
-        self.prev_global_gen_error = current
+        reward = float(self.prev_pre_val_error - current)
+        self.prev_pre_val_error = current
         self.last_reward = float(reward)
 
         if self.pending_actions:

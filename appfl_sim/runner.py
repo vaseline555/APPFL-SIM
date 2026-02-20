@@ -42,10 +42,11 @@ from appfl_sim.misc.data_utils import (
 from appfl_sim.misc.learning_utils import (
     _aggregate_eval_stats,
     _build_federated_eval_plan,
-    _maybe_observe_round_gen_error,
+    _maybe_adapt_round_pre_val_error,
     _run_federated_eval_serial,
     _should_eval_round,
     _weighted_global_gen_error,
+    _weighted_global_pre_val_error,
 )
 from appfl_sim.misc.logging_utils import (
     _emit_client_state_policy_message,
@@ -132,7 +133,7 @@ def run_serial(config) -> None:
     track_gen_rewards = _cfg_bool(config, "logging.configs.track_gen_rewards", False)
     num_rounds = int(_cfg_get(config, "train.num_rounds", 20))
     eval_every = int(_cfg_get(config, "eval.every", 1))
-    prev_global_gen_error: Optional[float] = None
+    prev_pre_val_error: Optional[float] = None
     cumulative_gen_reward: float = 0.0
 
     model = load_model(
@@ -280,21 +281,16 @@ def run_serial(config) -> None:
                 client_train_stats=stats,
             )
             round_gen_error = _weighted_global_gen_error(stats, sample_sizes)
+            round_pre_val_error = _weighted_global_pre_val_error(stats, sample_sizes)
             round_gen_reward = None
-            if round_gen_error is not None:
-                observed_reward = _maybe_observe_round_gen_error(
-                    server, global_gen_error=round_gen_error, round_idx=round_idx
+            if round_pre_val_error is not None:
+                _maybe_adapt_round_pre_val_error(
+                    server, pre_val_error=round_pre_val_error
                 )
-                if track_gen_rewards:
-                    if isinstance(observed_reward, (int, float)):
-                        round_gen_reward = float(observed_reward)
-                    elif prev_global_gen_error is not None:
-                        round_gen_reward = float(
-                            -(float(round_gen_error) - float(prev_global_gen_error))
-                        )
-                    if round_gen_reward is not None:
-                        cumulative_gen_reward += float(round_gen_reward)
-                    prev_global_gen_error = float(round_gen_error)
+                if track_gen_rewards and prev_pre_val_error is not None:
+                    round_gen_reward = float(prev_pre_val_error - round_pre_val_error)
+                    cumulative_gen_reward += float(round_gen_reward)
+                prev_pre_val_error = float(round_pre_val_error)
             global_eval_metrics = None
             if enable_global_eval and _should_eval_round(
                 round_idx,
@@ -409,6 +405,7 @@ def run_serial(config) -> None:
                 stats,
                 weights,
                 round_local_steps=round_local_steps,
+                global_gen_error=round_gen_error,
                 global_eval_metrics=global_eval_metrics,
                 federated_eval_metrics=federated_eval_metrics,
                 federated_eval_in_metrics=federated_eval_in_metrics,
@@ -564,7 +561,7 @@ def run_distributed(config, backend: str) -> None:
     tracker = None
     server = None
     server_logger = bootstrap_logger if rank == 0 else None
-    prev_global_gen_error: Optional[float] = None
+    prev_pre_val_error: Optional[float] = None
     cumulative_gen_reward: float = 0.0
     if rank == 0:
         _maybe_force_server_cpu(config, enable_global_eval, logger=server_logger)
@@ -707,6 +704,7 @@ def run_distributed(config, backend: str) -> None:
             weights = None
             stats = {}
             round_gen_reward = None
+            round_gen_error = None
             if rank == 0:
                 updates = {}
                 sample_sizes = {}
@@ -726,20 +724,15 @@ def run_distributed(config, backend: str) -> None:
                     client_train_stats=stats,
                 )
                 round_gen_error = _weighted_global_gen_error(stats, sample_sizes)
-                if round_gen_error is not None:
-                    observed_reward = _maybe_observe_round_gen_error(
-                        server, global_gen_error=round_gen_error, round_idx=round_idx
+                round_pre_val_error = _weighted_global_pre_val_error(stats, sample_sizes)
+                if round_pre_val_error is not None:
+                    _maybe_adapt_round_pre_val_error(
+                        server, pre_val_error=round_pre_val_error
                     )
-                    if track_gen_rewards:
-                        if isinstance(observed_reward, (int, float)):
-                            round_gen_reward = float(observed_reward)
-                        elif prev_global_gen_error is not None:
-                            round_gen_reward = float(
-                                -(float(round_gen_error) - float(prev_global_gen_error))
-                            )
-                        if round_gen_reward is not None:
-                            cumulative_gen_reward += float(round_gen_reward)
-                        prev_global_gen_error = float(round_gen_error)
+                    if track_gen_rewards and prev_pre_val_error is not None:
+                        round_gen_reward = float(prev_pre_val_error - round_pre_val_error)
+                        cumulative_gen_reward += float(round_gen_reward)
+                    prev_pre_val_error = float(round_pre_val_error)
     
             sync_model = server.model if rank == 0 else model
             _broadcast_model_state_inplace(sync_model, src=0)
@@ -816,6 +809,7 @@ def run_distributed(config, backend: str) -> None:
                         stats,
                         weights,
                         round_local_steps=round_local_steps,
+                        global_gen_error=round_gen_error,
                         global_eval_metrics=global_eval_metrics,
                     federated_eval_metrics=federated_eval_metrics,
                     federated_eval_in_metrics=federated_eval_in_metrics,

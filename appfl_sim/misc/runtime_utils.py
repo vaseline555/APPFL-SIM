@@ -27,10 +27,10 @@ from appfl_sim.misc.data_utils import _build_client_groups
 
 def _maybe_select_round_local_steps(server, round_idx: int):
     scheduler = getattr(server, "scheduler", None)
-    if scheduler is None or not hasattr(scheduler, "select_local_steps"):
+    if scheduler is None or not hasattr(scheduler, "pull"):
         return None
     try:
-        return int(scheduler.select_local_steps(round_idx=int(round_idx)))
+        return int(scheduler.pull(round_idx=int(round_idx)))
     except Exception:
         return None
 

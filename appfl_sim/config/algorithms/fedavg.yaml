@@ -7,7 +7,7 @@ experiment:
   stateful: false
 dataset:
   path: ./data
-  name: CIFAR10
+  name: MNIST
   backend: auto
   download: true
 split:
@@ -23,9 +23,9 @@ train:
   num_rounds: 200
   num_clients: 10
   num_sampled_clients: 10
-  update_base: epoch
-  local_epochs: 1
-  batch_size: 64
+  update_base: iter
+  local_iters: 1
+  batch_size: 32
   shuffle: true
   eval_batch_size: 256
 algorithm:
@@ -42,7 +42,7 @@ algorithm:
 optimization:
   optimizer: SGD
   criterion: CrossEntropyLoss
-  lr: 0.00316227766
+  lr: 0.01
   lr_decay:
     enable: true
     type: exponential

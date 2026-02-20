@@ -33,14 +33,14 @@ class SwtsScheduler(SyncScheduler):
         self.prior_variance = max(1e-8, float(scheduler_configs.get("prior_variance", 1.0)))
         self.history: Deque[Tuple[int, float]] = deque(maxlen=self.window_size)
         self.pending_actions: Deque[int] = deque()
-        self.prev_global_gen_error: Optional[float] = None
+        self.prev_pre_val_error: Optional[float] = None
         self.current_round: int = 0
         self.last_selected_action: int = int(self.action_space[0])
         self.last_reward: Optional[float] = None
         seed = scheduler_configs.get("seed", None)
         self._rng = np.random.default_rng(None if seed is None else int(seed))
 
-    def select_local_steps(self, round_idx: int) -> int:
+    def pull(self, round_idx: int) -> int:
         self.current_round = max(1, int(round_idx))
         samples: Dict[int, float] = {}
         for action in self.action_space:
@@ -57,18 +57,15 @@ class SwtsScheduler(SyncScheduler):
         self.last_selected_action = chosen
         return chosen
 
-    def observe_global_gen_error(
-        self, global_gen_error: float, round_idx: Optional[int] = None
-    ) -> Optional[float]:
-        _ = round_idx
-        current = float(global_gen_error)
-        if self.prev_global_gen_error is None:
-            self.prev_global_gen_error = current
+    def adapt(self, pre_val_error: float) -> Optional[float]:
+        current = float(pre_val_error)
+        if self.prev_pre_val_error is None:
+            self.prev_pre_val_error = current
             self.last_reward = None
             return None
 
-        reward = -(current - self.prev_global_gen_error)
-        self.prev_global_gen_error = current
+        reward = float(self.prev_pre_val_error - current)
+        self.prev_pre_val_error = current
         self.last_reward = float(reward)
 
         if self.pending_actions:

@@ -316,34 +316,73 @@ def _pathological_split(
     min_classes: int,
     rng: np.random.Generator,
 ) -> dict[int, np.ndarray]:
-    indices = np.arange(len(labels))
-    sorted_indices = indices[np.argsort(labels)]
+    cap = max(1, int(min_classes))
+    classes = np.asarray(sorted(np.unique(labels)), dtype=np.int64)
+    if classes.size == 0:
+        return {cid: np.array([], dtype=np.int64) for cid in range(num_clients)}
 
-    num_shards = max(num_clients * max(min_classes, 1), num_clients)
-    shards = np.array_split(sorted_indices, num_shards)
-    shard_ids = rng.permutation(num_shards)
+    total_slots = int(num_clients) * int(cap)
+    if total_slots < int(classes.size):
+        raise ValueError(
+            "pathological split cannot cover all classes with current settings: "
+            f"num_clients({num_clients}) * min_classes({cap}) < num_classes({int(classes.size)})."
+        )
+
+    # Each client gets `cap` class slots; every class is assigned to at least one slot.
+    client_slots = rng.permutation(np.repeat(np.arange(num_clients, dtype=np.int64), cap))
+    class_to_clients: dict[int, list[int]] = {int(cls): [] for cls in classes.tolist()}
+    client_class_sets = [set() for _ in range(num_clients)]
+
+    shuffled_classes = rng.permutation(classes)
+    for cls, cid in zip(shuffled_classes.tolist(), client_slots[: classes.size].tolist()):
+        c = int(cid)
+        y = int(cls)
+        client_class_sets[c].add(y)
+        class_to_clients[y].append(c)
+
+    for cid in client_slots[classes.size :].tolist():
+        c = int(cid)
+        available = [int(cls) for cls in classes.tolist() if int(cls) not in client_class_sets[c]]
+        if not available:
+            continue
+        y = int(rng.choice(np.asarray(available, dtype=np.int64)))
+        client_class_sets[c].add(y)
+        class_to_clients[y].append(c)
 
     out = {cid: [] for cid in range(num_clients)}
-    ptr = 0
+    for cls in classes.tolist():
+        y = int(cls)
+        cls_idx = np.where(labels == y)[0].astype(np.int64)
+        rng.shuffle(cls_idx)
+        owners = class_to_clients[y]
+        if not owners:
+            raise RuntimeError(f"pathological split internal error: class {y} has no owner.")
+        parts = np.array_split(cls_idx, len(owners))
+        for cid, part in zip(owners, parts):
+            if len(part) > 0:
+                out[int(cid)].append(part.astype(np.int64))
 
-    for cid in range(num_clients):
-        for _ in range(max(min_classes, 1)):
-            if ptr >= len(shard_ids):
-                ptr = 0
-            sid = shard_ids[ptr]
-            ptr += 1
-            out[cid].append(shards[sid])
-
-    while ptr < len(shard_ids):
-        sid = shard_ids[ptr]
-        cid = (ptr - num_clients * max(min_classes, 1)) % num_clients
-        out[cid].append(shards[sid])
-        ptr += 1
-
-    return {
+    result = {
         cid: np.concatenate(parts).astype(np.int64) if parts else np.array([], dtype=np.int64)
         for cid, parts in out.items()
     }
+
+    # Verify constraints: per-client class cap and global class coverage.
+    covered = set()
+    for cid, idx in result.items():
+        if idx.size == 0:
+            continue
+        uniq = set(np.unique(labels[idx]).astype(np.int64).tolist())
+        if len(uniq) > cap:
+            raise RuntimeError(
+                f"pathological split produced {len(uniq)} classes for client {cid}, cap={cap}."
+            )
+        covered.update(int(v) for v in uniq)
+    expected = set(int(v) for v in classes.tolist())
+    if covered != expected:
+        raise RuntimeError("pathological split failed to cover all classes across clients.")
+
+    return result
 
 
 def _dirichlet_split(
