@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig
 from appfl_sim.logger import ServerAgentFileLogger
+from appfl_sim.misc.config_utils import _cfg_get, _cfg_set
 
 
 
@@ -81,8 +82,8 @@ def resolve_rank_device(
 
 
 def validate_backend_device_consistency(backend: str, config: DictConfig) -> None:
-    device = str(config.get("device", "cpu")).strip().lower()
-    server_device = str(config.get("server_device", "cpu")).strip().lower()
+    device = str(_cfg_get(config, "experiment.device", "cpu")).strip().lower()
+    server_device = str(_cfg_get(config, "experiment.server_device", "cpu")).strip().lower()
     cuda_available = bool(torch.cuda.is_available())
     visible_gpus = int(torch.cuda.device_count()) if cuda_available else 0
 
@@ -284,10 +285,10 @@ def _maybe_force_server_cpu(
 ) -> None:
     if enable_global_eval:
         return
-    current = str(config.get("server_device", "cpu")).strip().lower()
+    current = str(_cfg_get(config, "experiment.server_device", "cpu")).strip().lower()
     if not current.startswith("cuda"):
         return
-    config.server_device = "cpu"
+    _cfg_set(config, "experiment.server_device", "cpu")
     msg = (
         "Global eval is disabled; forcing `server_device=cpu` to avoid unnecessary "
         "server-side GPU memory usage."
@@ -327,10 +328,6 @@ def _client_processing_chunk_size(
     phase: str = "train",
 ) -> int:
     phase_name = str(phase).strip().lower()
-    configured = int(config.get("client_processing_chunk_size", 0))
-    if configured > 0:
-        return max(1, configured)
-
     if str(device).strip().lower().startswith("cuda") and torch.cuda.is_available():
         try:
             dev_idx = _resolve_cuda_index(device)

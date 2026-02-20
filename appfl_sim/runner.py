@@ -24,6 +24,7 @@ from appfl_sim.misc.system_utils import (
 from appfl_sim.misc.config_utils import (
     _allow_reusable_on_demand_pool,
     _cfg_bool,
+    _cfg_get,
     _cfg_to_dict,
     _default_config_path,
     _ensure_model_cfg,
@@ -80,16 +81,20 @@ def run_serial(config) -> None:
     if not isinstance(config, DictConfig):
         config = OmegaConf.create(_cfg_to_dict(config))
 
-    set_seed_everything(int(config.seed))
+    set_seed_everything(int(_cfg_get(config, "experiment.seed", 42)))
     t0 = time.time()
     run_ts = _resolve_run_timestamp(config, preset=None)
-    run_log_dir = str(Path(str(config.log_dir)) / str(config.exp_name) / run_ts)
+    run_log_dir = str(
+        Path(str(_cfg_get(config, "logging.path", "./logs")))
+        / str(_cfg_get(config, "experiment.name", "appfl-sim"))
+        / run_ts
+    )
     server_logger = _new_server_logger(config, mode="serial", run_ts=run_ts)
     tracker = create_experiment_tracker(config, run_timestamp=run_ts)
 
     loader_cfg = _cfg_to_dict(config)
     # Respect user-configured download policy in serial mode.
-    loader_cfg["download"] = _cfg_bool(config, "download", True)
+    loader_cfg["download"] = _cfg_bool(config, "dataset.download", True)
     loader_cfg["logger"] = server_logger
     _, client_datasets, server_dataset, args = load_dataset(loader_cfg)
     client_datasets = _apply_holdout_dataset_ratio(
@@ -122,11 +127,11 @@ def run_serial(config) -> None:
         f"trainer={algorithm_components['trainer_name']}"
     )
     on_demand_workers = _resolve_on_demand_worker_policy(config, logger=server_logger)
-    enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
+    enable_global_eval = _cfg_bool(config, "eval.enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
     _maybe_force_server_cpu(config, enable_global_eval, logger=server_logger)
-    enable_federated_eval = _cfg_bool(config, "enable_federated_eval", True)
+    enable_federated_eval = _cfg_bool(config, "eval.enable_federated_eval", True)
 
     model = load_model(
         runtime_cfg,
@@ -142,7 +147,9 @@ def run_serial(config) -> None:
         algorithm_components=algorithm_components,
     )
 
-    client_device = resolve_rank_device(str(config.device), rank=1, world_size=2)
+    client_device = resolve_rank_device(
+        str(_cfg_get(config, "experiment.device", "cpu")), rank=1, world_size=2
+    )
     chunk_size = _client_processing_chunk_size(
         config=config,
         model=model,
@@ -201,54 +208,23 @@ def run_serial(config) -> None:
         logger=server_logger,
     )
 
-    for round_idx in range(1, int(config.num_rounds) + 1):
-        selected_ids = _sample_train_clients(
-            train_client_ids=train_client_ids,
-            num_sampled_clients=int(num_sampled_clients),
-        )
-        global_state = server.model.state_dict()
+    interrupted = False
+    try:
+        for round_idx in range(1, int(_cfg_get(config, "train.num_rounds", 20)) + 1):
+            selected_ids = _sample_train_clients(
+                train_client_ids=train_client_ids,
+                num_sampled_clients=int(num_sampled_clients),
+            )
+            global_state = server.model.state_dict()
 
-        updates = {}
-        sample_sizes = {}
-        stats = {}
-        if eager_clients is not None:
-            selected = set(selected_ids)
-            for client in eager_clients:
-                if client.id not in selected:
-                    continue
-                client.download(global_state)
-                train_result = client.update(round_idx=round_idx)
-                state = client.upload()
-                if isinstance(state, tuple):
-                    state = state[0]
-                updates[client.id] = state
-                sample_sizes[client.id] = int(train_result["num_examples"])
-                stats[client.id] = train_result
-        else:
-            for chunk_ids in _iter_id_chunks(selected_ids, chunk_size):
-                if worker_pool:
-                    chunk_clients = worker_pool[: len(chunk_ids)]
-                    for client, cid in zip(chunk_clients, chunk_ids):
-                        _rebind_client_for_on_demand_job(
-                            client,
-                            client_id=int(cid),
-                            client_datasets=client_datasets,
-                            num_workers_override=on_demand_workers["train"],
-                        )
-                else:
-                    chunk_clients = _build_clients(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        local_client_ids=np.asarray(chunk_ids).astype(int),
-                        device=client_device,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-                        trainer_name=str(algorithm_components["trainer_name"]),
-                        share_model=True,
-                        num_workers_override=on_demand_workers["train"],
-                    )
-                for client in chunk_clients:
+            updates = {}
+            sample_sizes = {}
+            stats = {}
+            if eager_clients is not None:
+                selected = set(selected_ids)
+                for client in eager_clients:
+                    if client.id not in selected:
+                        continue
                     client.download(global_state)
                     train_result = client.update(round_idx=round_idx)
                     state = client.upload()
@@ -257,138 +233,179 @@ def run_serial(config) -> None:
                     updates[client.id] = state
                     sample_sizes[client.id] = int(train_result["num_examples"])
                     stats[client.id] = train_result
-                if not worker_pool:
-                    _release_clients(chunk_clients)
-
-        weights = server.aggregate(updates, sample_sizes)
-        global_eval_metrics = None
-        if enable_global_eval and _should_eval_round(
-            round_idx, int(config.eval_every), int(config.num_rounds)
-        ):
-            global_eval_metrics = server.evaluate(round_idx=round_idx)
-
-        federated_eval_metrics = None
-        federated_eval_in_metrics = None
-        federated_eval_out_metrics = None
-        if enable_federated_eval:
-            plan = _build_federated_eval_plan(
-                config=config,
-                round_idx=round_idx,
-                num_rounds=int(config.num_rounds),
-                selected_train_ids=selected_ids,
-                train_client_ids=train_client_ids,
-                holdout_client_ids=holdout_client_ids,
-            )
-            if eager_clients is not None:
-                state = server.model.state_dict()
-                if plan["scheme"] == "holdout_client":
-                    eval_in_set = set(plan["in_ids"])
-                    eval_out_set = set(plan["out_ids"])
-                    eval_in_stats = {}
-                    eval_out_stats = {}
-                    for client in eager_clients:
-                        if client.id in eval_in_set:
-                            client.download(state)
-                            eval_in_stats[int(client.id)] = client.evaluate(
-                                split="test",
-                                offload_after=False,
-                            )
-                        elif client.id in eval_out_set:
-                            client.download(state)
-                            eval_out_stats[int(client.id)] = client.evaluate(
-                                split="test",
-                                offload_after=False,
-                            )
-                    federated_eval_in_metrics = _aggregate_eval_stats(eval_in_stats)
-                    federated_eval_out_metrics = _aggregate_eval_stats(eval_out_stats)
-                else:
-                    eval_set = set(plan["in_ids"])
-                    eval_stats = {}
-                    for client in eager_clients:
-                        if client.id not in eval_set:
-                            continue
-                        client.download(state)
-                        eval_stats[int(client.id)] = client.evaluate(
-                            split="test",
-                            offload_after=False,
-                        )
-                    federated_eval_metrics = _aggregate_eval_stats(eval_stats)
             else:
-                if plan["scheme"] == "holdout_client":
-                    federated_eval_in_metrics = _run_federated_eval_serial(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=bool(
-                            logging_policy["client_logging_enabled"]
-                        ),
-                        device=client_device,
-                        global_state=server.model.state_dict(),
-                        eval_client_ids=list(plan["in_ids"]),
-                        round_idx=round_idx,
-                        eval_tag="fed-in",
-                        eval_split="test",
-                        eval_num_workers_override=on_demand_workers["eval"],
-                    )
-                    federated_eval_out_metrics = _run_federated_eval_serial(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=bool(
-                            logging_policy["client_logging_enabled"]
-                        ),
-                        device=client_device,
-                        global_state=server.model.state_dict(),
-                        eval_client_ids=list(plan["out_ids"]),
-                        round_idx=round_idx,
-                        eval_tag="fed-out",
-                        eval_split="test",
-                        eval_num_workers_override=on_demand_workers["eval"],
-                    )
+                for chunk_ids in _iter_id_chunks(selected_ids, chunk_size):
+                    if worker_pool:
+                        chunk_clients = worker_pool[: len(chunk_ids)]
+                        for client, cid in zip(chunk_clients, chunk_ids):
+                            _rebind_client_for_on_demand_job(
+                                client,
+                                client_id=int(cid),
+                                client_datasets=client_datasets,
+                                num_workers_override=on_demand_workers["train"],
+                            )
+                    else:
+                        chunk_clients = _build_clients(
+                            config=config,
+                            model=on_demand_model if on_demand_model is not None else model,
+                            client_datasets=client_datasets,
+                            local_client_ids=np.asarray(chunk_ids).astype(int),
+                            device=client_device,
+                            run_log_dir=run_log_dir,
+                            client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+                            trainer_name=str(algorithm_components["trainer_name"]),
+                            share_model=True,
+                            num_workers_override=on_demand_workers["train"],
+                        )
+                    for client in chunk_clients:
+                        client.download(global_state)
+                        train_result = client.update(round_idx=round_idx)
+                        state = client.upload()
+                        if isinstance(state, tuple):
+                            state = state[0]
+                        updates[client.id] = state
+                        sample_sizes[client.id] = int(train_result["num_examples"])
+                        stats[client.id] = train_result
+                    if not worker_pool:
+                        _release_clients(chunk_clients)
+
+            weights = server.aggregate(updates, sample_sizes)
+            global_eval_metrics = None
+            if enable_global_eval and _should_eval_round(
+                round_idx,
+                int(_cfg_get(config, "eval.every", 1)),
+                int(_cfg_get(config, "train.num_rounds", 20)),
+            ):
+                global_eval_metrics = server.evaluate(round_idx=round_idx)
+
+            federated_eval_metrics = None
+            federated_eval_in_metrics = None
+            federated_eval_out_metrics = None
+            if enable_federated_eval:
+                plan = _build_federated_eval_plan(
+                    config=config,
+                    round_idx=round_idx,
+                    num_rounds=int(_cfg_get(config, "train.num_rounds", 20)),
+                    selected_train_ids=selected_ids,
+                    train_client_ids=train_client_ids,
+                    holdout_client_ids=holdout_client_ids,
+                )
+                if eager_clients is not None:
+                    state = server.model.state_dict()
+                    if plan["scheme"] == "client":
+                        eval_in_set = set(plan["in_ids"])
+                        eval_out_set = set(plan["out_ids"])
+                        eval_in_stats = {}
+                        eval_out_stats = {}
+                        for client in eager_clients:
+                            if client.id in eval_in_set:
+                                client.download(state)
+                                eval_in_stats[int(client.id)] = client.evaluate(
+                                    split="test",
+                                    offload_after=False,
+                                )
+                            elif client.id in eval_out_set:
+                                client.download(state)
+                                eval_out_stats[int(client.id)] = client.evaluate(
+                                    split="test",
+                                    offload_after=False,
+                                )
+                        federated_eval_in_metrics = _aggregate_eval_stats(eval_in_stats)
+                        federated_eval_out_metrics = _aggregate_eval_stats(eval_out_stats)
+                    else:
+                        eval_set = set(plan["in_ids"])
+                        eval_stats = {}
+                        for client in eager_clients:
+                            if client.id not in eval_set:
+                                continue
+                            client.download(state)
+                            eval_stats[int(client.id)] = client.evaluate(
+                                split="test",
+                                offload_after=False,
+                            )
+                        federated_eval_metrics = _aggregate_eval_stats(eval_stats)
                 else:
-                    federated_eval_metrics = _run_federated_eval_serial(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=bool(
-                            logging_policy["client_logging_enabled"]
-                        ),
-                        device=client_device,
-                        global_state=server.model.state_dict(),
-                        eval_client_ids=list(plan["in_ids"]),
-                        round_idx=round_idx,
-                        eval_tag="fed",
-                        eval_split="test",
-                        eval_num_workers_override=on_demand_workers["eval"],
-                    )
+                    if plan["scheme"] == "client":
+                        federated_eval_in_metrics = _run_federated_eval_serial(
+                            config=config,
+                            model=on_demand_model if on_demand_model is not None else model,
+                            client_datasets=client_datasets,
+                            run_log_dir=run_log_dir,
+                            client_logging_enabled=bool(
+                                logging_policy["client_logging_enabled"]
+                            ),
+                            device=client_device,
+                            global_state=server.model.state_dict(),
+                            eval_client_ids=list(plan["in_ids"]),
+                            round_idx=round_idx,
+                            eval_tag="fed-in",
+                            eval_split="test",
+                            eval_num_workers_override=on_demand_workers["eval"],
+                        )
+                        federated_eval_out_metrics = _run_federated_eval_serial(
+                            config=config,
+                            model=on_demand_model if on_demand_model is not None else model,
+                            client_datasets=client_datasets,
+                            run_log_dir=run_log_dir,
+                            client_logging_enabled=bool(
+                                logging_policy["client_logging_enabled"]
+                            ),
+                            device=client_device,
+                            global_state=server.model.state_dict(),
+                            eval_client_ids=list(plan["out_ids"]),
+                            round_idx=round_idx,
+                            eval_tag="fed-out",
+                            eval_split="test",
+                            eval_num_workers_override=on_demand_workers["eval"],
+                        )
+                    else:
+                        federated_eval_metrics = _run_federated_eval_serial(
+                            config=config,
+                            model=on_demand_model if on_demand_model is not None else model,
+                            client_datasets=client_datasets,
+                            run_log_dir=run_log_dir,
+                            client_logging_enabled=bool(
+                                logging_policy["client_logging_enabled"]
+                            ),
+                            device=client_device,
+                            global_state=server.model.state_dict(),
+                            eval_client_ids=list(plan["in_ids"]),
+                            round_idx=round_idx,
+                            eval_tag="fed",
+                            eval_split="test",
+                            eval_num_workers_override=on_demand_workers["eval"],
+                        )
 
-        _log_round(
-            config,
-            round_idx,
-            len(selected_ids),
-            len(train_client_ids),
-            stats,
-            weights,
-            global_eval_metrics=global_eval_metrics,
-            federated_eval_metrics=federated_eval_metrics,
-            federated_eval_in_metrics=federated_eval_in_metrics,
-            federated_eval_out_metrics=federated_eval_out_metrics,
-            logger=server_logger,
-            tracker=tracker,
-        )
+            _log_round(
+                config,
+                round_idx,
+                len(selected_ids),
+                len(train_client_ids),
+                stats,
+                weights,
+                global_eval_metrics=global_eval_metrics,
+                federated_eval_metrics=federated_eval_metrics,
+                federated_eval_in_metrics=federated_eval_in_metrics,
+                federated_eval_out_metrics=federated_eval_out_metrics,
+                logger=server_logger,
+                tracker=tracker,
+            )
+    except KeyboardInterrupt:
+        interrupted = True
+        server_logger.info("Interrupted by user; shutting down serial backend.")
+    finally:
+        if eager_clients is not None:
+            _release_clients(eager_clients)
+        if worker_pool is not None:
+            _release_clients(worker_pool)
+        if tracker is not None:
+            tracker.close()
 
+    if interrupted:
+        raise SystemExit(130)
     server_logger.info(f"Finished serial simulation in {time.time() - t0:.2f}s.")
     server_logger.info(f"Saved resulting metrics in a log folder.")
     server_logger.info(f"Good Bye!")
-    if eager_clients is not None:
-        _release_clients(eager_clients)
-    if worker_pool is not None:
-        _release_clients(worker_pool)
-    if tracker is not None:
-        tracker.close()
 
 
 def _load_dataset_distributed(
@@ -398,12 +415,19 @@ def _load_dataset_distributed(
 ):
     import torch.distributed as dist
 
+    def _set_download(cfg_dict: dict, value: bool) -> None:
+        ds = cfg_dict.get("dataset", None)
+        if not isinstance(ds, dict):
+            ds = {}
+            cfg_dict["dataset"] = ds
+        ds["download"] = bool(value)
+
     loader_cfg = _cfg_to_dict(config)
     if logger is not None:
         loader_cfg["logger"] = logger
     if rank == 0:
         cfg_root = dict(loader_cfg)
-        cfg_root["download"] = True
+        _set_download(cfg_root, True)
         cached = load_dataset(cfg_root)
     else:
         cached = None
@@ -411,7 +435,7 @@ def _load_dataset_distributed(
     if rank == 0:
         return cached
     cfg_other = dict(loader_cfg)
-    cfg_other["download"] = False
+    _set_download(cfg_other, False)
     return load_dataset(cfg_other)
 
 
@@ -430,17 +454,24 @@ def _run_federated_eval_distributed(
 
     if not eval_client_ids:
         # All ranks must still join the collective.
-        gathered: list[dict] = [None] * world_size
-        dist.all_gather_object(gathered, {})
+        if rank == 0:
+            gathered: list[dict] = [None] * world_size
+            dist.gather_object({}, object_gather_list=gathered, dst=0)
+        else:
+            dist.gather_object({}, object_gather_list=None, dst=0)
         return None if rank != 0 else None
 
     eval_model = model.to(device)
     eval_model.load_state_dict(global_state)
     eval_model.eval()
-    eval_loss_fn = getattr(torch.nn, str(config.criterion))().to(device)
-    eval_metric_names = parse_metric_names(config.get("eval_metrics", ["acc1"]))
-    eval_batch_size = int(config.get("eval_batch_size", config.batch_size))
-    eval_workers = max(0, int(config.get("on_demand_eval_num_workers", 0)))
+    eval_loss_fn = getattr(
+        torch.nn, str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss"))
+    )().to(device)
+    eval_metric_names = parse_metric_names(_cfg_get(config, "eval.metrics", ["acc1"]))
+    eval_batch_size = int(
+        _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))
+    )
+    eval_workers = max(0, int(_cfg_get(config, "train.num_workers", 0)))
     local_client_set = {
         int(cid)
         for cid in np.asarray(np.array_split(np.arange(len(client_datasets)), world_size)[rank]).astype(int)
@@ -464,16 +495,31 @@ def _run_federated_eval_distributed(
             num_workers=eval_workers,
         )
 
-    gathered = [None] * world_size
-    dist.all_gather_object(gathered, local_stats)
+    if rank == 0:
+        gathered = [None] * world_size
+        dist.gather_object(local_stats, object_gather_list=gathered, dst=0)
+    else:
+        dist.gather_object(local_stats, object_gather_list=None, dst=0)
+        gathered = None
     if rank != 0:
         return None
 
     merged = {}
-    for payload in gathered:
+    for payload in gathered or []:
         if isinstance(payload, dict):
             merged.update(payload)
     return _aggregate_eval_stats(merged)
+
+
+def _broadcast_model_state_inplace(model, *, src: int = 0) -> None:
+    import torch.distributed as dist
+
+    state = model.state_dict()
+    for key in sorted(state.keys()):
+        tensor = state[key]
+        if not torch.is_tensor(tensor):
+            continue
+        dist.broadcast(tensor, src=src)
 
 
 def run_distributed(config, backend: str) -> None:
@@ -495,12 +541,16 @@ def run_distributed(config, backend: str) -> None:
             raise RuntimeError("backend=nccl requires CUDA.")
         torch.cuda.set_device(local_rank % max(1, torch.cuda.device_count()))
 
-    set_seed_everything(int(config.seed) + rank)
+    set_seed_everything(int(_cfg_get(config, "experiment.seed", 42)) + rank)
     run_ts_root = _resolve_run_timestamp(config, preset=None) if rank == 0 else ""
     run_ts_payload = [run_ts_root]
     dist.broadcast_object_list(run_ts_payload, src=0)
     run_ts = str(run_ts_payload[0])
-    run_log_dir = str(Path(str(config.log_dir)) / str(config.exp_name) / run_ts)
+    run_log_dir = str(
+        Path(str(_cfg_get(config, "logging.path", "./logs")))
+        / str(_cfg_get(config, "experiment.name", "appfl-sim"))
+        / run_ts
+    )
 
     bootstrap_logger = (
         _new_server_logger(config, mode=f"{backend}-rank{rank}", run_ts=run_ts)
@@ -533,10 +583,10 @@ def run_distributed(config, backend: str) -> None:
     on_demand_workers = _resolve_on_demand_worker_policy(
         config, logger=bootstrap_logger if rank == 0 else None
     )
-    enable_global_eval = _cfg_bool(config, "enable_global_eval", True) and _dataset_has_eval_split(
+    enable_global_eval = _cfg_bool(config, "eval.enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
-    enable_federated_eval = _cfg_bool(config, "enable_federated_eval", True)
+    enable_federated_eval = _cfg_bool(config, "eval.enable_federated_eval", True)
     model = load_model(
         runtime_cfg,
         input_shape=tuple(runtime_cfg["input_shape"]),
@@ -544,7 +594,7 @@ def run_distributed(config, backend: str) -> None:
     )
 
     client_device = resolve_rank_device(
-        str(config.device),
+        str(_cfg_get(config, "experiment.device", "cpu")),
         rank=rank,
         world_size=world_size,
         local_rank=local_rank,
@@ -649,66 +699,41 @@ def run_distributed(config, backend: str) -> None:
             server_dataset=server_dataset,
             algorithm_components=algorithm_components,
         )
+    # Ensure every rank starts from the exact same global model state.
+    sync_model = server.model if rank == 0 else model
+    _broadcast_model_state_inplace(sync_model, src=0)
+    if on_demand_model is not None and sync_model is not on_demand_model:
+        on_demand_model.load_state_dict(sync_model.state_dict())
 
     t0 = time.time()
-    for round_idx in range(1, int(config.num_rounds) + 1):
-        if rank == 0:
-            selected_ids = _sample_train_clients(
-                train_client_ids=train_client_ids,
-                num_sampled_clients=int(num_sampled_clients),
-            )
-            global_state = server.model.state_dict()
-            payload = {"selected_ids": selected_ids, "global_state": global_state}
-        else:
-            payload = None
-        bcast_obj = [payload]
-        dist.broadcast_object_list(bcast_obj, src=0)
-        payload = bcast_obj[0]
-        selected_ids = list(payload["selected_ids"])
-        global_state = payload["global_state"]
-
-        selected_local_ids = sorted(int(cid) for cid in selected_ids if int(cid) in local_client_set)
-        local_payload = {}
-        if eager_clients is not None:
-            selected_set = set(selected_local_ids)
-            for client in eager_clients:
-                if client.id not in selected_set:
-                    continue
-                client.download(global_state)
-                train_result = client.update(round_idx=round_idx)
-                state = client.upload()
-                if isinstance(state, tuple):
-                    state = state[0]
-                local_payload[int(client.id)] = {
-                    "state": state,
-                    "num_examples": int(train_result.get("num_examples", 0)),
-                    "stats": train_result,
-                }
-        else:
-            for chunk_ids in _iter_id_chunks(selected_local_ids, chunk_size):
-                if worker_pool:
-                    chunk_clients = worker_pool[: len(chunk_ids)]
-                    for client, cid in zip(chunk_clients, chunk_ids):
-                        _rebind_client_for_on_demand_job(
-                            client,
-                            client_id=int(cid),
-                            client_datasets=client_datasets,
-                            num_workers_override=on_demand_workers["train"],
-                        )
-                else:
-                    chunk_clients = _build_clients(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        local_client_ids=np.asarray(chunk_ids).astype(int),
-                        device=client_device,
-                        run_log_dir=run_log_dir,
-                        client_logging_enabled=local_client_logging_enabled,
-                        trainer_name=str(algorithm_components["trainer_name"]),
-                        share_model=True,
-                        num_workers_override=on_demand_workers["train"],
-                    )
-                for client in chunk_clients:
+    interrupted = False
+    try:
+        for round_idx in range(1, int(_cfg_get(config, "train.num_rounds", 20)) + 1):
+            if rank == 0:
+                selected_ids = _sample_train_clients(
+                    train_client_ids=train_client_ids,
+                    num_sampled_clients=int(num_sampled_clients),
+                )
+                payload = {"selected_ids": selected_ids}
+            else:
+                payload = None
+            bcast_obj = [payload]
+            dist.broadcast_object_list(bcast_obj, src=0)
+            payload = bcast_obj[0]
+            selected_ids = list(payload["selected_ids"])
+            sync_model = server.model if rank == 0 else model
+            _broadcast_model_state_inplace(sync_model, src=0)
+            if on_demand_model is not None and sync_model is not on_demand_model:
+                on_demand_model.load_state_dict(sync_model.state_dict())
+            global_state = sync_model.state_dict()
+    
+            selected_local_ids = sorted(int(cid) for cid in selected_ids if int(cid) in local_client_set)
+            local_payload = {}
+            if eager_clients is not None:
+                selected_set = set(selected_local_ids)
+                for client in eager_clients:
+                    if client.id not in selected_set:
+                        continue
                     client.download(global_state)
                     train_result = client.update(round_idx=round_idx)
                     state = client.upload()
@@ -719,117 +744,173 @@ def run_distributed(config, backend: str) -> None:
                         "num_examples": int(train_result.get("num_examples", 0)),
                         "stats": train_result,
                     }
-                if not worker_pool:
-                    _release_clients(chunk_clients)
-
-        gathered = [None] * world_size
-        dist.all_gather_object(gathered, local_payload)
-        weights = None
-        stats = {}
-        if rank == 0:
-            updates = {}
-            sample_sizes = {}
-            for payload_map in gathered:
-                if not isinstance(payload_map, dict):
-                    continue
-                for cid, payload_item in payload_map.items():
-                    state = payload_item["state"]
-                    if isinstance(state, tuple):
-                        state = state[0]
-                    updates[int(cid)] = state
-                    sample_sizes[int(cid)] = int(payload_item.get("num_examples", 0))
-                    stats[int(cid)] = payload_item.get("stats", {})
-            weights = server.aggregate(updates, sample_sizes)
-
-        next_state_payload = [server.model.state_dict() if rank == 0 else None]
-        dist.broadcast_object_list(next_state_payload, src=0)
-        next_global_state = next_state_payload[0]
-
-        global_eval_metrics = None
-        if rank == 0 and enable_global_eval and _should_eval_round(
-            round_idx, int(config.eval_every), int(config.num_rounds)
-        ):
-            global_eval_metrics = server.evaluate(round_idx=round_idx)
-
-        plan_payload = [None]
-        if rank == 0 and enable_federated_eval:
-            plan_payload[0] = _build_federated_eval_plan(
-                config=config,
-                round_idx=round_idx,
-                num_rounds=int(config.num_rounds),
-                selected_train_ids=selected_ids,
-                train_client_ids=train_client_ids,
-                holdout_client_ids=holdout_client_ids,
-            )
-        dist.broadcast_object_list(plan_payload, src=0)
-        plan = plan_payload[0]
-
-        federated_eval_metrics = None
-        federated_eval_in_metrics = None
-        federated_eval_out_metrics = None
-        if enable_federated_eval and isinstance(plan, dict):
-            if plan["scheme"] == "holdout_client":
-                federated_eval_in_metrics = _run_federated_eval_distributed(
-                    config=config,
-                    model=on_demand_model if on_demand_model is not None else model,
-                    client_datasets=client_datasets,
-                    device=client_device,
-                    global_state=next_global_state,
-                    eval_client_ids=list(plan["in_ids"]),
-                    rank=rank,
-                    world_size=world_size,
-                    eval_split="test",
-                )
-                federated_eval_out_metrics = _run_federated_eval_distributed(
-                    config=config,
-                    model=on_demand_model if on_demand_model is not None else model,
-                    client_datasets=client_datasets,
-                    device=client_device,
-                    global_state=next_global_state,
-                    eval_client_ids=list(plan["out_ids"]),
-                    rank=rank,
-                    world_size=world_size,
-                    eval_split="test",
-                )
             else:
-                federated_eval_metrics = _run_federated_eval_distributed(
-                    config=config,
-                    model=on_demand_model if on_demand_model is not None else model,
-                    client_datasets=client_datasets,
-                    device=client_device,
-                    global_state=next_global_state,
-                    eval_client_ids=list(plan["in_ids"]),
-                    rank=rank,
-                    world_size=world_size,
-                    eval_split="test",
-                )
-        if rank == 0:
-            _log_round(
-                config,
+                for chunk_ids in _iter_id_chunks(selected_local_ids, chunk_size):
+                    if worker_pool:
+                        chunk_clients = worker_pool[: len(chunk_ids)]
+                        for client, cid in zip(chunk_clients, chunk_ids):
+                            _rebind_client_for_on_demand_job(
+                                client,
+                                client_id=int(cid),
+                                client_datasets=client_datasets,
+                                num_workers_override=on_demand_workers["train"],
+                            )
+                    else:
+                        chunk_clients = _build_clients(
+                            config=config,
+                            model=on_demand_model if on_demand_model is not None else model,
+                            client_datasets=client_datasets,
+                            local_client_ids=np.asarray(chunk_ids).astype(int),
+                            device=client_device,
+                            run_log_dir=run_log_dir,
+                            client_logging_enabled=local_client_logging_enabled,
+                            trainer_name=str(algorithm_components["trainer_name"]),
+                            share_model=True,
+                            num_workers_override=on_demand_workers["train"],
+                        )
+                    for client in chunk_clients:
+                        client.download(global_state)
+                        train_result = client.update(round_idx=round_idx)
+                        state = client.upload()
+                        if isinstance(state, tuple):
+                            state = state[0]
+                        local_payload[int(client.id)] = {
+                            "state": state,
+                            "num_examples": int(train_result.get("num_examples", 0)),
+                            "stats": train_result,
+                        }
+                    if not worker_pool:
+                        _release_clients(chunk_clients)
+    
+            if rank == 0:
+                gathered = [None] * world_size
+                dist.gather_object(local_payload, object_gather_list=gathered, dst=0)
+            else:
+                dist.gather_object(local_payload, object_gather_list=None, dst=0)
+                gathered = None
+            weights = None
+            stats = {}
+            if rank == 0:
+                updates = {}
+                sample_sizes = {}
+                for payload_map in gathered or []:
+                    if not isinstance(payload_map, dict):
+                        continue
+                    for cid, payload_item in payload_map.items():
+                        state = payload_item["state"]
+                        if isinstance(state, tuple):
+                            state = state[0]
+                        updates[int(cid)] = state
+                        sample_sizes[int(cid)] = int(payload_item.get("num_examples", 0))
+                        stats[int(cid)] = payload_item.get("stats", {})
+                weights = server.aggregate(updates, sample_sizes)
+    
+            sync_model = server.model if rank == 0 else model
+            _broadcast_model_state_inplace(sync_model, src=0)
+            if on_demand_model is not None and sync_model is not on_demand_model:
+                on_demand_model.load_state_dict(sync_model.state_dict())
+            next_global_state = sync_model.state_dict()
+    
+            global_eval_metrics = None
+            if rank == 0 and enable_global_eval and _should_eval_round(
                 round_idx,
-                len(selected_ids),
-                len(train_client_ids),
-                stats,
-                weights,
-                global_eval_metrics=global_eval_metrics,
-                federated_eval_metrics=federated_eval_metrics,
-                federated_eval_in_metrics=federated_eval_in_metrics,
-                federated_eval_out_metrics=federated_eval_out_metrics,
-                logger=server_logger,
-                tracker=tracker,
+                int(_cfg_get(config, "eval.every", 1)),
+                int(_cfg_get(config, "train.num_rounds", 20)),
+            ):
+                global_eval_metrics = server.evaluate(round_idx=round_idx)
+    
+            plan_payload = [None]
+            if rank == 0 and enable_federated_eval:
+                plan_payload[0] = _build_federated_eval_plan(
+                    config=config,
+                    round_idx=round_idx,
+                    num_rounds=int(_cfg_get(config, "train.num_rounds", 20)),
+                    selected_train_ids=selected_ids,
+                    train_client_ids=train_client_ids,
+                    holdout_client_ids=holdout_client_ids,
+                )
+            dist.broadcast_object_list(plan_payload, src=0)
+            plan = plan_payload[0]
+    
+            federated_eval_metrics = None
+            federated_eval_in_metrics = None
+            federated_eval_out_metrics = None
+            if enable_federated_eval and isinstance(plan, dict):
+                if plan["scheme"] == "client":
+                    federated_eval_in_metrics = _run_federated_eval_distributed(
+                        config=config,
+                        model=on_demand_model if on_demand_model is not None else model,
+                        client_datasets=client_datasets,
+                        device=client_device,
+                        global_state=next_global_state,
+                        eval_client_ids=list(plan["in_ids"]),
+                        rank=rank,
+                        world_size=world_size,
+                        eval_split="test",
+                    )
+                    federated_eval_out_metrics = _run_federated_eval_distributed(
+                        config=config,
+                        model=on_demand_model if on_demand_model is not None else model,
+                        client_datasets=client_datasets,
+                        device=client_device,
+                        global_state=next_global_state,
+                        eval_client_ids=list(plan["out_ids"]),
+                        rank=rank,
+                        world_size=world_size,
+                        eval_split="test",
+                    )
+                else:
+                    federated_eval_metrics = _run_federated_eval_distributed(
+                        config=config,
+                        model=on_demand_model if on_demand_model is not None else model,
+                        client_datasets=client_datasets,
+                        device=client_device,
+                        global_state=next_global_state,
+                        eval_client_ids=list(plan["in_ids"]),
+                        rank=rank,
+                        world_size=world_size,
+                        eval_split="test",
+                    )
+                if rank == 0:
+                    _log_round(
+                        config,
+                        round_idx,
+                        len(selected_ids),
+                        len(train_client_ids),
+                        stats,
+                        weights,
+                        global_eval_metrics=global_eval_metrics,
+                        federated_eval_metrics=federated_eval_metrics,
+                        federated_eval_in_metrics=federated_eval_in_metrics,
+                        federated_eval_out_metrics=federated_eval_out_metrics,
+                        logger=server_logger,
+                        tracker=tracker,
+                    )
+    except KeyboardInterrupt:
+        interrupted = True
+        if rank == 0 and server_logger is not None:
+            server_logger.info(
+                f"Interrupted by user; shutting down distributed backend ({backend})."
             )
+    finally:
+        if eager_clients is not None:
+            _release_clients(eager_clients)
+        if worker_pool is not None:
+            _release_clients(worker_pool)
+        if tracker is not None:
+            tracker.close()
+        if dist.is_initialized():
+            try:
+                dist.destroy_process_group()
+            except Exception:
+                pass
 
-    dist.barrier()
-    if eager_clients is not None:
-        _release_clients(eager_clients)
-    if worker_pool is not None:
-        _release_clients(worker_pool)
+    if interrupted:
+        raise SystemExit(130)
     if rank == 0 and server_logger is not None:
         server_logger.info(f"Finished {backend} simulation in {time.time() - t0:.2f}s.")
         server_logger.info("Saved resulting metrics in a log folder.")
         server_logger.info("Good Bye!")
-    if tracker is not None:
-        tracker.close()
 
 
 def parse_config(argv: list[str] | None = None) -> tuple[str, DictConfig]:
@@ -849,9 +930,9 @@ def parse_config(argv: list[str] | None = None) -> tuple[str, DictConfig]:
         cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(dotlist))
     _ensure_model_cfg(cfg)
     if backend_override is not None:
-        cfg.backend = backend_override
+        cfg.experiment.backend = backend_override
 
-    backend = str(cfg.get("backend", "serial")).lower()
+    backend = str(_cfg_get(cfg, "experiment.backend", "serial")).lower()
     if backend not in {"serial", "nccl", "gloo"}:
         raise ValueError("backend must be one of: serial, nccl, gloo")
 
@@ -869,7 +950,7 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    welcome_message = """
+    welcome_message = r"""
                   _____  _____  ______ _          _____ _____ __  __ 
             /\   |  __ \|  __ \|  ____| |        / ____|_   _|  \/  |
            /  \  | |__) | |__) | |__  | |  _____| (___   | | | \  / |

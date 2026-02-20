@@ -47,7 +47,7 @@ class MedMNISTWrapper(Dataset):
 def fetch_medmnist_dataset(args):
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
-    tag = make_load_tag(str(args.dataset), benchmark="MEDMNIST")
+    tag = make_load_tag(str(args.dataset_name), benchmark="MEDMNIST")
     active_logger.info("[%s] resolving dataset metadata.", tag)
     try:
         import medmnist
@@ -55,10 +55,10 @@ def fetch_medmnist_dataset(args):
     except Exception as e:  # pragma: no cover
         raise RuntimeError("medmnist is not installed.") from e
 
-    dataset_key = str(args.dataset).lower()
+    dataset_key = str(args.dataset_name).lower()
     alias = {k.lower(): k for k in INFO}
     if dataset_key not in alias:
-        raise ValueError(f"Unknown MedMNIST dataset: {args.dataset}")
+        raise ValueError(f"Unknown MedMNIST dataset: {args.dataset_name}")
 
     canonical = alias[dataset_key]
     info = INFO[canonical]

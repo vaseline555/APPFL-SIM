@@ -14,7 +14,6 @@ def _default_client_train_configs() -> DictConfig:
             "eval_batch_size": 128,
             "num_workers": 0,
             "train_data_shuffle": True,
-            "val_data_shuffle": False,
             "train_pin_memory": False,
             "eval_pin_memory": False,
             "dataloader_persistent_workers": False,

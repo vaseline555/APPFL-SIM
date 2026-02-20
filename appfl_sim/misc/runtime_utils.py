@@ -14,7 +14,13 @@ import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
-from appfl_sim.misc.config_utils import _build_train_cfg, _cfg_bool, _resolve_algorithm_components, _resolve_num_sampled_clients
+from appfl_sim.misc.config_utils import (
+    _build_train_cfg,
+    _cfg_bool,
+    _cfg_get,
+    _resolve_algorithm_components,
+    _resolve_num_sampled_clients,
+)
 
 
 def id_generator(size=6, chars=string.ascii_uppercase + string.digits):
@@ -203,7 +209,6 @@ def _rebind_client_for_on_demand_job(
     train_bs = int(cfg.get("batch_size", 32))
     val_bs = int(cfg.get("eval_batch_size", train_bs))
     train_shuffle = bool(cfg.get("train_data_shuffle", True))
-    val_shuffle = bool(cfg.get("val_data_shuffle", False))
     train_pin_memory = bool(cfg.get("train_pin_memory", False))
     eval_pin_memory = bool(cfg.get("eval_pin_memory", train_pin_memory))
     persistent_workers = bool(cfg.get("dataloader_persistent_workers", False))
@@ -233,7 +238,7 @@ def _rebind_client_for_on_demand_job(
     trainer.val_dataloader = (
         DataLoader(
             val_ds,
-            shuffle=val_shuffle,
+            shuffle=False,
             **common_eval_kwargs,
         )
         if val_ds is not None
@@ -319,14 +324,14 @@ def _build_clients(
             train_configs=OmegaConf.create(
                 {
                     **train_cfg,
-                    "loss_fn": str(config.criterion),
+                    "loss_fn": str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss")),
                 }
             ),
             model_configs=OmegaConf.create({}),
             data_configs=OmegaConf.create({}),
         )
         client_cfg.client_id = str(int(cid))
-        client_cfg.experiment_id = str(config.exp_name)
+        client_cfg.experiment_id = str(_cfg_get(config, "experiment.name", "appfl-sim"))
         client = ClientAgent(client_agent_config=client_cfg)
         client.model = model if share_model else copy.deepcopy(model)
         client.train_dataset = train_ds
@@ -385,8 +390,8 @@ def _build_server(
         client_configs=OmegaConf.create(
             {
                 "train_configs": {
-                    "loss_fn": str(config.criterion),
-                    "eval_metrics": config.get("eval_metrics", ["acc1"]),
+                    "loss_fn": str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss")),
+                    "eval_metrics": _cfg_get(config, "eval.metrics", ["acc1"]),
                 },
                 "model_configs": {},
             }
@@ -394,13 +399,15 @@ def _build_server(
         server_configs=OmegaConf.create(
             {
                 "num_clients": num_clients,
-                "num_global_epochs": int(config.num_rounds),
+                "num_global_epochs": int(_cfg_get(config, "train.num_rounds", 20)),
                 "num_sampled_clients": int(num_sampled_clients),
-                "device": str(config.server_device),
-                "eval_show_progress": _cfg_bool(config, "show_eval_progress", True),
-                "eval_batch_size": int(config.get("eval_batch_size", config.batch_size)),
-                "num_workers": int(config.num_workers),
-                "eval_metrics": config.get("eval_metrics", ["acc1"]),
+                "device": str(_cfg_get(config, "experiment.server_device", "cpu")),
+                "eval_show_progress": _cfg_bool(config, "eval.show_eval_progress", True),
+                "eval_batch_size": int(
+                    _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))
+                ),
+                "num_workers": int(_cfg_get(config, "train.num_workers", 0)),
+                "eval_metrics": _cfg_get(config, "eval.metrics", ["acc1"]),
                 "aggregator": str(algorithm_components["aggregator_name"]),
                 "aggregator_kwargs": dict(algorithm_components["aggregator_kwargs"]),
                 "scheduler": str(algorithm_components["scheduler_name"]),
@@ -420,7 +427,7 @@ def _build_server(
         and getattr(server.aggregator, "model", None) is None
     ):
         server.aggregator.model = server.model
-    server.loss_fn = torch.nn.__dict__[str(config.criterion)]()
+    server.loss_fn = torch.nn.__dict__[str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss"))]()
     server._val_dataset = server_dataset
     server._load_val_data()
     return server

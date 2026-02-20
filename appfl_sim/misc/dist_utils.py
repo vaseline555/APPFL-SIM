@@ -7,6 +7,7 @@ from typing import Callable
 
 import torch
 from omegaconf import DictConfig, OmegaConf
+from appfl_sim.misc.config_utils import _cfg_get
 
 
 def _find_free_port() -> int:
@@ -22,7 +23,7 @@ def _resolve_distributed_world_size(config: DictConfig, backend: str) -> int:
             raise RuntimeError("backend=nccl requested, but no CUDA devices are available.")
         return gpus
     cpu_slots = max(1, (os.cpu_count() or 2) - 1)
-    configured_clients = int(config.get("num_clients", 0))
+    configured_clients = int(_cfg_get(config, "train.num_clients", 0))
     if configured_clients > 0:
         return max(1, min(cpu_slots, configured_clients))
     return cpu_slots
@@ -94,25 +95,35 @@ def launch_or_run_distributed(
         proc.start()
         processes.append(proc)
 
+    def _terminate_processes(procs):
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+        for p in procs:
+            p.join(timeout=2.0)
+        for p in procs:
+            if p.is_alive():
+                p.kill()
+
     try:
         while processes:
             alive = []
+            failed_exit = None
             for proc in processes:
                 proc.join(timeout=0.2)
                 if proc.exitcode is None:
                     alive.append(proc)
                 elif proc.exitcode != 0:
-                    raise RuntimeError(f"Distributed worker exited with code {proc.exitcode}.")
+                    failed_exit = int(proc.exitcode)
+            if failed_exit is not None:
+                _terminate_processes(alive)
+                raise RuntimeError(f"Distributed worker exited with code {failed_exit}.")
             processes = alive
             if processes:
                 time.sleep(0.05)
     except KeyboardInterrupt:
-        for proc in processes:
-            if proc.is_alive():
-                proc.terminate()
-        for proc in processes:
-            proc.join(timeout=2.0)
-        for proc in processes:
-            if proc.is_alive():
-                proc.kill()
+        _terminate_processes(processes)
         raise SystemExit(130)
+    except Exception:
+        _terminate_processes(processes)
+        raise

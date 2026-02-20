@@ -167,7 +167,7 @@ class VanillaTrainer(BaseTrainer):
             _make_dataloader(
                 self.val_dataset,
                 batch_size=self.train_configs.get("eval_batch_size", 32),
-                shuffle=self.train_configs.get("val_data_shuffle", False),
+                shuffle=False,
                 num_workers=num_workers,
                 pin_memory=eval_pin_memory,
                 persistent_workers=persistent_workers,

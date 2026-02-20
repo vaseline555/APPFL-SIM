@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import random
 import logging
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Tuple
@@ -72,72 +70,90 @@ class TensorBackedDataset(Dataset):
         return self.name
 
 
+def _get_path(payload: Any, path: str, default: Any) -> Any:
+    parts = [p for p in str(path).split(".") if p]
+    cur = payload
+    for part in parts:
+        if isinstance(cur, dict):
+            if part not in cur:
+                return default
+            cur = cur[part]
+            continue
+        if hasattr(cur, part):
+            cur = getattr(cur, part)
+            continue
+        return default
+    return default if cur is None else cur
+
+
 def to_namespace(args: Any) -> SimpleNamespace:
+    if isinstance(args, SimpleNamespace) and hasattr(args, "dataset_name") and hasattr(args, "data_dir"):
+        ns = SimpleNamespace(**vars(args))
+        if getattr(ns, "K", None) is None:
+            ns.K = int(getattr(ns, "num_clients", 0))
+        return ns
+    if isinstance(args, dict) and "dataset_name" in args and "data_dir" in args:
+        ns = SimpleNamespace(**dict(args))
+        if getattr(ns, "K", None) is None:
+            ns.K = int(getattr(ns, "num_clients", 0))
+        return ns
+
+    payload: Any
     if isinstance(args, SimpleNamespace):
-        ns = SimpleNamespace(**vars(args))
+        payload = vars(args)
     elif isinstance(args, dict):
-        ns = SimpleNamespace(**args)
+        payload = args
     else:
-        ns = SimpleNamespace(**vars(args))
+        payload = vars(args)
 
-    defaults = {
-        "num_clients": 20,
-        "K": None,
-        "seed": 42,
-        "data_dir": "./data",
-        "test_size": 0.2,
-        "split_type": "iid",
-        "dirichlet_alpha": 0.3,
-        "min_classes": 2,
-        "unbalanced_keep_min": 0.5,
-        "download": True,
-        "dataset_loader": "auto",
-        "custom_dataset_loader": "",
-        "custom_dataset_kwargs": "{}",
-        "custom_dataset_path": "",
-        "external_source": "",
-        "external_dataset_name": "",
-        "external_dataset_config_name": "",
-        "external_train_split": "train",
-        "external_test_split": "test",
-        "external_feature_key": "",
-        "external_label_key": "",
-        "seq_len": 128,
-        "num_embeddings": 10000,
-        "use_model_tokenizer": False,
-        "use_pt_model": False,
-        "model_name": "SimpleCNN",
-        "audio_num_frames": 16000,
-        "flamby_data_terms_accepted": False,
-        "leaf_raw_data_fraction": 1.0,
-        "leaf_min_samples_per_client": 2,
-        "leaf_image_root": "",
-        "infer_num_clients": False,
-        "client_subsample_num": 0,
-        "client_subsample_ratio": 1.0,
-        "client_subsample_mode": "random",
-        "client_subsample_seed": None,
-        "in_channels": None,
-    }
-    for k, v in defaults.items():
-        if not hasattr(ns, k):
-            setattr(ns, k, v)
-    if ns.K is None:
-        ns.K = int(ns.num_clients)
+    dataset_cfg = _get_path(payload, "dataset.configs", {})
+    model_cfg = _get_path(payload, "model.configs", {})
+    split_cfg = _get_path(payload, "split.configs", {})
+
+    eval_dataset_ratio = _get_path(payload, "eval.configs.dataset_ratio", [80, 20])
+    try:
+        test_size = float(eval_dataset_ratio[-1]) if len(eval_dataset_ratio) >= 2 else 0.2
+        if test_size > 1.0:
+            test_size = test_size / 100.0
+    except Exception:
+        test_size = 0.2
+
+    ns = SimpleNamespace(
+        num_clients=int(_get_path(payload, "train.num_clients", 20)),
+        K=None,
+        seed=int(_get_path(payload, "experiment.seed", 42)),
+        dataset_name=str(_get_path(payload, "dataset.name", "MNIST")),
+        dataset_backend=str(_get_path(payload, "dataset.backend", "torchvision")),
+        data_dir=str(_get_path(payload, "dataset.path", "./data")),
+        download=bool(_get_path(payload, "dataset.download", True)),
+        test_size=float(test_size),
+        split_type=str(_get_path(payload, "split.type", "iid")),
+        dirichlet_alpha=float(_get_path(split_cfg, "dirichlet_alpha", 0.3)),
+        min_classes=int(_get_path(split_cfg, "min_classes", 2)),
+        unbalanced_keep_min=float(_get_path(split_cfg, "unbalanced_keep_min", 0.5)),
+        infer_num_clients=bool(_get_path(payload, "split.infer_num_clients", False)),
+        seq_len=int(_get_path(model_cfg, "seq_len", 128)),
+        num_embeddings=int(_get_path(model_cfg, "num_embeddings", 10000)),
+        use_model_tokenizer=bool(_get_path(model_cfg, "use_model_tokenizer", False)),
+        model_name=str(_get_path(payload, "model.name", "SimpleCNN")),
+        in_channels=_get_path(model_cfg, "in_channels", None),
+        audio_num_frames=int(_get_path(dataset_cfg, "audio_num_frames", 16000)),
+        flamby_data_terms_accepted=bool(_get_path(dataset_cfg, "terms_accepted", True)),
+        leaf_raw_data_fraction=float(_get_path(dataset_cfg, "raw_data_fraction", 1.0)),
+        leaf_min_samples_per_client=int(_get_path(dataset_cfg, "min_samples_per_client", 2)),
+        leaf_image_root=str(_get_path(dataset_cfg, "image_root", "")),
+        ext_source=str(_get_path(dataset_cfg, "source", "")),
+        ext_dataset_name=str(_get_path(dataset_cfg, "dataset_name", "")),
+        ext_train_split=str(_get_path(dataset_cfg, "train_split", "train")),
+        ext_test_split=str(_get_path(dataset_cfg, "test_split", "test")),
+        ext_feature_key=str(_get_path(dataset_cfg, "feature_key", "")),
+        ext_label_key=str(_get_path(dataset_cfg, "label_key", "")),
+        ext_config_name=str(_get_path(dataset_cfg, "config_name", "")),
+        custom_entrypoint=str(_get_path(dataset_cfg, "entrypoint", "")),
+        custom_kwargs=_get_path(dataset_cfg, "kwargs", {}),
+    )
+    ns.K = int(ns.num_clients)
     return ns
-
-
-def _prefixed_arg(
-    args: SimpleNamespace,
-    prefix: str,
-    key: str,
-    default: Any,
-) -> Any:
-    if prefix:
-        pref_key = f"{prefix}_{key}"
-        if hasattr(args, pref_key):
-            return getattr(args, pref_key)
-    return getattr(args, key, default)
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -147,15 +163,6 @@ def _safe_int(value: Any, default: int) -> int:
         return int(value)
     except Exception:
         return int(default)
-
-
-def _safe_float(value: Any, default: float) -> float:
-    try:
-        if value is None:
-            return float(default)
-        return float(value)
-    except Exception:
-        return float(default)
 
 
 def _safe_bool(value: Any, default: bool) -> bool:
@@ -176,65 +183,18 @@ def resolve_fixed_pool_clients(
     args: SimpleNamespace,
     prefix: str = "",
 ) -> List[Any]:
-    """Resolve client subset for fixed-pool datasets (LEAF/FLamby/TFF).
-
-    Rules:
-    - If `infer_num_clients=true` (global or `<prefix>_infer_num_clients`) or
-      `num_clients<=0`, start from full available pool.
-    - Otherwise cap to `num_clients`.
-    - Then apply optional subsampling controls:
-      - `<prefix>_client_subsample_num` / `client_subsample_num`
-      - `<prefix>_client_subsample_ratio` / `client_subsample_ratio`
-      - `<prefix>_client_subsample_mode` / `client_subsample_mode` (`random|first|last`)
-      - `<prefix>_client_subsample_seed` / `client_subsample_seed`
-    """
+    """Resolve client subset for fixed-pool datasets (LEAF/FLamby/TFF)."""
+    del prefix
     pool = list(available_clients)
     if not pool:
         return []
 
-    infer_clients = _safe_bool(
-        _prefixed_arg(args, prefix, "infer_num_clients", False), False
-    )
+    infer_clients = _safe_bool(getattr(args, "infer_num_clients", False), False)
     requested_num = _safe_int(getattr(args, "num_clients", 0), 0)
     if infer_clients or requested_num <= 0:
         requested_num = len(pool)
     requested_num = max(1, min(requested_num, len(pool)))
-    base = pool[:requested_num]
-
-    subsample_num = _safe_int(
-        _prefixed_arg(args, prefix, "client_subsample_num", 0),
-        0,
-    )
-    subsample_ratio = _safe_float(
-        _prefixed_arg(args, prefix, "client_subsample_ratio", 1.0),
-        1.0,
-    )
-    subsample_mode = str(
-        _prefixed_arg(args, prefix, "client_subsample_mode", "random")
-    ).strip().lower()
-    subsample_seed = _safe_int(
-        _prefixed_arg(args, prefix, "client_subsample_seed", getattr(args, "seed", 42)),
-        _safe_int(getattr(args, "seed", 42), 42),
-    )
-
-    target = len(base)
-    if subsample_num > 0:
-        target = min(target, subsample_num)
-    elif 0.0 < subsample_ratio < 1.0:
-        target = max(1, int(round(len(base) * subsample_ratio)))
-
-    if target >= len(base):
-        return base
-
-    if subsample_mode in {"first", "head"}:
-        return base[:target]
-    if subsample_mode in {"last", "tail"}:
-        return base[-target:]
-
-    rng = random.Random(subsample_seed)
-    chosen_idx = set(rng.sample(range(len(base)), target))
-    # Preserve original order for reproducible client-id mapping.
-    return [item for idx, item in enumerate(base) if idx in chosen_idx]
+    return pool[:requested_num]
 
 
 def infer_input_shape(dataset: Dataset) -> Tuple[int, ...]:

@@ -9,6 +9,7 @@ from appfl_sim.misc.data_utils import _resolve_client_eval_dataset, _sample_eval
 from appfl_sim.misc.metrics_utils import _weighted_mean
 from appfl_sim.misc.system_utils import _client_processing_chunk_size, _iter_id_chunks
 from appfl_sim.misc.logging_utils import _new_progress
+from appfl_sim.misc.config_utils import _cfg_get
 
 
 def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
@@ -93,37 +94,37 @@ def _build_federated_eval_plan(
     train_client_ids: List[int],
     holdout_client_ids: List[int],
 ) -> Dict[str, List[int] | str | bool]:
-    scheme = str(config.get("federated_eval_scheme", "holdout_dataset")).strip().lower()
+    scheme = str(_cfg_get(config, "eval.configs.scheme", "dataset")).strip().lower()
     del selected_train_ids
     checkpoint = _should_eval_round(
         round_idx,
-        int(config.eval_every),
+        int(_cfg_get(config, "eval.every", 1)),
         num_rounds,
     )
 
     if not checkpoint:
         return {
-            "scheme": "holdout_client" if scheme == "holdout_client" else "holdout_dataset",
+            "scheme": "client" if scheme == "client" else "dataset",
             "checkpoint": False,
             "in_ids": [],
             "out_ids": [],
         }
 
-    if scheme == "holdout_client":
+    if scheme == "client":
         in_ids = _sample_eval_clients(config, sorted(train_client_ids), round_idx)
         out_ids = _sample_eval_clients(config, sorted(holdout_client_ids), round_idx)
         return {
-            "scheme": "holdout_client",
+            "scheme": "client",
             "checkpoint": checkpoint,
             "in_ids": in_ids,
             "out_ids": out_ids,
         }
 
-    # Default: holdout_dataset-based evaluation.
+    # Default: dataset-based evaluation.
     # Evaluate all train clients only at checkpoint rounds.
     in_ids = _sample_eval_clients(config, sorted(train_client_ids), round_idx)
     return {
-        "scheme": "holdout_dataset",
+        "scheme": "dataset",
         "checkpoint": checkpoint,
         "in_ids": in_ids,
         "out_ids": [],
@@ -153,7 +154,7 @@ def _run_federated_eval_distributed(
     progress = _new_progress(
         total=len(eval_ids),
         desc=f"Server (Round {int(round_idx):04d}) | Evaluation ({str(eval_tag).replace('-', ' ').title()}.)",
-        enabled=_cfg_bool(config, "show_eval_progress", True),
+        enabled=_cfg_bool(config, "eval.show_eval_progress", True),
     )
     try:
         first_chunk = True
@@ -261,11 +262,15 @@ def _run_federated_eval_serial(
 ) -> Optional[Dict[str, float]]:
     if not eval_client_ids:
         return None
-    eval_loss_fn = getattr(torch.nn, str(config.criterion))()
-    eval_metric_names = parse_metric_names(config.get("eval_metrics", ["acc1"]))
-    eval_batch_size = int(config.get("eval_batch_size", config.batch_size))
+    eval_loss_fn = getattr(
+        torch.nn, str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss"))
+    )()
+    eval_metric_names = parse_metric_names(_cfg_get(config, "eval.metrics", ["acc1"]))
+    eval_batch_size = int(
+        _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))
+    )
     eval_workers = (
-        int(config.num_workers)
+        int(_cfg_get(config, "train.num_workers", 0))
         if eval_num_workers_override is None
         else max(0, int(eval_num_workers_override))
     )
@@ -285,7 +290,7 @@ def _run_federated_eval_serial(
     progress = _new_progress(
         total=len(eval_client_ids),
         desc=f"Server (Round {int(round_idx):04d}) | Evaluation ({str(eval_tag).replace('-', ' ').title()}.)",
-        enabled=_cfg_bool(config, "show_eval_progress", True),
+        enabled=_cfg_bool(config, "eval.show_eval_progress", True),
     )
     try:
         for chunk_ids in _iter_id_chunks(sorted(eval_client_ids), chunk_size):

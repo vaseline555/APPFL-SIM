@@ -74,14 +74,14 @@ def _instantiate_dataset(dataset_cls, root: str, split: str, download: bool, tra
 def fetch_torchvision_dataset(args):
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
-    tag = make_load_tag(str(args.dataset), benchmark="TORCHVISION")
+    tag = make_load_tag(str(args.dataset_name), benchmark="TORCHVISION")
     active_logger.info("[%s] resolving dataset class.", tag)
     if tv_datasets is None:
         raise RuntimeError("torchvision is not installed.")
 
-    dataset_cls = _resolve_torchvision_dataset(args.dataset)
+    dataset_cls = _resolve_torchvision_dataset(args.dataset_name)
     if dataset_cls is None:
-        raise ValueError(f"Unknown torchvision dataset: {args.dataset}")
+        raise ValueError(f"Unknown torchvision dataset: {args.dataset_name}")
 
     data_root = Path(str(args.data_dir)).expanduser()
     data_root.mkdir(parents=True, exist_ok=True)

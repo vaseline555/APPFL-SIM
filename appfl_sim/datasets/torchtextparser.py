@@ -22,19 +22,11 @@ logger = logging.getLogger(__name__)
 
 def _tokenizer_from_args(args):
     tokenizer = None
-    if bool(args.use_model_tokenizer) or bool(args.use_pt_model):
+    if bool(args.use_model_tokenizer):
         from transformers import AutoTokenizer
 
-        model_cfg = getattr(args, "model", {})
-        model_name = ""
-        if isinstance(model_cfg, dict):
-            model_name = str(model_cfg.get("name", "")).strip()
-        elif hasattr(model_cfg, "name"):
-            model_name = str(getattr(model_cfg, "name")).strip()
-
-        if not model_name:
-            fallback = str(getattr(args, "model_name", "")).strip()
-            model_name = fallback if "/" in fallback else ""
+        model_name = str(getattr(args, "model_name", "")).strip()
+        model_name = model_name if "/" in model_name else ""
 
         tokenizer_name = model_name or "bert-base-uncased"
         try:
@@ -88,7 +80,7 @@ def _unpack_rows(rows):
 def fetch_torchtext_dataset(args):
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
-    tag = make_load_tag(str(args.dataset), benchmark="TORCHTEXT")
+    tag = make_load_tag(str(args.dataset_name), benchmark="TORCHTEXT")
     active_logger.info("[%s] resolving dataset class.", tag)
     try:
         import torchtext
@@ -99,10 +91,10 @@ def fetch_torchtext_dataset(args):
     data_root.mkdir(parents=True, exist_ok=True)
     active_logger.info("[%s] reading train/test splits.", tag)
 
-    if not hasattr(torchtext.datasets, args.dataset):
-        raise ValueError(f"Unknown torchtext dataset: {args.dataset}")
+    if not hasattr(torchtext.datasets, args.dataset_name):
+        raise ValueError(f"Unknown torchtext dataset: {args.dataset_name}")
 
-    ds_fn = getattr(torchtext.datasets, args.dataset)
+    ds_fn = getattr(torchtext.datasets, args.dataset_name)
     train_rows = _read_torchtext_split(ds_fn, str(data_root), "train")
     test_rows = _read_torchtext_split(ds_fn, str(data_root), "test")
 
@@ -152,8 +144,8 @@ def fetch_torchtext_dataset(args):
         te_ids = torch.tensor([encode(t) for t in te_texts], dtype=torch.long)
         args.num_embeddings = len(vocab)
 
-    raw_train = TensorBackedDataset(tr_ids, tr_labels, name=f"[{args.dataset}] TRAIN")
-    raw_test = TensorBackedDataset(te_ids, te_labels, name=f"[{args.dataset}] TEST")
+    raw_train = TensorBackedDataset(tr_ids, tr_labels, name=f"[{args.dataset_name}] TRAIN")
+    raw_test = TensorBackedDataset(te_ids, te_labels, name=f"[{args.dataset_name}] TEST")
     active_logger.info("[%s] building federated client splits.", tag)
 
     split_map, client_datasets = clientize_raw_dataset(raw_train, args)

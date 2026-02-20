@@ -6,7 +6,7 @@ import numpy as np
 from omegaconf import DictConfig
 from appfl_sim.logger import ServerAgentFileLogger
 from appfl_sim.metrics import parse_metric_names
-from appfl_sim.misc.config_utils import _cfg_bool
+from appfl_sim.misc.config_utils import _cfg_bool, _cfg_get
 
 
 try:
@@ -33,7 +33,6 @@ def _emit_logging_policy_message(
 ) -> None:
     requested = str(policy["requested_scheme"])
     effective = str(policy["effective_scheme"])
-    warning_threshold = int(policy["warning_threshold"])
     basis_clients = int(policy.get("basis_clients", num_clients))
     total_clients = int(policy.get("total_clients", num_clients))
     forced_server_only = bool(policy.get("forced_server_only", False))
@@ -65,19 +64,17 @@ def _emit_logging_policy_message(
     if requested == "server_only":
         _info("Using `logging_scheme`=`server_only` (server-side metrics only).")
         return
-    if requested == "both" and int(basis_clients) > warning_threshold:
+    if requested == "both":
         _warn(
-            f"Per-client logging is explicitly enabled with "
-            f"sampled_clients={basis_clients} (> {warning_threshold}, total_clients={total_clients}). "
-            "This may produce large I/O overhead. "
-            "Suggestion: set `logging_scheme`=`auto` or `server_only`."
+            f"Per-client logging is explicitly enabled with sampled_clients={basis_clients} "
+            f"(total_clients={total_clients}). This may produce large I/O overhead."
         )
 
 def _emit_client_state_policy_message(
     policy: Dict[str, object],
     logger: Optional[ServerAgentFileLogger] = None,
 ) -> None:
-    stateful = bool(policy.get("stateful_clients", False))
+    stateful = bool(policy.get("stateful", False))
     mode = "stateful/persistent" if stateful else "stateless/sporadic"
     msg = f"{mode.title()} clients because `stateful={stateful}`"
     if logger is not None:
@@ -91,15 +88,15 @@ def _emit_federated_eval_policy_message(
     holdout_client_count: int,
     logger: Optional[ServerAgentFileLogger] = None,
 ) -> None:
-    if not _cfg_bool(config, "enable_federated_eval", True):
+    if not _cfg_bool(config, "eval.enable_federated_eval", True):
         return
-    ratio = float(config.get("federated_eval_client_ratio", 1.0))
-    cadence = int(config.eval_every)
-    scheme = str(config.get("federated_eval_scheme", "holdout_dataset")).strip().lower()
+    ratio = float(_cfg_get(config, "eval.configs.client_ratio", 1.0))
+    cadence = int(_cfg_get(config, "eval.every", 1))
+    scheme = str(_cfg_get(config, "eval.configs.scheme", "dataset")).strip().lower()
     if ratio >= 1.0 and cadence > 0:
         return
     total_basis = int(train_client_count)
-    if scheme == "holdout_client":
+    if scheme == "client":
         total_basis = int(train_client_count) + int(holdout_client_count)
     msg = (
         "Federated eval policy: "
@@ -119,7 +116,7 @@ def _warn_if_workers_pinned_to_single_device(
 ) -> None:
     if world_size <= 1:
         return
-    dev = str(config.get("device", "cpu")).strip().lower()
+    dev = str(_cfg_get(config, "experiment.device", "cpu")).strip().lower()
     if not dev.startswith("cuda:"):
         return
     suffix = dev.split(":", 1)[1].strip()
@@ -158,7 +155,7 @@ def _log_round(
             return ""
         return " | ".join(f"{part:<24}" for part in parts).rstrip()
 
-    eval_metric_order = parse_metric_names(config.get("eval_metrics", None))
+    eval_metric_order = parse_metric_names(_cfg_get(config, "eval.metrics", None))
     if not eval_metric_order:
         eval_metric_order = ["acc1"]
 
@@ -374,8 +371,8 @@ def _log_round(
             )
         )
 
-    do_pre_val = _cfg_bool(config, "do_pre_validation", True)
-    do_post_val = _cfg_bool(config, "do_validation", True)
+    do_pre_val = _cfg_bool(config, "eval.do_pre_evaluation", True)
+    do_post_val = _cfg_bool(config, "eval.do_post_evaluation", True)
     if do_pre_val:
         _append_local_eval_block("Local Pre-val.", "local_pre_val", "pre_val_")
     if do_post_val:
@@ -415,7 +412,11 @@ def _log_round(
         tracker.log_metrics(step=round_idx, metrics=round_metrics)
 
 def _new_server_logger(config: DictConfig, mode: str, run_ts: str) -> ServerAgentFileLogger:
-    run_dir = Path(str(config.log_dir)) / str(config.exp_name) / run_ts
+    run_dir = (
+        Path(str(_cfg_get(config, "logging.path", "./logs")))
+        / str(_cfg_get(config, "experiment.name", "appfl-sim"))
+        / run_ts
+    )
     mode_text = str(mode).strip().lower()
     file_name = "server.log"
     if "-rank" in mode_text:
@@ -425,7 +426,7 @@ def _new_server_logger(config: DictConfig, mode: str, run_ts: str) -> ServerAgen
     return ServerAgentFileLogger(
         file_dir=str(run_dir),
         file_name=file_name,
-        experiment_id=str(config.exp_name),
+        experiment_id=str(_cfg_get(config, "experiment.name", "appfl-sim")),
     )
 
 def _resolve_run_timestamp(config: DictConfig, preset: Optional[str] = None) -> str:
@@ -448,14 +449,14 @@ def _start_summary_lines(
     )
     lines = [
         f"Start {mode.upper()} simulation",
-        f"  * Experiment: {config.exp_name}",
-        f"  * Algorithm: {config.algorithm}",
-        f"  * Dataset: {config.dataset}",
-        f"  * Rounds: {config.num_rounds}",
+        f"  * Experiment: {_cfg_get(config, 'experiment.name', 'appfl-sim')}",
+        f"  * Algorithm: {_cfg_get(config, 'algorithm.algorithm', 'fedavg')}",
+        f"  * Dataset: {_cfg_get(config, 'dataset.name', 'MNIST')}",
+        f"  * Rounds: {_cfg_get(config, 'train.num_rounds', 20)}",
         f"  * Total Clients: {num_clients}",
         f"  * Sampled Clients/Round: {num_sampled_clients}/{train_client_count} ({sampled_pct:.2f}%)",
-        f"  * Evaluation Scheme: {config.get('federated_eval_scheme', 'holdout_dataset')}",
+        f"  * Evaluation Scheme: {_cfg_get(config, 'eval.configs.scheme', 'dataset')}",
     ]
-    if str(config.get("federated_eval_scheme", "holdout_dataset")) == "holdout_client":
+    if str(_cfg_get(config, "eval.configs.scheme", "dataset")) == "client":
         lines.append(f"  * Holdout Clients (evaluation): {holdout_client_count}")
     return "\n".join(lines)

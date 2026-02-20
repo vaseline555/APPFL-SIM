@@ -44,10 +44,10 @@ def fetch_tff_dataset(args):
             "On Python 3.14 this may fail due dependency constraints; use Python 3.10/3.11 environment for TFF datasets."
         ) from e
 
-    if ":" in str(args.dataset):
-        _, tff_name = str(args.dataset).split(":", 1)
+    if ":" in str(args.dataset_name):
+        _, tff_name = str(args.dataset_name).split(":", 1)
     else:
-        tff_name = str(args.dataset)
+        tff_name = str(args.dataset_name)
     tff_name = tff_name.lower()
     tag = make_load_tag(tff_name, benchmark="TFF")
     active_logger.info("[%s] loading federated client data.", tag)

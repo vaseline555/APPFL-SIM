@@ -3,19 +3,27 @@
 For the first-time contributors.
 
 Goal:
-- Implement your FL idea in `appfl_sim` for simulation.
-- Optionally export it into `APPFL-main` in plug-and-play format.
+- Implement your FL idea in `APPFL-SIM` for simulation.
+- Export your algorithm into `APPFL` in plug-and-play manner.
 
 ---
+
+## Device and Distributed Backends
+- `backend=serial`: single-process baseline (recommended for single-node/single-GPU small runs).
+- `backend=nccl`: multi-process multi-GPU runtime via `torch.distributed` + NCCL.
+- `backend=gloo`: CPU-oriented multi-process runtime via `torch.distributed` + Gloo.
+- `device=cuda` is recommended for `nccl` to map ranks across available GPUs.
+- `device=cpu` is recommended for `gloo`.
+- GPU subset control for `nccl`: set `CUDA_VISIBLE_DEVICES` before launch.  
+  Example: `CUDA_VISIBLE_DEVICES=1,3 python -m appfl_sim.runner --config appfl_sim/config/examples/backend/nccl.yaml`
+
 
 ## 0) Before you start
 
 Sanity run first:
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m appfl_sim.runner \
-  --config appfl_sim/config/examples/split/mnist_iid.yaml \
-  backend=serial num_clients=3 num_rounds=1
+python -m appfl_sim.runner --config appfl_sim/config/examples/split/mnist_iid.yaml
 ```
 
 If this works, your environment is ready.
@@ -53,7 +61,7 @@ Most new FL methods need these pieces:
 - Add: `appfl_sim/config/algorithms/<algo>.yaml`
 
 Important current note:
-- You do **not** need to edit `runner.py` for new algorithms.
+- You do **not** typically need to edit `runner.py` for new algorithms.
 - Add your classes under `appfl_sim/algorithm/...`, then set config keys:
   - `algorithm=<algo_label>` (metadata + default class-name inference)
   - optional explicit overrides: `aggregator`, `scheduler`, `trainer`
@@ -190,15 +198,3 @@ Exporter output includes:
 - Patch/install instructions (artifact mode)
 - Optional compatibility audit with APPFL tree:
   `--check-appfl-root /path/to/APPFL-main`
-
----
-
-## 7) Suggested learning path (first week)
-
-1. Day 1: Run baseline MNIST simulation.
-2. Day 2: Modify aggregator only.
-3. Day 3: Add custom metric.
-4. Day 4: Add custom trainer.
-5. Day 5: Export plugin artifact and test insertion in APPFL-main copy.
-
-Keep each step small and runnable.

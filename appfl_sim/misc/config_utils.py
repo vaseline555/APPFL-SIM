@@ -63,7 +63,7 @@ def _print_help() -> None:
 
         Usage:
         python -m appfl_sim.runner --config /path/to/config.yaml
-        appfl-sim backend=serial dataset=MNIST num_clients=3 num_rounds=2
+        appfl-sim experiment.backend=serial dataset.name=MNIST train.num_clients=3 train.num_rounds=2
 
         Distributed notes:
         - backend=nccl uses one process per visible GPU.
@@ -81,11 +81,66 @@ def _cfg_to_dict(cfg) -> Dict:
         return dict(cfg)
     return dict(vars(cfg))
 
+def _cfg_get(config: DictConfig | dict, path: str, default: Any = None) -> Any:
+    parts = [p for p in str(path).split(".") if p]
+    current: Any = config
+    for part in parts:
+        if isinstance(current, DictConfig):
+            if part not in current:
+                return default
+            current = current.get(part)
+            continue
+        if isinstance(current, dict):
+            if part not in current:
+                return default
+            current = current.get(part)
+            continue
+        return default
+    return default if current is None else current
+
+
+def _cfg_set(config: DictConfig | dict, path: str, value: Any) -> None:
+    parts = [p for p in str(path).split(".") if p]
+    if not parts:
+        return
+    current: Any = config
+    for part in parts[:-1]:
+        if isinstance(current, DictConfig):
+            if part not in current or current.get(part) is None:
+                current[part] = OmegaConf.create({})
+            current = current.get(part)
+            continue
+        if isinstance(current, dict):
+            if part not in current or current.get(part) is None:
+                current[part] = {}
+            current = current.get(part)
+            continue
+        return
+    last = parts[-1]
+    if isinstance(current, DictConfig):
+        current[last] = value
+    elif isinstance(current, dict):
+        current[last] = value
+
+
 def _ensure_model_cfg(cfg: DictConfig) -> None:
-    del cfg
+    if _cfg_get(cfg, "model.configs", None) is None:
+        _cfg_set(cfg, "model.configs", OmegaConf.create({}))
+    if _cfg_get(cfg, "dataset.configs", None) is None:
+        _cfg_set(cfg, "dataset.configs", OmegaConf.create({}))
+    if _cfg_get(cfg, "split.configs", None) is None:
+        _cfg_set(cfg, "split.configs", OmegaConf.create({}))
+    if _cfg_get(cfg, "eval.configs", None) is None:
+        _cfg_set(cfg, "eval.configs", OmegaConf.create({}))
+    if _cfg_get(cfg, "logging.configs", None) is None:
+        _cfg_set(cfg, "logging.configs", OmegaConf.create({}))
+    if _cfg_get(cfg, "optimization.configs", None) is None:
+        _cfg_set(cfg, "optimization.configs", OmegaConf.create({}))
+    if _cfg_get(cfg, "privacy.kwargs", None) is None:
+        _cfg_set(cfg, "privacy.kwargs", OmegaConf.create({}))
 
 def _cfg_bool(config: DictConfig, key: str, default: bool) -> bool:
-    value = config.get(key, default)
+    value = _cfg_get(config, key, default)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -105,44 +160,47 @@ def _build_train_cfg(
     num_workers_override: Optional[int] = None,
 ) -> Dict:
     if num_workers_override is None:
-        num_workers = int(config.num_workers)
+        num_workers = int(_cfg_get(config, "train.num_workers", 0))
     else:
         num_workers = max(0, int(num_workers_override))
     device_text = str(device).strip().lower()
     default_pin_memory = device_text.startswith("cuda")
-    pin_memory = _cfg_bool(config, "pin_memory", default_pin_memory)
-    update_base_raw = str(config.get("update_base", "epoch")).strip().lower()
-    if update_base_raw in {"iter", "step"}:
+    pin_memory = _cfg_bool(config, "train.pin_memory", default_pin_memory)
+    update_base_raw = str(_cfg_get(config, "train.update_base", "epoch")).strip().lower()
+    if update_base_raw == "iter":
         mode = "step"
-        local_iters = int(config.get("local_iters", 1))
+        local_iters = int(_cfg_get(config, "train.local_iters", 1))
         local_iters = max(1, local_iters)
     else:
         mode = "epoch"
-        local_epochs = int(config.get("local_epochs", 1))
+        local_epochs = int(_cfg_get(config, "train.local_epochs", 1))
         local_epochs = max(1, local_epochs)
     train_cfg = {
         "device": device,
         "mode": mode,
-        "batch_size": int(config.batch_size),
-        "eval_batch_size": int(config.get("eval_batch_size", config.batch_size)),
-        "num_workers": int(num_workers),
-        "train_pin_memory": _cfg_bool(config, "train_pin_memory", pin_memory),
-        "eval_pin_memory": _cfg_bool(config, "eval_pin_memory", pin_memory),
-        "dataloader_persistent_workers": _cfg_bool(
-            config, "dataloader_persistent_workers", False
+        "batch_size": int(_cfg_get(config, "train.batch_size", 32)),
+        "train_data_shuffle": _cfg_bool(config, "train.shuffle", True),
+        "eval_batch_size": int(
+            _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))
         ),
-        "dataloader_prefetch_factor": int(config.get("dataloader_prefetch_factor", 2)),
-        "optim": str(config.optimizer),
-        "lr": float(config.lr),
-        "weight_decay": float(config.weight_decay),
-        "max_grad_norm": float(config.max_grad_norm),
+        "num_workers": int(num_workers),
+        "train_pin_memory": _cfg_bool(config, "train.train_pin_memory", pin_memory),
+        "eval_pin_memory": _cfg_bool(config, "train.eval_pin_memory", pin_memory),
+        "dataloader_persistent_workers": _cfg_bool(
+            config, "train.dataloader_persistent_workers", False
+        ),
+        "dataloader_prefetch_factor": int(_cfg_get(config, "train.dataloader_prefetch_factor", 2)),
+        "optim": str(_cfg_get(config, "optimization.optimizer", "SGD")),
+        "lr": float(_cfg_get(config, "optimization.lr", 0.01)),
+        "weight_decay": float(_cfg_get(config, "optimization.configs.weight_decay", 0.0)),
+        "max_grad_norm": float(_cfg_get(config, "train.max_grad_norm", 0.0)),
         "logging_output_dirname": str(run_log_dir),
         "logging_output_filename": "client",
-        "experiment_id": str(config.exp_name),
+        "experiment_id": str(_cfg_get(config, "experiment.name", "appfl-sim")),
         "client_logging_enabled": True,
-        "do_pre_validation": _cfg_bool(config, "do_pre_validation", True),
-        "do_validation": _cfg_bool(config, "do_validation", True),
-        "eval_metrics": config.get("eval_metrics", ["acc1"]),
+        "do_pre_validation": _cfg_bool(config, "eval.do_pre_evaluation", True),
+        "do_validation": _cfg_bool(config, "eval.do_post_evaluation", True),
+        "eval_metrics": _cfg_get(config, "eval.metrics", ["acc1"]),
     }
     if mode == "epoch":
         train_cfg["num_local_epochs"] = local_epochs
@@ -155,12 +213,11 @@ def _resolve_client_logging_policy(
     num_clients: int,
     num_sampled_clients: int,
 ) -> Dict[str, object]:
-    scheme = str(config.get("logging_scheme", "auto")).strip().lower()
-    warning_threshold = int(config.get("per_client_logging_warning_threshold", 50))
+    scheme = str(_cfg_get(config, "logging.type", "auto")).strip().lower()
 
     if scheme not in {"auto", "both", "server_only"}:
         raise ValueError(
-            "logging_scheme must be one of: auto, both, server_only"
+            "logging.type must be one of: auto, both, server_only"
         )
 
     basis_clients = max(1, int(num_sampled_clients))
@@ -178,7 +235,6 @@ def _resolve_client_logging_policy(
         "requested_scheme": scheme,
         "effective_scheme": effective,
         "client_logging_enabled": effective == "both",
-        "warning_threshold": warning_threshold,
         "basis_clients": basis_clients,
         "total_clients": int(num_clients),
         "forced_server_only": bool(forced_server_only),
@@ -188,14 +244,14 @@ def _resolve_client_state_policy(config: DictConfig) -> Dict[str, object]:
     """Client lifecycle policy.
 
     Default is stateless (on-demand): instantiate sampled client(s), run, then free.
-    Stateful mode is explicit via `stateful_clients=true`.
+    Stateful mode is explicit via `experiment.stateful=true`.
 
     """
-    stateful = _cfg_bool(config, "stateful_clients", False)
-    source = "stateful_clients"
+    stateful = _cfg_bool(config, "experiment.stateful", False)
+    source = "experiment.stateful"
 
     return {
-        "stateful_clients": bool(stateful),
+        "stateful": bool(stateful),
         "use_on_demand": not bool(stateful),
         "source": source,
     }
@@ -204,23 +260,11 @@ def _resolve_on_demand_worker_policy(
     config: DictConfig,
     logger: Optional[ServerAgentFileLogger] = None,
 ) -> Dict[str, int]:
-    base_workers = max(0, int(config.get("num_workers", 0)))
-    train_workers = max(
-        0,
-        int(config.get("on_demand_num_workers", 0)),
-    )
-    eval_workers = max(0, int(config.get("on_demand_eval_num_workers", 0)))
-    if logger is not None and base_workers > 0:
-        if "on_demand_num_workers" not in config:
-            logger.info(
-                f"On-demand training dataloaders default to 0 workers (num_workers={base_workers} ignored). "
-                "Set on_demand_num_workers to override."
-            )
-        if "on_demand_eval_num_workers" not in config:
-            logger.info(
-                f"On-demand eval dataloaders default to 0 workers (num_workers={base_workers} ignored). "
-                "Set on_demand_eval_num_workers to override."
-            )
+    base_workers = max(0, int(_cfg_get(config, "train.num_workers", 0)))
+    train_workers = base_workers
+    eval_workers = base_workers
+    if logger is not None:
+        del logger
     return {"train": train_workers, "eval": eval_workers}
 
 def _to_pascal_case(name: str) -> str:
@@ -283,10 +327,10 @@ def _module_has_class(module_path: str, class_name: str) -> bool:
     return False
 
 def _resolve_algorithm_components(config: DictConfig) -> Dict[str, Any]:
-    algorithm = str(config.get("algorithm", "fedavg")).strip().lower()
-    explicit_aggregator = str(config.get("aggregator", "")).strip()
-    explicit_scheduler = str(config.get("scheduler", "")).strip()
-    explicit_trainer = str(config.get("trainer", "")).strip()
+    algorithm = str(_cfg_get(config, "algorithm.algorithm", "fedavg")).strip().lower()
+    explicit_aggregator = str(_cfg_get(config, "algorithm.aggregator", "")).strip()
+    explicit_scheduler = str(_cfg_get(config, "algorithm.scheduler", "")).strip()
+    explicit_trainer = str(_cfg_get(config, "algorithm.trainer", "")).strip()
 
     if explicit_aggregator:
         aggregator_name = explicit_aggregator
@@ -322,8 +366,8 @@ def _resolve_algorithm_components(config: DictConfig) -> Dict[str, Any]:
     if not _module_has_class("appfl_sim.algorithm.trainer", trainer_name):
         trainer_name = "VanillaTrainer"
 
-    agg_kwargs_raw = config.get("aggregator_kwargs", {})
-    sched_kwargs_raw = config.get("scheduler_kwargs", {})
+    agg_kwargs_raw = _cfg_get(config, "algorithm.aggregator_kwargs", {})
+    sched_kwargs_raw = _cfg_get(config, "algorithm.scheduler_kwargs", {})
     aggregator_kwargs = (
         _cfg_to_dict(agg_kwargs_raw) if agg_kwargs_raw is not None else {}
     )
@@ -348,10 +392,10 @@ def _allow_reusable_on_demand_pool(
 ) -> bool:
     if bool(client_logging_enabled):
         return False
-    if _cfg_bool(config, "use_secure_agg", False):
+    if _cfg_bool(config, "secure_aggregation.use_sec_agg", False):
         return False
-    if _cfg_bool(config, "use_dp", False):
-        mechanism = str(config.get("dp_mechanism", "laplace")).strip().lower()
+    if _cfg_bool(config, "privacy.use_dp", False):
+        mechanism = str(_cfg_get(config, "privacy.mechanism", "laplace")).strip().lower()
         if mechanism == "opacus":
             return False
     return True
@@ -362,9 +406,7 @@ def _merge_runtime_cfg(config: DictConfig, loader_args: SimpleNamespace | dict) 
         runtime_cfg.update(vars(loader_args))
     elif isinstance(loader_args, dict):
         runtime_cfg.update(loader_args)
-    runtime_cfg["num_clients"] = int(
-        runtime_cfg.get("num_clients", runtime_cfg.get("K", int(config.num_clients)))
-    )
+    runtime_cfg["num_clients"] = int(_cfg_get(config, "train.num_clients", runtime_cfg.get("K", 0)))
     runtime_cfg["K"] = int(runtime_cfg["num_clients"])
     return runtime_cfg
 
@@ -372,9 +414,9 @@ def _resolve_num_sampled_clients(config: DictConfig, num_clients: int) -> int:
     if int(num_clients) <= 0:
         return 0
 
-    if "num_sampled_clients" in config:
+    if _cfg_get(config, "train.num_sampled_clients", None) is not None:
         try:
-            n = int(config.get("num_sampled_clients", 0))
+            n = int(_cfg_get(config, "train.num_sampled_clients", 0))
         except Exception:
             n = 0
         if n > 0:
@@ -438,7 +480,7 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
         if "=" in tok:
             key, value = tok.split("=", 1)
             key = key.replace("-", "_")
-            if key == "backend":
+            if key == "experiment.backend":
                 backend = value
             else:
                 out.append(f"{key}={value}")

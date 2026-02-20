@@ -22,22 +22,33 @@ class TrackerConfig:
     wandb_mode: str = "online"
 
 
+def _cfg_get(payload: dict, path: str, default: Any = None) -> Any:
+    parts = [p for p in str(path).split(".") if p]
+    cur: Any = payload
+    for part in parts:
+        if isinstance(cur, dict):
+            if part not in cur:
+                return default
+            cur = cur[part]
+            continue
+        return default
+    return default if cur is None else cur
+
+
 def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
     if isinstance(config, DictConfig):
         cfg = OmegaConf.to_container(config, resolve=True)
     else:
         cfg = dict(config)
 
-    backend = str(cfg.get("logging_backend", "file")).lower()
-    project_name = str(cfg.get("project_name", cfg.get("exp_name", "appfl-sim")))
-    exp_name = str(cfg.get("exp_name", project_name))
-    experiment_name = str(
-        cfg.get("experiment_name", cfg.get("exp_name", project_name))
-    )
+    backend = str(_cfg_get(cfg, "logging.backend", "file")).lower()
+    project_name = str(_cfg_get(cfg, "logging.name", "appfl-sim"))
+    exp_name = str(_cfg_get(cfg, "experiment.name", project_name))
+    experiment_name = str(_cfg_get(cfg, "experiment.name", project_name))
     run_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    log_dir = str(cfg.get("log_dir", "./logs"))
-    wandb_entity = str(cfg.get("wandb_entity", ""))
-    wandb_mode = str(cfg.get("wandb_mode", "online")).lower()
+    log_dir = str(_cfg_get(cfg, "logging.path", "./logs"))
+    wandb_entity = str(_cfg_get(cfg, "logging.configs.wandb_entity", ""))
+    wandb_mode = str(_cfg_get(cfg, "logging.configs.wandb_mode", "online")).lower()
     return TrackerConfig(
         backend=backend,
         project_name=project_name,
@@ -136,7 +147,7 @@ class ExperimentTracker:
             return
 
         raise ValueError(
-            "logging_backend must be one of: none, file, console, tensorboard, wandb"
+            "logging.backend must be one of: none, file, console, tensorboard, wandb"
         )
 
     @staticmethod

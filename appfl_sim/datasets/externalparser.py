@@ -46,11 +46,11 @@ def _normalize_labels(raw_labels: Iterable[Any]) -> torch.Tensor:
 
 
 def _pick_label_key(columns: List[str], args) -> str:
-    user_key = str(getattr(args, "external_label_key", "")).strip()
+    user_key = str(getattr(args, "ext_label_key", "")).strip()
     if user_key:
         if user_key not in columns:
             raise ValueError(
-                f"external_label_key='{user_key}' not found in dataset columns: {columns}"
+                f"dataset.configs.label_key='{user_key}' not found in dataset columns: {columns}"
             )
         return user_key
 
@@ -59,16 +59,16 @@ def _pick_label_key(columns: List[str], args) -> str:
             return cand
 
     raise ValueError(
-        f"Unable to infer label column. Set external_label_key explicitly. Available columns: {columns}"
+        f"Unable to infer label column. Set dataset.configs.label_key explicitly. Available columns: {columns}"
     )
 
 
 def _pick_feature_key(columns: List[str], label_key: str, args) -> str:
-    user_key = str(getattr(args, "external_feature_key", "")).strip()
+    user_key = str(getattr(args, "ext_feature_key", "")).strip()
     if user_key:
         if user_key not in columns:
             raise ValueError(
-                f"external_feature_key='{user_key}' not found in dataset columns: {columns}"
+                f"dataset.configs.feature_key='{user_key}' not found in dataset columns: {columns}"
             )
         return user_key
 
@@ -98,21 +98,12 @@ def _pick_feature_key(columns: List[str], label_key: str, args) -> str:
 
 def _tokenizer_from_args(args):
     tokenizer = None
-    if bool(getattr(args, "use_model_tokenizer", False)) or bool(
-        getattr(args, "use_pt_model", False)
-    ):
+    if bool(getattr(args, "use_model_tokenizer", False)):
         try:
             from transformers import AutoTokenizer
 
-            model_cfg = getattr(args, "model", {})
-            model_name = ""
-            if isinstance(model_cfg, dict):
-                model_name = str(model_cfg.get("name", "")).strip()
-            elif hasattr(model_cfg, "name"):
-                model_name = str(getattr(model_cfg, "name")).strip()
-            if not model_name:
-                fallback = str(getattr(args, "model_name", "")).strip()
-                model_name = fallback if "/" in fallback else ""
+            model_name = str(getattr(args, "model_name", "")).strip()
+            model_name = model_name if "/" in model_name else ""
 
             tokenizer_name = model_name or "bert-base-uncased"
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -245,9 +236,9 @@ def _rows_to_tensor_dataset(rows: List[Dict[str, Any]], feature_key: str, label_
 
 
 def _parse_external_spec(args) -> Tuple[str, str]:
-    raw_dataset = str(getattr(args, "dataset", "")).strip()
-    source = str(getattr(args, "external_source", "")).strip().lower()
-    name = str(getattr(args, "external_dataset_name", "")).strip()
+    raw_dataset = str(getattr(args, "dataset_name", "")).strip()
+    source = str(getattr(args, "ext_source", "")).strip().lower()
+    name = str(getattr(args, "ext_dataset_name", "")).strip()
 
     if raw_dataset.lower().startswith("hf:"):
         source = "hf"
@@ -264,11 +255,11 @@ def _parse_external_spec(args) -> Tuple[str, str]:
             name = raw_dataset
         else:
             raise ValueError(
-                "Unable to infer external dataset name. Set external_dataset_name or use dataset='hf:<name>'/'timm:<name>'."
+                "Unable to infer external dataset name. Set dataset.configs.dataset_name or use dataset.name='hf:<name>'/'timm:<name>'."
             )
 
     if source not in {"hf", "timm"}:
-        raise ValueError("external_source must be one of: hf, timm")
+        raise ValueError("dataset.configs.source must be one of: hf, timm")
 
     return source, name
 
@@ -284,9 +275,9 @@ def _fetch_hf_dataset(args, dataset_name: str):
             "datasets (HuggingFace) is not installed. Install with: pip install datasets"
         ) from e
 
-    config_name = str(getattr(args, "external_dataset_config_name", "")).strip()
-    train_split = str(getattr(args, "external_train_split", "train")).strip()
-    test_split = str(getattr(args, "external_test_split", "test")).strip()
+    config_name = str(getattr(args, "ext_config_name", "")).strip()
+    train_split = str(getattr(args, "ext_train_split", "train")).strip()
+    test_split = str(getattr(args, "ext_test_split", "test")).strip()
 
     kwargs: Dict[str, Any] = {
         "cache_dir": str(getattr(args, "data_dir", "./data")),
@@ -388,7 +379,7 @@ def _fetch_timm_dataset(args, dataset_name: str):
     tag = make_load_tag(dataset_name, benchmark="TIMM")
     active_logger.info("[%s] delegating to torchvision-compatible parser.", tag)
     tv_name = _normalize_timm_dataset_name(dataset_name)
-    args.dataset = tv_name
+    args.dataset_name = tv_name
     return fetch_torchvision_dataset(args)
 
 
@@ -396,14 +387,14 @@ def fetch_external_dataset(args):
     """External dataset parser.
 
     Supported sources:
-    - `hf`: HuggingFace datasets (`dataset='hf:<dataset_name>'`)
-    - `timm`: timm-style dataset names mapped to torchvision when applicable (`dataset='timm:<name>'`)
+    - `hf`: HuggingFace datasets (`dataset.name='hf:<dataset_name>'`)
+    - `timm`: timm-style dataset names mapped to torchvision when applicable (`dataset.name='timm:<name>'`)
     """
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
     source, dataset_name = _parse_external_spec(args)
-    args.external_source = source
-    args.external_dataset_name = dataset_name
+    args.ext_source = source
+    args.ext_dataset_name = dataset_name
     active_logger.info("[%s] starting external dataset parser.", make_load_tag(dataset_name, benchmark=source))
 
     if source == "hf":

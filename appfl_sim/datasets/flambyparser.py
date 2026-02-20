@@ -67,7 +67,7 @@ def fetch_flamby(args):
     """
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
-    key = _canonical_flamby_key(str(args.dataset))
+    key = _canonical_flamby_key(str(args.dataset_name))
     if not key:
         allowed = ", ".join(sorted(_SUPPORTED_FLAMBY.keys()))
         raise PermissionError(
@@ -78,11 +78,11 @@ def fetch_flamby(args):
     cfg = _SUPPORTED_FLAMBY[key]
     tag = make_load_tag(key, benchmark="FLAMBY")
     active_logger.info("[%s] resolving dataset module.", tag)
-    accepted = bool(getattr(args, "flamby_data_terms_accepted", False))
+    accepted = bool(getattr(args, "flamby_data_terms_accepted", True))
     if not accepted:
         raise PermissionError(
             f"FLamby dataset '{key}' requires explicit data-term approval. "
-            f"Set flamby_data_terms_accepted=true after accepting terms at: {cfg['license']}"
+            f"Set dataset.configs.terms_accepted=true after accepting terms at: {cfg['license']}"
         )
 
     try:

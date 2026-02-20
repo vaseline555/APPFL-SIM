@@ -136,13 +136,13 @@ def _instantiate_dataset(ds_cls, root: str, split: str, download: bool):
 def fetch_torchaudio_dataset(args):
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
-    tag = make_load_tag(str(args.dataset), benchmark="TORCHAUDIO")
+    tag = make_load_tag(str(args.dataset_name), benchmark="TORCHAUDIO")
     active_logger.info("[%s] resolving dataset class.", tag)
-    ds_cls, ta = _resolve_torchaudio_dataset(args.dataset)
+    ds_cls, ta = _resolve_torchaudio_dataset(args.dataset_name)
     if ta is None:
         raise RuntimeError("torchaudio is not installed.")
     if ds_cls is None:
-        raise ValueError(f"Unknown torchaudio dataset: {args.dataset}")
+        raise ValueError(f"Unknown torchaudio dataset: {args.dataset_name}")
 
     data_root = Path(str(args.data_dir)).expanduser()
     data_root.mkdir(parents=True, exist_ok=True)

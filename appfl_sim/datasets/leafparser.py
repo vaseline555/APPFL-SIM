@@ -535,7 +535,7 @@ def fetch_leaf(args):
     """LEAF parser adapted from AAggFF processing flow with compact implementation."""
     args = to_namespace(args)
     leaf_logger = _resolve_leaf_logger(args)
-    dataset_key = str(args.dataset).strip().lower()
+    dataset_key = str(args.dataset_name).strip().lower()
     leaf_logger.info("[LEAF-%s] load processed dataset.", dataset_key.upper())
     dataset_root = _prepare_leaf_data(args, dataset_key)
 
@@ -636,5 +636,5 @@ def fetch_leaf(args):
 # backward alias
 
 def fetch_leaf_preprocessed(dataset_name: str, root: str):
-    args = to_namespace({"dataset": dataset_name, "data_dir": root})
+    args = to_namespace({"dataset": {"name": dataset_name, "path": root}})
     return fetch_leaf(args)

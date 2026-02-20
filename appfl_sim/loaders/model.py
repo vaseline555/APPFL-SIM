@@ -29,6 +29,19 @@ class ModelSpec:
     hf_config_overrides: Dict[str, Any]
 
 
+def _path_get(cfg: Dict[str, Any], path: str, default: Any = None) -> Any:
+    parts = [p for p in str(path).split(".") if p]
+    cur: Any = cfg
+    for part in parts:
+        if isinstance(cur, dict):
+            if part not in cur:
+                return default
+            cur = cur[part]
+            continue
+        return default
+    return default if cur is None else cur
+
+
 def _as_dict(value: Any) -> Dict[str, Any]:
     if value is None:
         return {}
@@ -83,22 +96,22 @@ def _default_model_context(
     for dim in input_shape:
         inferred_in_features *= int(dim)
 
+    model_configs = _as_dict(_path_get(cfg, "model.configs", {}))
     context = {
-        "model_name": cfg.get("model_name", "SimpleCNN"),
+        "model_name": _path_get(cfg, "model.name", "SimpleCNN"),
         "num_classes": _safe_int(num_classes, 0),
         "in_channels": channels,
         "in_features": inferred_in_features,
         "resize": inferred_resize,
-        "crop": _safe_int(cfg.get("crop", inferred_resize), inferred_resize),
-        "hidden_size": _safe_int(cfg.get("hidden_size", 64), 64),
-        "dropout": _safe_float(cfg.get("dropout", 0.0), 0.0),
-        "num_layers": _safe_int(cfg.get("num_layers", 2), 2),
-        "num_embeddings": _safe_int(cfg.get("num_embeddings", 10000), 10000),
-        "embedding_size": _safe_int(cfg.get("embedding_size", 128), 128),
-        "seq_len": _safe_int(cfg.get("seq_len", 128), 128),
-        "B": _safe_int(cfg.get("batch_size", 32), 32),
+        "hidden_size": _safe_int(model_configs.get("hidden_size", 64), 64),
+        "dropout": _safe_float(model_configs.get("dropout", 0.0), 0.0),
+        "num_layers": _safe_int(model_configs.get("num_layers", 2), 2),
+        "num_embeddings": _safe_int(model_configs.get("num_embeddings", 10000), 10000),
+        "embedding_size": _safe_int(model_configs.get("embedding_size", 128), 128),
+        "seq_len": _safe_int(model_configs.get("seq_len", 128), 128),
+        "B": _safe_int(_path_get(cfg, "train.batch_size", 32), 32),
     }
-    context.update(cfg)
+    context.update(model_configs)
     return context
 
 
@@ -108,15 +121,16 @@ def _parse_model_spec(
     num_classes: int,
 ) -> ModelSpec:
     context = _default_model_context(cfg, input_shape=input_shape, num_classes=num_classes)
-    source = str(cfg.get("model_source", "auto")).lower()
-    name = str(cfg.get("model_name", "SimpleCNN")).strip()
+    source = str(_path_get(cfg, "model.backend", "auto")).lower()
+    name = str(_path_get(cfg, "model.name", "SimpleCNN")).strip()
     if source in {"timm", "hf"} and not name:
         raise ValueError(
-            f"model_source={source} requires model_name to be set to the exact backend name/card."
+            f"model.backend={source} requires model.name to be set to the exact backend name/card."
         )
-    in_channels = int(cfg.get("model_in_channels", context.get("in_channels", 1)))
+    model_configs = _as_dict(_path_get(cfg, "model.configs", {}))
+    in_channels = int(model_configs.get("in_channels", context.get("in_channels", 1)))
     resolved_num_classes = int(
-        cfg.get("model_num_classes", context.get("num_classes", num_classes))
+        model_configs.get("num_classes", context.get("num_classes", num_classes))
     )
 
     return ModelSpec(
@@ -126,18 +140,16 @@ def _parse_model_spec(
         in_channels=in_channels,
         input_shape=tuple(input_shape),
         context=context,
-        model_kwargs=_as_dict(cfg.get("model_kwargs", {})),
-        timm_pretrained=_safe_bool(cfg.get("model_timm_pretrained", False), False),
-        timm_kwargs=_as_dict(cfg.get("model_timm_kwargs", {})),
-        hf_task=str(cfg.get("model_hf_task", "sequence_classification")).strip().lower(),
-        hf_pretrained=_safe_bool(cfg.get("model_hf_pretrained", False), False),
-        hf_local_files_only=_safe_bool(cfg.get("model_hf_local_files_only", False), False),
-        hf_trust_remote_code=_safe_bool(cfg.get("model_hf_trust_remote_code", False), False),
-        hf_gradient_checkpointing=_safe_bool(
-            cfg.get("model_hf_gradient_checkpointing", False), False
-        ),
-        hf_kwargs=_as_dict(cfg.get("model_hf_kwargs", {})),
-        hf_config_overrides=_as_dict(cfg.get("model_hf_config_overrides", {})),
+        model_kwargs=model_configs,
+        timm_pretrained=_safe_bool(model_configs.get("pretrained", False), False),
+        timm_kwargs=_as_dict(model_configs.get("timm_kwargs", {})),
+        hf_task=str(model_configs.get("hf_task", "sequence_classification")).strip().lower(),
+        hf_pretrained=_safe_bool(model_configs.get("pretrained", False), False),
+        hf_local_files_only=_safe_bool(model_configs.get("hf_local_files_only", False), False),
+        hf_trust_remote_code=_safe_bool(model_configs.get("hf_trust_remote_code", False), False),
+        hf_gradient_checkpointing=_safe_bool(model_configs.get("hf_gradient_checkpointing", False), False),
+        hf_kwargs=_as_dict(model_configs.get("hf_kwargs", {})),
+        hf_config_overrides=_as_dict(model_configs.get("hf_config_overrides", {})),
     )
 
 
@@ -145,7 +157,7 @@ def _load_appfl_model(spec: ModelSpec):
     if spec.name not in MODEL_REGISTRY:
         available = ", ".join(sorted(MODEL_REGISTRY.keys()))
         raise ValueError(
-            f"model_source=appfl requires an exact local model name. "
+            f"model.backend=local requires an exact local model name. "
             f"Got '{spec.name}'. Available: {available}"
         )
 
@@ -281,7 +293,7 @@ def _build_hf_scratch_config(model_id: str, spec: ModelSpec, task: str):
     except Exception as e:
         raise ValueError(
             "pretrained=false requires accessible HF config for model_name. "
-            "Use model_hf_local_files_only=false to allow download, or cache the model config first."
+            "Use model.configs.hf_local_files_only=false to allow download, or cache the model config first."
         ) from e
 
 
@@ -357,10 +369,12 @@ def _is_hf_candidate(name: str, spec: ModelSpec) -> bool:
 
 def _resolve_source(spec: ModelSpec) -> str:
     source = spec.source.lower()
-    if source in {"appfl", "timm", "hf"}:
+    if source == "local":
+        return "appfl"
+    if source in {"timm", "hf"}:
         return source
     if source != "auto":
-        raise ValueError("model_source must be one of: auto, appfl, timm, hf")
+        raise ValueError("model.backend must be one of: auto, local, timm, hf")
 
     if spec.name in MODEL_REGISTRY:
         return "appfl"
@@ -371,7 +385,7 @@ def _resolve_source(spec: ModelSpec) -> str:
 
     raise ValueError(
         f"Unable to resolve model source for exact name '{spec.name}'. "
-        "Set model_source explicitly and provide exact backend model name/card."
+        "Set model.backend explicitly and provide exact backend model name/card."
     )
 
 
@@ -383,9 +397,9 @@ def load_model(
     """Unified model factory with explicit backend controls.
 
     Backends:
-    - ``appfl``: local models in ``appfl_sim.models``.
-    - ``timm``: exact model name via ``model_name``.
-    - ``hf``: exact model card id via ``model_name``.
+    - ``local``: local models in ``appfl_sim.models``.
+    - ``timm``: exact model name via ``model.name``.
+    - ``hf``: exact model card id via ``model.name``.
 
     Aliases are intentionally disabled to avoid implicit behavior.
     """

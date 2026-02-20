@@ -96,24 +96,20 @@ def _normalize_loader_result(result: Any, args: Any):
 
 
 def _load_from_callable(args):
-    loader_spec = str(getattr(args, "custom_dataset_loader", "")).strip()
+    loader_spec = str(getattr(args, "custom_entrypoint", "")).strip()
     if ":" not in loader_spec:
         raise ValueError(
-            "custom_dataset_loader must be in 'package.module:function' format."
+            "dataset.configs.entrypoint must be in 'package.module:function' format."
         )
 
     module_name, fn_name = loader_spec.split(":", 1)
     fn = getattr(importlib.import_module(module_name), fn_name)
 
-    kwargs_raw = getattr(
-        args,
-        "custom_dataset_kwargs",
-        "{}",
-    )
-    if isinstance(kwargs_raw, str):
-        kwargs = json.loads(kwargs_raw) if kwargs_raw.strip() else {}
-    elif isinstance(kwargs_raw, dict):
+    kwargs_raw = getattr(args, "custom_kwargs", {})
+    if isinstance(kwargs_raw, dict):
         kwargs = dict(kwargs_raw)
+    elif isinstance(kwargs_raw, str):
+        kwargs = json.loads(kwargs_raw) if kwargs_raw.strip() else {}
     else:
         kwargs = {}
 
@@ -173,9 +169,9 @@ def _load_train_test_from_directory(data_dir: Path) -> Tuple[Dataset, Dataset | 
 
 
 def _load_from_path(args):
-    custom_path = Path(str(getattr(args, "custom_dataset_path", "")).strip()).expanduser()
+    custom_path = Path(str(getattr(args, "data_dir", "")).strip()).expanduser()
     if not custom_path.exists():
-        raise FileNotFoundError(f"custom_dataset_path does not exist: {custom_path}")
+        raise FileNotFoundError(f"dataset.path does not exist: {custom_path}")
 
     if custom_path.is_file():
         if custom_path.suffix == ".npz":
@@ -229,15 +225,15 @@ def fetch_custom_dataset(args):
     """Custom dataset parser.
 
     Supports two modes:
-    - `custom_dataset_loader=package.module:function` callable contract.
-    - `custom_dataset_path=/path/to/data_or_artifact` local artifact contract.
+    - `dataset.configs.entrypoint=package.module:function` callable contract.
+    - `dataset.path=/path/to/data_or_artifact` local artifact contract.
     """
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
-    tag = make_load_tag(str(getattr(args, "dataset", "custom")), benchmark="CUSTOM")
+    tag = make_load_tag(str(getattr(args, "dataset_name", "custom")), benchmark="CUSTOM")
 
-    loader_spec = str(getattr(args, "custom_dataset_loader", "")).strip()
-    dataset_path = str(getattr(args, "custom_dataset_path", "")).strip()
+    loader_spec = str(getattr(args, "custom_entrypoint", "")).strip()
+    dataset_path = str(getattr(args, "data_dir", "")).strip()
 
     if loader_spec:
         active_logger.info("[%s] loading via custom callable.", tag)
@@ -251,5 +247,5 @@ def fetch_custom_dataset(args):
         return out
 
     raise ValueError(
-        "For dataset_loader=custom, set either custom_dataset_loader or custom_dataset_path."
+        "For dataset.backend=custom, set either dataset.configs.entrypoint or dataset.path."
     )

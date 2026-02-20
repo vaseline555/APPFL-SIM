@@ -7,10 +7,11 @@ import torch
 from omegaconf import DictConfig
 from torch.utils.data import ConcatDataset, random_split
 from appfl_sim.logger import ServerAgentFileLogger
+from appfl_sim.misc.config_utils import _cfg_get, _cfg_set
 
 
 def _parse_holdout_dataset_ratio(config: DictConfig) -> Optional[List[float]]:
-    raw = config.get("holdout_dataset_ratio", None)
+    raw = _cfg_get(config, "eval.configs.dataset_ratio", None)
     if raw is None:
         return None
     if isinstance(raw, str):
@@ -21,28 +22,28 @@ def _parse_holdout_dataset_ratio(config: DictConfig) -> Optional[List[float]]:
             parsed = ast.literal_eval(text)
         except Exception as exc:
             raise ValueError(
-                "holdout_dataset_ratio must be a list-like string, e.g. '[80,20]' or '[0.8,0.1,0.1]'"
+                "eval.configs.dataset_ratio must be a list-like string, e.g. '[80,20]' or '[0.8,0.1,0.1]'"
             ) from exc
     else:
         parsed = raw
 
     if isinstance(parsed, (int, float)):
-        raise ValueError("holdout_dataset_ratio must contain 1, 2, or 3 values.")
+        raise ValueError("eval.configs.dataset_ratio must contain 1, 2, or 3 values.")
     ratios = [float(x) for x in parsed]
     if len(ratios) not in {1, 2, 3}:
-        raise ValueError("holdout_dataset_ratio must have length 1, 2, or 3.")
+        raise ValueError("eval.configs.dataset_ratio must have length 1, 2, or 3.")
     if any(x <= 0 for x in ratios):
-        raise ValueError("holdout_dataset_ratio values must be positive.")
+        raise ValueError("eval.configs.dataset_ratio values must be positive.")
     total = float(sum(ratios))
     if np.isclose(total, 100.0, atol=1e-6):
         ratios = [x / 100.0 for x in ratios]
     elif not np.isclose(total, 1.0, atol=1e-6):
         raise ValueError(
-            "holdout_dataset_ratio must sum to 1.0 or 100.0, e.g. [0.8,0.2] or [80,20]."
+            "eval.configs.dataset_ratio must sum to 1.0 or 100.0, e.g. [0.8,0.2] or [80,20]."
         )
     if len(ratios) == 1 and not np.isclose(ratios[0], 1.0, atol=1e-6):
         raise ValueError(
-            "holdout_dataset_ratio with a single value only accepts [1.0] or [100]."
+            "eval.configs.dataset_ratio with a single value only accepts [1.0] or [100]."
         )
     return ratios
 
@@ -83,17 +84,17 @@ def _apply_holdout_dataset_ratio(
         return client_datasets
     train_only = len(ratios) == 1
     if train_only:
-        config.do_pre_validation = False
-        config.do_validation = False
-        config.enable_global_eval = False
-        config.enable_federated_eval = False
+        _cfg_set(config, "eval.do_pre_evaluation", False)
+        _cfg_set(config, "eval.do_post_evaluation", False)
+        _cfg_set(config, "eval.enable_global_eval", False)
+        _cfg_set(config, "eval.enable_federated_eval", False)
         if logger is not None:
             logger.info(
-                "holdout_dataset_ratio=[1.0|100] detected: disabling validation/test "
+                "eval.configs.dataset_ratio=[1.0|100] detected: disabling validation/test "
                 "and global/federated evaluation (training metrics only)."
             )
 
-    seed = int(config.get("seed", 0))
+    seed = int(_cfg_get(config, "experiment.seed", 0))
     out = []
     for cid, entry in enumerate(client_datasets):
         train_ds, val_ds, test_ds = _normalize_client_tuple(entry)
@@ -145,19 +146,19 @@ def _validate_loader_output(client_datasets, runtime_cfg: Dict) -> None:
 
 def _build_client_groups(config: DictConfig, num_clients: int) -> Tuple[List[int], List[int]]:
     all_clients = list(range(int(num_clients)))
-    scheme = str(config.get("federated_eval_scheme", "holdout_dataset")).strip().lower()
-    if scheme != "holdout_client":
+    scheme = str(_cfg_get(config, "eval.configs.scheme", "dataset")).strip().lower()
+    if scheme != "client":
         return all_clients, []
 
-    holdout_num = int(config.get("holdout_client_counts", 0))
-    holdout_ratio = float(config.get("holdout_client_ratio", 0.0))
+    holdout_num = int(_cfg_get(config, "eval.configs.client_counts", 0))
+    holdout_ratio = float(_cfg_get(config, "eval.configs.client_ratio", 0.0))
     if holdout_num <= 0 and holdout_ratio > 0.0:
         holdout_num = max(1, int(round(num_clients * holdout_ratio)))
     holdout_num = max(0, min(holdout_num, max(0, num_clients - 1)))
     if holdout_num == 0:
         return all_clients, []
 
-    rng = random.Random(int(config.seed) + 2026)
+    rng = random.Random(int(_cfg_get(config, "experiment.seed", 42)) + 2026)
     shuffled = all_clients[:]
     rng.shuffle(shuffled)
     holdout = sorted(shuffled[:holdout_num])
@@ -183,9 +184,9 @@ def _sample_eval_clients(
     if total <= 1:
         return ids
 
-    ratio = float(config.get("federated_eval_client_ratio", 1.0))
+    ratio = float(_cfg_get(config, "eval.configs.client_ratio", 1.0))
     ratio = min(1.0, max(0.0, ratio))
-    seed = int(config.seed)
+    seed = int(_cfg_get(config, "experiment.seed", 42))
 
     target = int(round(total * ratio))
     if ratio > 0.0 and target <= 0:

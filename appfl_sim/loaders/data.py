@@ -58,15 +58,15 @@ def load_dataset(args: Any):
     Return contract:
       split_map, client_datasets, server_dataset, args
 
-    `dataset_loader` modes:
+    `dataset.backend` modes:
     - `auto`: infer parser by dataset name/library.
-    - `custom`: local path or callable parser (`custom_dataset_path` / `custom_dataset_loader`).
-    - `external`: external source parser (`hf` or `timm`).
+    - `custom`: local path or callable parser (`dataset.path` / `dataset.configs.entrypoint`).
+    - `external`: external source parser (`dataset.configs.source` in `hf` or `timm`).
     - built-ins: `torchvision`, `torchtext`, `torchaudio`, `medmnist`, `flamby`, `leaf`, `tff`.
     """
     args = to_namespace(args)
-    mode = str(getattr(args, "dataset_loader", "auto")).strip().lower()
-    dataset_name = str(args.dataset)
+    mode = str(getattr(args, "dataset_backend", "torchvision")).strip().lower()
+    dataset_name = str(args.dataset_name)
     dataset_upper = dataset_name.upper()
     dataset_lower = dataset_name.lower()
 
