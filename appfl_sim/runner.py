@@ -601,9 +601,19 @@ def _broadcast_model_state_inplace(model, *, src: int = 0) -> None:
     import torch.distributed as dist
 
     state = model.state_dict()
+    backend = str(dist.get_backend()).strip().lower()
     for key in sorted(state.keys()):
         tensor = state[key]
         if not torch.is_tensor(tensor):
+            continue
+        if backend == "nccl" and tensor.device.type == "cpu":
+            # NCCL does not support CPU tensors. Broadcast via CUDA staging buffer.
+            device = torch.device("cuda", torch.cuda.current_device())
+            with torch.no_grad():
+                staged = tensor.detach().to(device=device, non_blocking=True)
+                dist.broadcast(staged, src=src)
+                tensor.copy_(staged.to(device="cpu", non_blocking=False))
+            del staged
             continue
         dist.broadcast(tensor, src=src)
 
