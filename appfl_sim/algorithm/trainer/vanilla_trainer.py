@@ -313,6 +313,12 @@ class VanillaTrainer(BaseTrainer):
         """
         if "round" in kwargs:
             self.round = kwargs["round"]
+        override_local_steps = kwargs.get("local_steps", None)
+        if override_local_steps is not None:
+            try:
+                override_local_steps = max(1, int(override_local_steps))
+            except Exception:
+                override_local_steps = None
         if hasattr(self.logger, "set_round_label"):
             self.logger.set_round_label(f"Round {int(self.round):04d}")
         self.val_results = {"round": self.round + 1}
@@ -435,6 +441,9 @@ class VanillaTrainer(BaseTrainer):
         self.logger.set_title(title)
 
         if do_pre_validation:
+            pre_train_stats = self._evaluate_train_metrics(offload_after=False)
+            self.val_results["pre_train_loss"] = float(pre_train_stats["loss"])
+            self.val_results["pre_train_accuracy"] = float(pre_train_stats["accuracy"])
             val_stats = self._validate_metrics(split="val") if has_val_split else None
             test_stats = (
                 self._validate_metrics(split="test") if has_test_split else None
@@ -526,7 +535,11 @@ class VanillaTrainer(BaseTrainer):
             )
 
         if self.train_configs.mode == "epoch":
-            for epoch in range(self.train_configs.num_local_epochs):
+            effective_local_epochs = int(self.train_configs.num_local_epochs)
+            if override_local_steps is not None:
+                effective_local_epochs = int(override_local_steps)
+            self.val_results["current_local_steps"] = effective_local_epochs
+            for epoch in range(effective_local_epochs):
                 start_time = time.time()
                 target_true, target_pred = [], []
                 epoch_examples = 0
@@ -638,7 +651,10 @@ class VanillaTrainer(BaseTrainer):
                     )
                 )
         else:
-            self.val_results["current_local_steps"] = self.train_configs.num_local_steps
+            effective_local_steps = int(self.train_configs.num_local_steps)
+            if override_local_steps is not None:
+                effective_local_steps = int(override_local_steps)
+            self.val_results["current_local_steps"] = effective_local_steps
             start_time = time.time()
             target_true, target_pred = [], []
             step_examples = 0
@@ -673,11 +689,11 @@ class VanillaTrainer(BaseTrainer):
                             step_correct += correct
                             total_correct += correct
                         step_count += 1
-                        if step_count >= self.train_configs.num_local_steps:
+                        if step_count >= effective_local_steps:
                             break
             else:
                 data_iter = iter(self.train_dataloader)
-                for _ in range(self.train_configs.num_local_steps):
+                for _ in range(effective_local_steps):
                     try:
                         data, target = next(data_iter)
                     except:  # noqa E722
@@ -920,6 +936,12 @@ class VanillaTrainer(BaseTrainer):
                 self.val_results.get("pre_val_metrics", {}),
                 prefix="pre_val",
             )
+        if (
+            "pre_train_loss" in self.val_results
+            and "pre_train_accuracy" in self.val_results
+        ):
+            result["pre_train_loss"] = float(self.val_results["pre_train_loss"])
+            result["pre_train_accuracy"] = float(self.val_results["pre_train_accuracy"])
         if "pre_test_loss" in self.val_results and "pre_test_accuracy" in self.val_results:
             result["pre_test_loss"] = float(self.val_results["pre_test_loss"])
             result["pre_test_accuracy"] = float(self.val_results["pre_test_accuracy"])
@@ -966,8 +988,10 @@ class VanillaTrainer(BaseTrainer):
                     self.val_results.get("test_metrics", {}),
                     prefix="post_test",
                 )
-        if "post_val_loss" in result:
-            result["local_gen_error"] = float(result["post_val_loss"] - result["loss"])
+        if "pre_val_loss" in result and "pre_train_loss" in result:
+            result["local_gen_error"] = float(
+                result["pre_val_loss"] - result["pre_train_loss"]
+            )
         return result
 
     def get_parameters(self) -> Dict:
@@ -1039,12 +1063,26 @@ class VanillaTrainer(BaseTrainer):
         stats = self._validate_metrics(split="val", offload_after=False)
         return float(stats["loss"]), float(stats["accuracy"])
 
+    def _evaluate_train_metrics(self, offload_after: bool = False) -> Dict[str, Any]:
+        return self._evaluate_metrics_on_loader(
+            self.train_dataloader, offload_after=offload_after
+        )
+
     def _validate_metrics(self, split: str = "val", offload_after: bool = False) -> Dict[str, Any]:
         chosen = self._resolve_eval_split(split=split)
         dataloader = self.val_dataloader if chosen == "val" else self.test_dataloader
         if dataloader is None:
             fallback = self.test_dataloader if chosen == "val" else self.val_dataloader
             dataloader = fallback
+        return self._evaluate_metrics_on_loader(
+            dataloader, offload_after=offload_after
+        )
+
+    def _evaluate_metrics_on_loader(
+        self,
+        dataloader: Optional[DataLoader],
+        offload_after: bool = False,
+    ) -> Dict[str, Any]:
         if dataloader is None:
             return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
         device = self.device

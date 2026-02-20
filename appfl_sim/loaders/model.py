@@ -25,6 +25,7 @@ class ModelSpec:
     hf_local_files_only: bool
     hf_trust_remote_code: bool
     hf_gradient_checkpointing: bool
+    hf_cache_dir: str
     hf_kwargs: Dict[str, Any]
     hf_config_overrides: Dict[str, Any]
 
@@ -128,6 +129,7 @@ def _parse_model_spec(
             f"model.backend={source} requires model.name to be set to the exact backend name/card."
         )
     model_configs = _as_dict(_path_get(cfg, "model.configs", {}))
+    model_path = str(_path_get(cfg, "model.path", "./models"))
     in_channels = int(model_configs.get("in_channels", context.get("in_channels", 1)))
     resolved_num_classes = int(
         model_configs.get("num_classes", context.get("num_classes", num_classes))
@@ -148,6 +150,7 @@ def _parse_model_spec(
         hf_local_files_only=_safe_bool(model_configs.get("hf_local_files_only", False), False),
         hf_trust_remote_code=_safe_bool(model_configs.get("hf_trust_remote_code", False), False),
         hf_gradient_checkpointing=_safe_bool(model_configs.get("hf_gradient_checkpointing", False), False),
+        hf_cache_dir=str(model_configs.get("hf_cache_dir", model_path)),
         hf_kwargs=_as_dict(model_configs.get("hf_kwargs", {})),
         hf_config_overrides=_as_dict(model_configs.get("hf_config_overrides", {})),
     )
@@ -286,14 +289,17 @@ def _build_hf_scratch_config(model_id: str, spec: ModelSpec, task: str):
     try:
         return AutoConfig.from_pretrained(
             model_id,
+            cache_dir=str(spec.hf_cache_dir),
             local_files_only=bool(spec.hf_local_files_only),
             trust_remote_code=bool(spec.hf_trust_remote_code),
             **overrides,
         )
     except Exception as e:
         raise ValueError(
-            "pretrained=false requires accessible HF config for model_name. "
-            "Use model.configs.hf_local_files_only=false to allow download, or cache the model config first."
+            f"pretrained=false requires accessible HF config for model '{model_id}'. "
+            "Use `model.configs.hf_local_files_only=false` to allow download, "
+            "or cache it first. If this model card is not a Transformers model "
+            "(missing `config.json`), choose a Transformers-compatible model id."
         ) from e
 
 
@@ -318,6 +324,18 @@ def _load_hf_model(spec: ModelSpec):
     trust_remote_code = bool(spec.hf_trust_remote_code)
 
     common_kwargs = dict(spec.model_kwargs)
+    for reserved_key in (
+        "pretrained",
+        "hf_task",
+        "hf_local_files_only",
+        "hf_trust_remote_code",
+        "hf_gradient_checkpointing",
+        "hf_kwargs",
+        "hf_config_overrides",
+        "hf_cache_dir",
+        "timm_kwargs",
+    ):
+        common_kwargs.pop(reserved_key, None)
     common_kwargs.update(spec.hf_kwargs)
 
     if task == "sequence_classification":
@@ -338,6 +356,7 @@ def _load_hf_model(spec: ModelSpec):
         model = model_cls.from_pretrained(
             model_id,
             num_labels=int(spec.num_classes),
+            cache_dir=str(spec.hf_cache_dir),
             local_files_only=local_files_only,
             trust_remote_code=trust_remote_code,
             **common_kwargs,
