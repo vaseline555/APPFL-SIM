@@ -109,14 +109,13 @@ If you have your own dataset code, use:
 Your function should return:
 
 ```python
-split_map, client_datasets, server_dataset, args
+client_datasets, server_dataset, dataset_meta
 ```
 
 Where:
-- `split_map`: client split info (dict-like)
 - `client_datasets`: list of `(train_dataset, test_dataset)` or `(train_dataset, val_dataset, test_dataset)` for each client
 - `server_dataset`: global test/eval dataset (or `None`)
-- `args`: metadata namespace, including at least:
+- `dataset_meta`: metadata namespace, including at least:
   - `num_clients`
   - `num_classes`
   - `input_shape`

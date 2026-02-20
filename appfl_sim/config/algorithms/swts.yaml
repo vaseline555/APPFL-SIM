@@ -1,13 +1,13 @@
 experiment:
   name: alg-swts
   seed: 42
-  device: cpu
-  server_device: cpu
-  backend: gloo
+  device: cuda
+  server_device: cuda
+  backend: nccl
   stateful: false
 dataset:
   path: ./data
-  name: MNIST
+  name: CIFAR10
   backend: auto
   download: true
 split:
@@ -20,7 +20,7 @@ model:
   name: LeNet
   backend: local
 train:
-  num_rounds: 500
+  num_rounds: 200
   num_clients: 10
   num_sampled_clients: 10
   update_base: epoch
@@ -38,23 +38,27 @@ algorithm:
   aggregator_kwargs:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
-    action_space: [1, 2, 3, 4, 5]
+    action_space: [1, 5, 10]
     window_size: 10
     likelihood_variance: 1.0
-    prior_variance: 1.0
+    prior_variance: 0.1
     seed: 42
   trainer_kwargs: {}
 optimization:
   optimizer: SGD
   criterion: CrossEntropyLoss
   lr: 0.01
+  lr_decay:
+    enable: true
+    type: exponential
+    gamma: 0.995
   clip_grad_norm: 0.0
   accum_grad: 0
   configs:
     weight_decay: 0.0
     momentum: 0.0
 eval:
-  every: 1
+  every: 10
   metrics:
   - acc1
   do_pre_evaluation: true
@@ -72,6 +76,8 @@ eval:
     client_counts: 0
 logging:
   path: ./logs
-  name: genfl_adaptive_local_steps
+  name: genfl_swts
   backend: file
-  type: server_only
+  type: both
+  configs:
+    track_gen_rewards: true

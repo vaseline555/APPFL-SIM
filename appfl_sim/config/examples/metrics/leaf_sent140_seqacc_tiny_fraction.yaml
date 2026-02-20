@@ -15,7 +15,7 @@ dataset:
     min_samples_per_client: 2
     terms_accepted: true
 split:
-  type: iid
+  type: pre
   infer_num_clients: true
   configs:
     unbalanced_keep_min: 0.5

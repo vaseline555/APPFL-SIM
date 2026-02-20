@@ -1,5 +1,4 @@
 from __future__ import annotations
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -143,6 +142,9 @@ def _log_round(
     federated_eval_metrics: Optional[Dict[str, float]] = None,
     federated_eval_in_metrics: Optional[Dict[str, float]] = None,
     federated_eval_out_metrics: Optional[Dict[str, float]] = None,
+    track_gen_rewards: bool = False,
+    round_gen_reward: Optional[float] = None,
+    cumulative_gen_reward: Optional[float] = None,
     logger: ServerAgentFileLogger | None = None,
     tracker=None,
 ):
@@ -212,13 +214,8 @@ def _log_round(
             return True
 
         _append_train_field("loss", ["loss"])
-        metric_hits = 0
         for metric_name in eval_metric_order:
-            if _append_train_field(metric_name, [f"metric_{metric_name}", metric_name]):
-                metric_hits += 1
-        if metric_hits == 0:
-            # Backward-compatible fallback when only legacy accuracy is present.
-            _append_train_field("accuracy", ["accuracy"])
+            _append_train_field(metric_name, [f"metric_{metric_name}", metric_name])
 
         if train_parts:
             round_metrics["training"] = training_metrics
@@ -241,15 +238,11 @@ def _log_round(
             return True
 
         _append_field("loss", [f"{prefix}loss"])
-        metric_hits = 0
         for metric_name in eval_metric_order:
-            if _append_field(
+            _append_field(
                 metric_name,
                 [f"{prefix}metric_{metric_name}", f"{prefix}{metric_name}"],
-            ):
-                metric_hits += 1
-        if metric_hits == 0:
-            _append_field("accuracy", [f"{prefix}accuracy"])
+            )
 
         if parts:
             round_metrics[json_key] = section
@@ -291,13 +284,8 @@ def _log_round(
             return True
 
         _append_eval_field("loss", ["loss"])
-        metric_hits = 0
         for metric_name in eval_metric_order:
-            if _append_eval_field(metric_name, [f"metric_{metric_name}", metric_name]):
-                metric_hits += 1
-        if metric_hits == 0:
-            # Backward-compatible fallback when no configured metrics are present.
-            _append_eval_field("accuracy", ["accuracy"])
+            _append_eval_field(metric_name, [f"metric_{metric_name}", metric_name])
 
         if parts:
             lines.append(_entity_line(f"{title}:", _join_metric_parts(parts)))
@@ -375,6 +363,30 @@ def _log_round(
             )
         )
 
+    def _append_gen_reward() -> None:
+        if not track_gen_rewards:
+            return
+        section: Dict[str, float | None] = {}
+        round_text = "n/a"
+        cum_text = "n/a"
+        if isinstance(round_gen_reward, (int, float)):
+            section["round"] = float(round_gen_reward)
+            round_text = f"{float(round_gen_reward):.4f}"
+        else:
+            section["round"] = None
+        if isinstance(cumulative_gen_reward, (int, float)):
+            section["cumulative"] = float(cumulative_gen_reward)
+            cum_text = f"{float(cumulative_gen_reward):.4f}"
+        else:
+            section["cumulative"] = None
+        round_metrics["gen_reward"] = section
+        lines.append(
+            _entity_line(
+                "Gen. Reward:",
+                _join_metric_parts([f"round: {round_text}", f"cumulative: {cum_text}"]),
+            )
+        )
+
 
     do_pre_val = _cfg_bool(config, "eval.do_pre_evaluation", True)
     do_post_val = _cfg_bool(config, "eval.do_post_evaluation", True)
@@ -387,6 +399,7 @@ def _log_round(
     if do_post_val:
         _append_local_eval_block("Local Post-test.", "local_post_test", "post_test_")
     _append_local_gen_error()
+    _append_gen_reward()
 
     _append_eval_block(
         "Global Eval.", "global_eval", global_eval_metrics, with_client_std=False
@@ -426,7 +439,7 @@ def _new_server_logger(config: DictConfig, mode: str, run_ts: str) -> ServerAgen
     file_name = "server.log"
     if "-rank" in mode_text:
         suffix = mode_text.split("-rank", 1)[1].strip("-_ ")
-        if suffix.isdigit():
+        if suffix.isdigit() and int(suffix) != 0:
             file_name = f"server-rank{suffix}.log"
     return ServerAgentFileLogger(
         file_dir=str(run_dir),
@@ -434,11 +447,21 @@ def _new_server_logger(config: DictConfig, mode: str, run_ts: str) -> ServerAgen
         experiment_id=str(_cfg_get(config, "experiment.name", "appfl-sim")),
     )
 
+def _resolve_run_log_dir(config: DictConfig, run_id: str) -> str:
+    return str(
+        Path(str(_cfg_get(config, "logging.path", "./logs")))
+        / str(_cfg_get(config, "experiment.name", "appfl-sim"))
+        / str(run_id)
+    )
+
 def _resolve_run_timestamp(config: DictConfig, preset: Optional[str] = None) -> str:
-    del config
+    if config is None:
+        seed_text = "0"
+    else:
+        seed_text = str(_cfg_get(config, "experiment.seed", 0))
     run_ts = str(preset if preset is not None else "").strip()
     if run_ts == "":
-        run_ts = datetime.now().strftime("%Y%m%d%H%M%S")
+        run_ts = seed_text
     return run_ts
 
 def _start_summary_lines(

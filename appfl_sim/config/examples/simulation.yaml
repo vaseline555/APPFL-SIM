@@ -70,6 +70,13 @@ optimization:
   optimizer: SGD
   criterion: CrossEntropyLoss
   lr: 0.01
+  lr_decay:
+    enable: false
+    type: none
+    gamma: 0.99
+    t_max: 0
+    eta_min: 0.0
+    min_lr: 0.0
   clip_grad_norm: 0.0
   accum_grad: 0
   configs:
@@ -96,6 +103,7 @@ logging:
   backend: file
   type: auto
   configs:
+    track_gen_rewards: false
     wandb_mode: online
     wandb_entity: ""
 

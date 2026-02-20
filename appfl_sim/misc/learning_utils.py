@@ -19,6 +19,43 @@ def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
         return round_idx == int(num_rounds)
     return round_idx % every_i == 0 or round_idx == int(num_rounds)
 
+def _weighted_global_gen_error(
+    stats: dict,
+    sample_sizes: dict,
+) -> float | None:
+    if not stats:
+        return None
+    total = 0.0
+    accum = 0.0
+    for cid, client_stats in stats.items():
+        if not isinstance(client_stats, dict):
+            continue
+        if "local_gen_error" not in client_stats:
+            continue
+        value = client_stats.get("local_gen_error")
+        if not isinstance(value, (int, float)):
+            continue
+        weight = float(sample_sizes.get(cid, 0))
+        if weight <= 0.0:
+            weight = 1.0
+        accum += weight * float(value)
+        total += weight
+    if total <= 0.0:
+        return None
+    return float(accum / total)
+
+def _maybe_observe_round_gen_error(server, global_gen_error: float, round_idx: int):
+    scheduler = getattr(server, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "observe_global_gen_error"):
+        return None
+    try:
+        return scheduler.observe_global_gen_error(
+            global_gen_error=float(global_gen_error),
+            round_idx=int(round_idx),
+        )
+    except Exception:
+        return None
+
 def _resolve_model_output(output):
     if torch.is_tensor(output):
         return output

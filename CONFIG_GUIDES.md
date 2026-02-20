@@ -20,13 +20,15 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `name` (default: `MNIST`): dataset name. (prev. `dataset`)
 - `backend` (default: `torchvision`): loader mode (`torchvision`, `torchtext`, `torchaudio`, `medmnist`, `leaf`, `flamby`, `tff`, `external`, `custom`). (prev. `dataset_loader`)
 - `download` (default: `true`): download datasets if missing.
+- `load_dataset` return contract: `(client_datasets, server_dataset, dataset_meta)`.
 - `configs` (default: `{}`): dataset-agnostic keyword arguments.
   - `raw_data_fraction` (default: `1.0`): raw-data fraction before split for LEAF benchmark.
   - `min_samples_per_client` (default: `2`): minimum samples per client for LEAF benchmark.
   - `terms_accepted` (default: `true`): acknowledge FLamby data terms.
 
 ## Split Simulation (`split`)
-- `type` (default: `iid`): split policy (`iid`, `unbalanced`, `dirichlet`, `pathological`). (prev. `split_type`)
+- `type` (default: `iid`): split policy (`iid`, `unbalanced`, `dirichlet`, `pathological`, `pre`). (prev. `split_type`)
+  - `pre`: use benchmark-defined client partition (required for `dataset.backend` in `leaf`, `flamby`, `tff`).
 - `infer_num_clients` (default: `false`): infer client count from fixed-pool datasets (`leaf`, `flamby`, `tff`).
 - `configs`: split type-agnostic keyword arguments.
   - `unbalanced_keep_min` (default: `0.5`): minimum keep ratio (when `split.type=unbalanced`).
@@ -36,7 +38,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## Model (`model`)
 - `path` (default: `./models`): model root path.
 - `name` (default: `SimpleCNN`): model name. (prev. `model`)
-- `backend` (default: `auto`): model source (`auto`, `local`, `timm`, `hf`).
+- `backend` (default: `auto`): model source (`auto`, `local`, `timm`, `hf`, `torchvision`, `torchtext`, `torchaudio`).
 - `configs` (default: `{}`): backend-agnostic model keyword arguments.
   - `in_channels` (default: inferred from input shape): explicit input channels override.
   - `hidden_size` (default: `64`): hidden dimension for models.
@@ -81,6 +83,13 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `optimizer` (default: `SGD`): optimizer from `torch.optim`.
 - `criterion` (default: `CrossEntropyLoss`): loss from `torch.nn`.
 - `lr` (default: `0.01`): learning rate for local updates.
+- `lr_decay` (default: disabled): local LR scheduler applied during each client update.
+  - `enable` (default: `false`): enable local LR decay.
+  - `type` (default: `none`): scheduler type (`none`, `exponential`, `cosine`).
+  - `gamma` (default: `0.99`): exponential decay factor when `type=exponential`.
+  - `t_max` (default: `0`): cosine cycle length when `type=cosine`; `<=0` auto-uses local update length.
+  - `eta_min` (default: `0.0`): cosine minimum LR when `type=cosine`.
+  - `min_lr` (default: `0.0`): floor clamp applied after scheduler step.
 - `clip_grad_norm` (default: `0.0`): enable gradient norm clipping when `>0`.
 - `accum_grad` (default: `0`): accumulate gradient when `>0`.
 - `configs` (default: `{}`): optimizer-agnostic keyword arguments.
@@ -105,13 +114,14 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 
 ## Logging (`logging`)
 - `path` (default: `./logs`): output log path.
-- `name` (default: `appfl-sim`): project/log directory name (`tensorboard`) or project ID (`wandb`).
+- `name` (default: `appfl-sim`): ignored at runtime; logging project/name is forced to `experiment.name`.
 - `backend` (default: `file`): logging scheme (`none`, `file`, `console`, `tensorboard`, `wandb`).
 - `type` (default: `auto`): logging policy (`auto`, `both`, `server_only`).  
   (`auto`: when `num_sampled_clients < num_clients`, per-cleint logging is forced off for performance, i.e., server-only logging)
 - `configs` (default: `{}`): backend-agnostic keyword arguments.
   - `wandb_mode` (default: `online`): wandb mode (`online` or `offline`).
   - `wandb_entity` (default: `""`): wandb entity/team.
+  - `track_gen_rewards` (default: `false`): log per-round and cumulative generalization reward (`-(g_t - g_{t-1})`) computed at server from round global generalization error.
 
 ## Privacy (`privacy`)
 - `use_dp` (default: `false`): toggles differential privacy related runtime behavior.

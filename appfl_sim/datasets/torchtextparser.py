@@ -148,18 +148,19 @@ def fetch_torchtext_dataset(args):
     raw_test = TensorBackedDataset(te_ids, te_labels, name=f"[{args.dataset_name}] TEST")
     active_logger.info("[%s] building federated client splits.", tag)
 
-    split_map, client_datasets = clientize_raw_dataset(raw_train, args)
+    client_datasets = clientize_raw_dataset(raw_train, args)
     args.need_embedding = True
-    split_map, client_datasets, server_dataset, args = finalize_dataset_outputs(
-        split_map=split_map,
+    client_datasets, server_dataset, dataset_meta = finalize_dataset_outputs(
         client_datasets=client_datasets,
         server_dataset=raw_test,
-        args=args,
+        dataset_meta=args,
         raw_train=raw_train,
     )
-    args.num_classes = int(infer_num_classes(raw_train))
-    args.input_shape = tuple(tr_ids.shape[1:])
-    args.seq_len = int(tr_ids.shape[1]) if tr_ids.ndim >= 2 else int(args.seq_len)
-    args.need_embedding = True
-    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
-    return split_map, client_datasets, server_dataset, args
+    dataset_meta.num_classes = int(infer_num_classes(raw_train))
+    dataset_meta.input_shape = tuple(tr_ids.shape[1:])
+    dataset_meta.seq_len = int(tr_ids.shape[1]) if tr_ids.ndim >= 2 else int(dataset_meta.seq_len)
+    dataset_meta.need_embedding = True
+    active_logger.info(
+        "[%s] finished loading (%d clients).", tag, int(dataset_meta.num_clients)
+    )
+    return client_datasets, server_dataset, dataset_meta

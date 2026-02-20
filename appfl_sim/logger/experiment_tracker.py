@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
@@ -42,10 +41,10 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
         cfg = dict(config)
 
     backend = str(_cfg_get(cfg, "logging.backend", "file")).lower()
-    project_name = str(_cfg_get(cfg, "logging.name", "appfl-sim"))
-    exp_name = str(_cfg_get(cfg, "experiment.name", project_name))
-    experiment_name = str(_cfg_get(cfg, "experiment.name", project_name))
-    run_timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    experiment_name = str(_cfg_get(cfg, "experiment.name", "appfl-sim"))
+    project_name = experiment_name
+    exp_name = experiment_name
+    run_timestamp = str(_cfg_get(cfg, "experiment.seed", 0))
     log_dir = str(_cfg_get(cfg, "logging.path", "./logs"))
     wandb_entity = str(_cfg_get(cfg, "logging.configs.wandb_entity", ""))
     wandb_mode = str(_cfg_get(cfg, "logging.configs.wandb_mode", "online")).lower()

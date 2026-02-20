@@ -535,6 +535,11 @@ def fetch_leaf(args):
     """LEAF parser adapted from AAggFF processing flow with compact implementation."""
     args = to_namespace(args)
     leaf_logger = _resolve_leaf_logger(args)
+    split_type = str(getattr(args, "split_type", "pre")).strip().lower()
+    if split_type != "pre":
+        raise ValueError(
+            "For dataset.backend=leaf, split.type must be exactly `pre`."
+        )
     dataset_key = str(args.dataset_name).strip().lower()
     leaf_logger.info("[LEAF-%s] load processed dataset.", dataset_key.upper())
     dataset_root = _prepare_leaf_data(args, dataset_key)
@@ -571,7 +576,6 @@ def fetch_leaf(args):
         num_embeddings=num_embeddings,
     )
 
-    split_map: Dict[int, int] = {}
     client_datasets = []
     for cid, user in enumerate(users):
         tr_records = train_obj["user_data"].get(user, {"x": [], "y": []})
@@ -596,7 +600,6 @@ def fetch_leaf(args):
             num_embeddings=num_embeddings,
             image_root=image_root,
         )
-        split_map[cid] = len(tr_ds)
         client_datasets.append((tr_ds, te_ds))
 
     args.num_clients = len(client_datasets)
@@ -630,7 +633,11 @@ def fetch_leaf(args):
         dataset_key.upper(),
         int(args.num_clients),
     )
-    return package_dataset_outputs(split_map, client_datasets, None, args)
+    return package_dataset_outputs(
+        client_datasets=client_datasets,
+        server_dataset=None,
+        dataset_meta=args,
+    )
 
 
 # backward alias

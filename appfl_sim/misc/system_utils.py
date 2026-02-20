@@ -197,8 +197,7 @@ def apply_model_device(model, config: dict, xy_device: str):
     raise ValueError(f"Unknown device_type: {device_type}")
 
 
-def clone_state_dict_optimized(state_dict, include_buffers: bool = True) -> Dict[str, torch.Tensor]:
-    del include_buffers  # Included for compatibility with previous signature.
+def clone_state_dict_optimized(state_dict) -> Dict[str, torch.Tensor]:
     result: Dict[str, torch.Tensor] = {}
     with torch.no_grad():
         for name, tensor in state_dict.items():

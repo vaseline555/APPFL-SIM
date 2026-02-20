@@ -182,16 +182,22 @@ def _to_audio_tensor(value: Any, num_frames: int) -> torch.Tensor:
     return torch.from_numpy(arr).unsqueeze(0)
 
 
-def _rows_to_tensor_dataset(rows: List[Dict[str, Any]], feature_key: str, label_key: str, args, name: str):
-    features = [row[feature_key] for row in rows]
-    labels = _normalize_labels([row[label_key] for row in rows])
-
-    if len(features) == 0:
+def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: str):
+    row_count = len(rows)
+    if row_count == 0:
         return TensorBackedDataset(
             torch.zeros(0, 1, dtype=torch.float32),
             torch.zeros(0, dtype=torch.long),
             name=name,
         )
+
+    features = []
+    raw_labels = []
+    for idx in range(row_count):
+        row = rows[idx]
+        features.append(row[feature_key])
+        raw_labels.append(row[label_key])
+    labels = _normalize_labels(raw_labels)
 
     first = features[0]
     if isinstance(first, str) or (
@@ -315,42 +321,41 @@ def _fetch_hf_dataset(args, dataset_name: str):
         )
         train_hf, test_hf = split["train"], split["test"]
 
-    train_rows = [train_hf[i] for i in range(len(train_hf))]
-    test_rows = [test_hf[i] for i in range(len(test_hf))]
-    if not train_rows:
+    if len(train_hf) == 0:
         raise ValueError(f"External HF dataset '{dataset_name}' has empty training split.")
 
-    columns = list(train_rows[0].keys())
+    columns = list(getattr(train_hf, "column_names", [])) or list(train_hf[0].keys())
     label_key = _pick_label_key(columns, args)
     feature_key = _pick_feature_key(columns, label_key, args)
 
     raw_train = _rows_to_tensor_dataset(
-        train_rows,
+        train_hf,
         feature_key=feature_key,
         label_key=label_key,
         args=args,
         name=f"[HF:{dataset_name}] TRAIN",
     )
     raw_test = _rows_to_tensor_dataset(
-        test_rows,
+        test_hf,
         feature_key=feature_key,
         label_key=label_key,
         args=args,
         name=f"[HF:{dataset_name}] TEST",
     )
 
-    split_map, client_datasets = clientize_raw_dataset(raw_train, args)
+    client_datasets = clientize_raw_dataset(raw_train, args)
     active_logger.info("[%s] building federated client splits.", tag)
-    split_map, client_datasets, server_dataset, args = finalize_dataset_outputs(
-        split_map=split_map,
+    client_datasets, server_dataset, dataset_meta = finalize_dataset_outputs(
         client_datasets=client_datasets,
         server_dataset=raw_test,
-        args=args,
+        dataset_meta=args,
         raw_train=raw_train,
     )
-    args.num_classes = int(infer_num_classes(raw_train))
-    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
-    return split_map, client_datasets, server_dataset, args
+    dataset_meta.num_classes = int(infer_num_classes(raw_train))
+    active_logger.info(
+        "[%s] finished loading (%d clients).", tag, int(dataset_meta.num_clients)
+    )
+    return client_datasets, server_dataset, dataset_meta
 
 
 def _normalize_timm_dataset_name(name: str) -> str:
@@ -372,7 +377,7 @@ def _normalize_timm_dataset_name(name: str) -> str:
 
 def _fetch_timm_dataset(args, dataset_name: str):
     # Use timm dataset naming when possible, but route through torchvision parser
-    # for lightweight simulation compatibility.
+    # for lightweight simulation.
     from appfl_sim.datasets.torchvisionparser import fetch_torchvision_dataset
 
     active_logger = resolve_dataset_logger(args, logger)

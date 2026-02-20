@@ -87,17 +87,21 @@ def fetch_medmnist_dataset(args):
     raw_test = MedMNISTWrapper(test_base, name=f"[{canonical}] TEST")
     active_logger.info("[%s] building federated client splits.", tag)
 
-    split_map, client_datasets = clientize_raw_dataset(raw_train, args)
-    split_map, client_datasets, server_dataset, args = finalize_dataset_outputs(
-        split_map=split_map,
+    client_datasets = clientize_raw_dataset(raw_train, args)
+    client_datasets, server_dataset, dataset_meta = finalize_dataset_outputs(
         client_datasets=client_datasets,
         server_dataset=raw_test,
-        args=args,
+        dataset_meta=args,
         raw_train=raw_train,
     )
-    args.num_classes = max(int(args.num_classes), int(info.get("n_classes", infer_num_classes(raw_train))))
-    args.need_embedding = False
-    args.seq_len = None
-    args.num_embeddings = None
-    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
-    return split_map, client_datasets, server_dataset, args
+    dataset_meta.num_classes = max(
+        int(dataset_meta.num_classes),
+        int(info.get("n_classes", infer_num_classes(raw_train))),
+    )
+    dataset_meta.need_embedding = False
+    dataset_meta.seq_len = None
+    dataset_meta.num_embeddings = None
+    active_logger.info(
+        "[%s] finished loading (%d clients).", tag, int(dataset_meta.num_clients)
+    )
+    return client_datasets, server_dataset, dataset_meta

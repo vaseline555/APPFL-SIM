@@ -23,8 +23,8 @@ def _default_client_train_configs() -> DictConfig:
             "weight_decay": 0.0,
             "max_grad_norm": 0.0,
             "client_logging_enabled": True,
-            "do_pre_validation": True,
-            "do_validation": True,
+            "do_pre_evaluation": True,
+            "do_post_evaluation": True,
             "eval_metrics": ["acc1"],
         }
     )

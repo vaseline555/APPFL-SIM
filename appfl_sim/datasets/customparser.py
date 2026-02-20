@@ -5,7 +5,7 @@ import inspect
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Tuple
 
 import numpy as np
 import torch
@@ -67,31 +67,40 @@ def _to_tensor_backed_dataset(payload: Any, name: str) -> Dataset:
 
 
 def _normalize_loader_result(result: Any, args: Any):
-    if isinstance(result, tuple) and len(result) == 4:
-        split_map, client_datasets, server_dataset, out_args = result
-        out_args = set_common_metadata(to_namespace(out_args), client_datasets)
-        return package_dataset_outputs(split_map, client_datasets, server_dataset, out_args)
-
     if isinstance(result, tuple) and len(result) == 3:
-        split_map, client_datasets, out_args = result
-        out_args = set_common_metadata(to_namespace(out_args), client_datasets)
-        return package_dataset_outputs(split_map, client_datasets, None, out_args)
+        client_datasets, server_dataset, dataset_meta = result
+        dataset_meta = set_common_metadata(to_namespace(dataset_meta), client_datasets)
+        return package_dataset_outputs(
+            client_datasets=client_datasets,
+            server_dataset=server_dataset,
+            dataset_meta=dataset_meta,
+        )
+
+    if isinstance(result, tuple) and len(result) == 2:
+        client_datasets, dataset_meta = result
+        dataset_meta = set_common_metadata(to_namespace(dataset_meta), client_datasets)
+        return package_dataset_outputs(
+            client_datasets=client_datasets,
+            server_dataset=None,
+            dataset_meta=dataset_meta,
+        )
 
     if isinstance(result, dict):
-        if {"split_map", "client_datasets"}.issubset(result.keys()):
-            out_args = set_common_metadata(
-                to_namespace(result.get("args", args)), result["client_datasets"]
+        if "client_datasets" in result:
+            dataset_meta = set_common_metadata(
+                to_namespace(result.get("dataset_meta", args)),
+                result["client_datasets"],
             )
             return package_dataset_outputs(
-                result["split_map"],
-                result["client_datasets"],
-                result.get("server_dataset", None),
-                out_args,
+                client_datasets=result["client_datasets"],
+                server_dataset=result.get("server_dataset", None),
+                dataset_meta=dataset_meta,
             )
 
     raise ValueError(
-        "Custom parser expects (split_map, client_datasets, server_dataset, args), "
-        "legacy (split_map, client_datasets, args), or dict with split_map/client_datasets."
+        "Custom parser expects (client_datasets, server_dataset, dataset_meta), "
+        "(client_datasets, dataset_meta), or dict with client_datasets "
+        "(optional: server_dataset, dataset_meta)."
     )
 
 
@@ -181,14 +190,13 @@ def _load_from_path(args):
             payload = torch.load(custom_path, map_location="cpu")
         try:
             return _normalize_loader_result(payload, args)
-        except Exception:
+        except (TypeError, ValueError, KeyError):
             train_ds = _to_tensor_backed_dataset(payload, "[CUSTOM] TRAIN")
-            split_map, client_datasets = clientize_raw_dataset(train_ds, args)
+            client_datasets = clientize_raw_dataset(train_ds, args)
             return finalize_dataset_outputs(
-                split_map=split_map,
                 client_datasets=client_datasets,
                 server_dataset=None,
-                args=args,
+                dataset_meta=args,
                 raw_train=train_ds,
             )
 
@@ -197,26 +205,28 @@ def _load_from_path(args):
         payload = torch.load(candidate, map_location="cpu")
         try:
             return _normalize_loader_result(payload, args)
-        except Exception:
+        except (TypeError, ValueError, KeyError):
             pass
 
     client_payload = custom_path / "client_datasets.pt"
     if client_payload.exists():
         payload = torch.load(client_payload, map_location="cpu")
-        if isinstance(payload, dict) and {"split_map", "client_datasets"}.issubset(payload.keys()):
+        if isinstance(payload, dict) and "client_datasets" in payload:
             return _normalize_loader_result(payload, args)
         if isinstance(payload, list):
-            split_map = {cid: len(pair[0]) for cid, pair in enumerate(payload)}
-            out_args = set_common_metadata(to_namespace(args), payload)
-            return package_dataset_outputs(split_map, payload, None, out_args)
+            dataset_meta = set_common_metadata(to_namespace(args), payload)
+            return package_dataset_outputs(
+                client_datasets=payload,
+                server_dataset=None,
+                dataset_meta=dataset_meta,
+            )
 
     train_ds, test_ds = _load_train_test_from_directory(custom_path)
-    split_map, client_datasets = clientize_raw_dataset(train_ds, args)
+    client_datasets = clientize_raw_dataset(train_ds, args)
     return finalize_dataset_outputs(
-        split_map=split_map,
         client_datasets=client_datasets,
         server_dataset=test_ds,
-        args=args,
+        dataset_meta=args,
         raw_train=train_ds,
     )
 

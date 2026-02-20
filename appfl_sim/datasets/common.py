@@ -259,24 +259,31 @@ def _first_nonempty_train_dataset(client_datasets):
     return None
 
 
-def package_dataset_outputs(split_map, client_datasets, server_dataset, args: SimpleNamespace):
-    return split_map, client_datasets, server_dataset, args
+def package_dataset_outputs(
+    client_datasets,
+    server_dataset,
+    dataset_meta: SimpleNamespace,
+):
+    return client_datasets, server_dataset, dataset_meta
 
 
 def finalize_dataset_outputs(
-    split_map,
     client_datasets,
     server_dataset,
-    args: Any,
+    dataset_meta: Any,
     raw_train: Dataset | None = None,
 ):
-    args_ns = to_namespace(args)
-    args_ns = set_common_metadata(
-        args_ns,
+    meta_ns = to_namespace(dataset_meta)
+    meta_ns = set_common_metadata(
+        meta_ns,
         client_datasets,
         raw_train=raw_train,
     )
-    return package_dataset_outputs(split_map, client_datasets, server_dataset, args_ns)
+    return package_dataset_outputs(
+        client_datasets=client_datasets,
+        server_dataset=server_dataset,
+        dataset_meta=meta_ns,
+    )
 
 
 def _iid_split(num_samples: int, num_clients: int, rng: np.random.Generator) -> dict[int, np.ndarray]:
@@ -380,7 +387,6 @@ def simulate_split(
     min_classes: int = 2,
     dirichlet_alpha: float = 0.3,
     unbalanced_keep_min: float = 0.5,
-    pre_split_map: dict[int, np.ndarray] | None = None,
 ) -> dict[int, np.ndarray]:
     rng = np.random.default_rng(seed)
     split_type = split_type.lower()
@@ -399,11 +405,6 @@ def simulate_split(
             min_size=2,
             rng=rng,
         )
-    if split_type == "pre":
-        if pre_split_map is None:
-            raise ValueError("split_type='pre' requires pre_split_map.")
-        return {int(k): np.asarray(v, dtype=np.int64) for k, v in pre_split_map.items()}
-
     raise ValueError(f"Unsupported split_type: {split_type}")
 
 
@@ -438,9 +439,18 @@ def split_subset_for_client(
     return train_subset, test_subset
 
 
-def clientize_raw_dataset(raw_train: Dataset, args: SimpleNamespace):
+def clientize_raw_dataset(
+    raw_train: Dataset,
+    args: SimpleNamespace,
+):
     targets = extract_targets(raw_train)
-    split_map = simulate_split(
+    split_type = str(args.split_type).strip().lower()
+    if split_type == "pre":
+        raise ValueError(
+            "split.type='pre' is only supported by predefined backends "
+            "(leaf/flamby/tff), which directly return client_datasets."
+        )
+    client_indices = simulate_split(
         labels=targets,
         num_clients=int(args.num_clients),
         split_type=str(args.split_type),
@@ -451,17 +461,17 @@ def clientize_raw_dataset(raw_train: Dataset, args: SimpleNamespace):
     )
 
     client_datasets = []
-    for cid in range(int(args.num_clients)):
+    for cid in sorted(int(k) for k in client_indices.keys()):
         train_ds, test_ds = split_subset_for_client(
             raw_train=raw_train,
-            sample_indices=split_map[cid],
+            sample_indices=client_indices[cid],
             client_id=cid,
             test_size=float(args.test_size),
             seed=int(args.seed),
         )
         client_datasets.append((train_ds, test_ds))
 
-    return split_map, client_datasets
+    return client_datasets
 
 
 def set_common_metadata(

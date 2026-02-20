@@ -149,6 +149,7 @@ Internal parser modules live under `appfl_sim/datasets/`:
 
 Fixed-pool dataset client selection knobs (`leaf` / `flamby` / `tff`):
 
+- Use `split.type=pre` (strictly required for these backends).
 - `infer_num_clients=true` (or `<prefix>_infer_num_clients=true`) to use full available client pool.
 - `client_subsample_num` / `client_subsample_ratio` (or `<prefix>_...`) for pool subsampling.
 - `client_subsample_mode=random|first|last` and `client_subsample_seed` for deterministic selection.
@@ -184,9 +185,8 @@ python -m appfl_sim.runner \
 
 Custom loader contract:
 
-- Return `(split_map, client_datasets, server_dataset, args)`, or
-- Return legacy `(split_map, client_datasets, args)`, or
-- Return dict with keys `split_map` and `client_datasets` (optional: `server_dataset`, `args`).
+- Preferred: return `client_datasets` and optional `server_dataset`/`dataset_meta` metadata via supported tuple/dict forms.
+- `load_dataset` return contract is `(client_datasets, server_dataset, dataset_meta)`.
 - Or provide local artifacts under `custom_dataset_path` (`train.pt/.npz`, optional `test.pt/.npz`).
 
 ## Model setting
@@ -235,22 +235,22 @@ Evaluation control:
 
 - `enable_global_eval=true|false`:
   Global evaluation on `server_dataset` (runs only when a separate server eval split exists),
-  at `eval_every` rounds and the final round.
+  at `eval.every` rounds and the final round.
 - `enable_federated_eval=true|false`:
   Federated evaluation across client-local test sets.
-- `federated_eval_scheme=holdout_dataset|holdout_client`:
-  - `holdout_dataset`:
-    federated evaluation runs on all training clients at `eval_every` rounds and final round.
-  - `holdout_client`:
-    federated evaluation runs at `eval_every` rounds and final round, for both
+- `eval.configs.scheme=dataset|client`:
+  - `dataset`:
+    federated evaluation runs on all training clients at `eval.every` rounds and final round.
+  - `client`:
+    federated evaluation runs at `eval.every` rounds and final round, for both
     in-client (training pool) and out-client (holdout pool), reported independently.
 - Local evaluation:
   sampled clients report local pre/post stats each round (`Local Pre-val/test`, `Local Post-val/test`),
-  controlled by `do_pre_validation` and `do_validation`.
+  controlled by `eval.do_pre_evaluation` and `eval.do_post_evaluation`.
   This is different from federated evaluation:
   local pre/post is per-round sampled-client diagnostics, while federated evaluation is checkpointed all-client reporting.
-- `holdout_client_counts` / `holdout_client_ratio`:
-  size of out-client holdout pool for `federated_eval_scheme=holdout_client`.
+- `eval.configs.client_counts` / `eval.configs.client_ratio`:
+  size of out-client holdout pool for `eval.configs.scheme=client`.
 - `num_sampled_clients`:
   number of sampled training clients per round (replaces fraction-style sampling).
 - `show_eval_progress=true|false`:

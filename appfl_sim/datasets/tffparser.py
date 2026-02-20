@@ -36,6 +36,11 @@ def _stable_hash_to_mod(value: str, mod: int) -> int:
 def fetch_tff_dataset(args):
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
+    split_type = str(getattr(args, "split_type", "pre")).strip().lower()
+    if split_type != "pre":
+        raise ValueError(
+            "For dataset.backend=tff, split.type must be exactly `pre`."
+        )
     try:
         import tensorflow_federated as tff
     except Exception as e:  # pragma: no cover
@@ -66,7 +71,6 @@ def fetch_tff_dataset(args):
             raise ValueError("No TFF clients selected for EMNIST.")
         active_logger.info("[%s] selected %d clients.", tag, len(client_ids))
 
-        split_map = {}
         client_datasets = []
         for cid, client_id in enumerate(client_ids):
             tf_ds = train_cd.create_tf_dataset_for_client(client_id)
@@ -91,7 +95,6 @@ def fetch_tff_dataset(args):
                 test_size=float(args.test_size),
                 seed=int(args.seed),
             )
-            split_map[cid] = len(tr_ds)
             client_datasets.append((tr_ds, te_ds))
 
         args = set_common_metadata(args, client_datasets)
@@ -100,7 +103,11 @@ def fetch_tff_dataset(args):
         args.seq_len = None
         args.num_embeddings = None
         active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
-        return package_dataset_outputs(split_map, client_datasets, None, args)
+        return package_dataset_outputs(
+            client_datasets=client_datasets,
+            server_dataset=None,
+            dataset_meta=args,
+        )
 
     if tff_name == "celeba":
         train_cd, _ = tff.simulation.datasets.celeba.load_data()
@@ -113,7 +120,6 @@ def fetch_tff_dataset(args):
             raise ValueError("No TFF clients selected for CELEBA.")
         active_logger.info("[%s] selected %d clients.", tag, len(client_ids))
 
-        split_map = {}
         client_datasets = []
         for cid, client_id in enumerate(client_ids):
             tf_ds = train_cd.create_tf_dataset_for_client(client_id)
@@ -145,7 +151,6 @@ def fetch_tff_dataset(args):
                 test_size=float(args.test_size),
                 seed=int(args.seed),
             )
-            split_map[cid] = len(tr_ds)
             client_datasets.append((tr_ds, te_ds))
 
         args = set_common_metadata(args, client_datasets)
@@ -153,7 +158,11 @@ def fetch_tff_dataset(args):
         args.seq_len = None
         args.num_embeddings = None
         active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
-        return package_dataset_outputs(split_map, client_datasets, None, args)
+        return package_dataset_outputs(
+            client_datasets=client_datasets,
+            server_dataset=None,
+            dataset_meta=args,
+        )
 
     if tff_name in {"shakespeare", "stackoverflow"}:
         if tff_name == "shakespeare":
@@ -169,7 +178,6 @@ def fetch_tff_dataset(args):
         if not client_ids:
             raise ValueError(f"No TFF clients selected for {tff_name}.")
         active_logger.info("[%s] selected %d clients.", tag, len(client_ids))
-        split_map = {}
         client_datasets = []
 
         def encode_text(text: str):
@@ -218,7 +226,6 @@ def fetch_tff_dataset(args):
                 test_size=float(args.test_size),
                 seed=int(args.seed),
             )
-            split_map[cid] = len(tr_ds)
             client_datasets.append((tr_ds, te_ds))
 
         args = set_common_metadata(args, client_datasets)
@@ -231,7 +238,11 @@ def fetch_tff_dataset(args):
         args.need_embedding = True
         args.seq_len = seq_len
         active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
-        return package_dataset_outputs(split_map, client_datasets, None, args)
+        return package_dataset_outputs(
+            client_datasets=client_datasets,
+            server_dataset=None,
+            dataset_meta=args,
+        )
 
     raise NotImplementedError(
         f"Unsupported tff dataset '{tff_name}'. Supported: emnist, celeba, shakespeare, stackoverflow"

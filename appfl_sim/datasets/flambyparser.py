@@ -67,6 +67,11 @@ def fetch_flamby(args):
     """
     args = to_namespace(args)
     active_logger = resolve_dataset_logger(args, logger)
+    split_type = str(getattr(args, "split_type", "pre")).strip().lower()
+    if split_type != "pre":
+        raise ValueError(
+            "For dataset.backend=flamby, split.type must be exactly `pre`."
+        )
     key = _canonical_flamby_key(str(args.dataset_name))
     if not key:
         allowed = ", ".join(sorted(_SUPPORTED_FLAMBY.keys()))
@@ -107,7 +112,6 @@ def fetch_flamby(args):
         )
     active_logger.info("[%s] selected %d centers.", tag, len(selected_centers))
 
-    split_map: Dict[int, int] = {}
     client_datasets: List[Tuple[Any, Any]] = []
     for cid, center_id in enumerate(selected_centers):
         train_ds = _instantiate_flamby_dataset(
@@ -116,7 +120,6 @@ def fetch_flamby(args):
         test_ds = _instantiate_flamby_dataset(
             ds_class, train=False, center=int(center_id), pooled=False
         )
-        split_map[cid] = len(train_ds)
         client_datasets.append((train_ds, test_ds))
 
     # Prefer pooled server eval when supported by dataset API.
@@ -153,4 +156,4 @@ def fetch_flamby(args):
 
     active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
 
-    return split_map, client_datasets, server_dataset, args
+    return client_datasets, server_dataset, args

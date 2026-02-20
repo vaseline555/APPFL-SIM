@@ -1,4 +1,3 @@
-import math
 import torch
 
 from appfl_sim.models.model_utils import Lambda, PositionalEncoding

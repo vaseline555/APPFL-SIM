@@ -5,9 +5,13 @@ import socket
 import time
 from typing import Callable
 
+import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from appfl_sim.misc.config_utils import _cfg_get
+from appfl_sim.metrics import parse_metric_names
+from appfl_sim.misc.data_utils import _resolve_client_eval_dataset
+from appfl_sim.misc.learning_utils import _aggregate_eval_stats, _evaluate_dataset_direct
 
 
 def _find_free_port() -> int:
@@ -127,3 +131,124 @@ def launch_or_run_distributed(
     except Exception:
         _terminate_processes(processes)
         raise
+
+def _load_dataset_distributed(
+    config: DictConfig,
+    rank: int,
+    logger=None,
+):
+    import torch.distributed as dist
+    from appfl_sim.loaders import load_dataset
+    from appfl_sim.misc.config_utils import _cfg_to_dict
+
+    def _set_download(cfg_dict: dict, value: bool) -> None:
+        ds = cfg_dict.get("dataset", None)
+        if not isinstance(ds, dict):
+            ds = {}
+            cfg_dict["dataset"] = ds
+        ds["download"] = bool(value)
+
+    loader_cfg = _cfg_to_dict(config)
+    if logger is not None:
+        loader_cfg["logger"] = logger
+    if rank == 0:
+        cfg_root = dict(loader_cfg)
+        _set_download(cfg_root, True)
+        cached = load_dataset(cfg_root)
+    else:
+        cached = None
+    dist.barrier()
+    if rank == 0:
+        return cached
+    cfg_other = dict(loader_cfg)
+    _set_download(cfg_other, False)
+    return load_dataset(cfg_other)
+
+def _run_federated_eval_distributed(
+    config: DictConfig,
+    model,
+    client_datasets,
+    device: str,
+    global_state,
+    eval_client_ids: list[int],
+    rank: int,
+    world_size: int,
+    eval_split: str = "test",
+):
+    import torch.distributed as dist
+
+    if not eval_client_ids:
+        if rank == 0:
+            gathered: list[dict] = [None] * world_size
+            dist.gather_object({}, object_gather_list=gathered, dst=0)
+        else:
+            dist.gather_object({}, object_gather_list=None, dst=0)
+        return None if rank != 0 else None
+
+    eval_model = model.to(device)
+    eval_model.load_state_dict(global_state)
+    eval_model.eval()
+    eval_loss_fn = getattr(
+        torch.nn, str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss"))
+    )().to(device)
+    eval_metric_names = parse_metric_names(_cfg_get(config, "eval.metrics", ["acc1"]))
+    eval_batch_size = int(
+        _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))
+    )
+    eval_workers = max(0, int(_cfg_get(config, "train.num_workers", 0)))
+    local_client_set = {
+        int(cid)
+        for cid in np.asarray(np.array_split(np.arange(len(client_datasets)), world_size)[rank]).astype(int)
+    }
+    local_stats = {}
+    for client_id in sorted(int(cid) for cid in eval_client_ids):
+        if client_id not in local_client_set:
+            continue
+        eval_ds = _resolve_client_eval_dataset(
+            client_datasets=client_datasets,
+            client_id=int(client_id),
+            eval_split=str(eval_split),
+        )
+        local_stats[int(client_id)] = _evaluate_dataset_direct(
+            model=eval_model,
+            dataset=eval_ds,
+            device=device,
+            loss_fn=eval_loss_fn,
+            eval_metric_names=eval_metric_names,
+            batch_size=eval_batch_size,
+            num_workers=eval_workers,
+        )
+
+    if rank == 0:
+        gathered = [None] * world_size
+        dist.gather_object(local_stats, object_gather_list=gathered, dst=0)
+    else:
+        dist.gather_object(local_stats, object_gather_list=None, dst=0)
+        gathered = None
+    if rank != 0:
+        return None
+
+    merged = {}
+    for payload in gathered or []:
+        if isinstance(payload, dict):
+            merged.update(payload)
+    return _aggregate_eval_stats(merged)
+
+def _broadcast_model_state_inplace(model, *, src: int = 0) -> None:
+    import torch.distributed as dist
+
+    state = model.state_dict()
+    backend = str(dist.get_backend()).strip().lower()
+    for key in sorted(state.keys()):
+        tensor = state[key]
+        if not torch.is_tensor(tensor):
+            continue
+        if backend == "nccl" and tensor.device.type == "cpu":
+            device = torch.device("cuda", torch.cuda.current_device())
+            with torch.no_grad():
+                staged = tensor.detach().to(device=device, non_blocking=True)
+                dist.broadcast(staged, src=src)
+                tensor.copy_(staged.to(device="cpu", non_blocking=False))
+            del staged
+            continue
+        dist.broadcast(tensor, src=src)

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import torch
-
 from appfl_sim.datasets import (
     fetch_custom_dataset,
     fetch_external_dataset,
@@ -56,7 +54,7 @@ def load_dataset(args: Any):
     """Unified dataset loader API.
 
     Return contract:
-      split_map, client_datasets, server_dataset, args
+      client_datasets, server_dataset, dataset_meta
 
     `dataset.backend` modes:
     - `auto`: infer parser by dataset name/library.

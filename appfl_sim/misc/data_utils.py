@@ -47,6 +47,22 @@ def _parse_holdout_dataset_ratio(config: DictConfig) -> Optional[List[float]]:
         )
     return ratios
 
+def _validate_bandit_dataset_ratio(config: DictConfig) -> None:
+    algorithm = str(_cfg_get(config, "algorithm.algorithm", "fedavg")).strip().lower()
+    if algorithm not in {"swucb", "swts"}:
+        return
+    ratios = _parse_holdout_dataset_ratio(config)
+    if ratios is None:
+        raise ValueError(
+            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` is required "
+            "and must include validation split, e.g. [80,10,10]."
+        )
+    if len(ratios) < 3:
+        raise ValueError(
+            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` must have "
+            "three entries (train/val/test), e.g. [80,10,10]."
+        )
+
 def _safe_split_lengths(n: int, ratios: List[float]) -> List[int]:
     lengths = [int(float(n) * r) for r in ratios]
     remain = int(n) - int(sum(lengths))

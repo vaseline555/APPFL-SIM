@@ -1,76 +1,59 @@
 experiment:
   name: alg-fedavg
   seed: 42
-  device: cpu
-  server_device: cpu
-  backend: serial
+  device: cuda
+  server_device: cuda
+  backend: nccl
   stateful: false
 dataset:
   path: ./data
-  name: MNIST
+  name: CIFAR10
   backend: auto
   download: true
-  configs:
-    raw_data_fraction: 1.0
-    min_samples_per_client: 2
-    terms_accepted: true
 split:
-  type: iid
+  type: pathological
   infer_num_clients: false
   configs:
-    unbalanced_keep_min: 0.5
-    dirichlet_alpha: 0.3
     min_classes: 2
 model:
   path: ./models
-  name: SimpleCNN
-  backend: auto
-  configs:
-    hidden_size: 64
-    dropout: 0.0
-    num_layers: 2
-    num_embeddings: 10000
-    embedding_size: 128
-    seq_len: 128
-    use_model_tokenizer: false
+  name: LeNet
+  backend: local
 train:
-  num_rounds: 2
-  num_clients: 3
-  num_sampled_clients: 3
+  num_rounds: 200
+  num_clients: 10
+  num_sampled_clients: 10
   update_base: epoch
   local_epochs: 1
-  local_iters: 1
-  batch_size: 16
+  batch_size: 64
   shuffle: true
-  max_grad_norm: 0.0
-  eval_batch_size: 128
-  num_workers: 0
-  pin_memory: false
-  train_pin_memory: false
-  eval_pin_memory: false
-  dataloader_persistent_workers: false
-  dataloader_prefetch_factor: 2
+  eval_batch_size: 256
 algorithm:
   algorithm: fedavg
   mix_coefs: sample_ratio
   optimize_memory: true
-  aggregator: ''
-  scheduler: ''
-  trainer: ''
-  aggregator_kwargs: {}
+  aggregator: FedAvgAggregator
+  scheduler: SyncScheduler
+  trainer: VanillaTrainer
+  aggregator_kwargs:
+    client_weights_mode: sample_ratio
   scheduler_kwargs: {}
   trainer_kwargs: {}
 optimization:
   optimizer: SGD
   criterion: CrossEntropyLoss
   lr: 0.01
+  lr_decay:
+    enable: true
+    type: exponential
+    gamma: 0.995
   clip_grad_norm: 0.0
   accum_grad: 0
   configs:
     weight_decay: 0.0
     momentum: 0.0
 eval:
-  every: 1
+  every: 10
   metrics:
   - acc1
   do_pre_evaluation: true
@@ -82,23 +65,14 @@ eval:
     scheme: dataset
     dataset_ratio:
     - 80
-    - 20
+    - 10
+    - 10
     client_ratio: 0.0
     client_counts: 0
 logging:
   path: ./logs
-  name: algorithm-examples
+  name: genfl_fedavg
   backend: file
-  type: auto
+  type: both
   configs:
-    wandb_mode: online
-    wandb_entity: ''
-privacy:
-  use_dp: false
-  mechanism: laplace
-  clip_grad_norm: 0.0
-  clip_norm_type: 2.0
-  kwargs: {}
-secure_aggregation:
-  use_sec_agg: false
-  mix_coefs: uniform
+    track_gen_rewards: true

@@ -124,7 +124,7 @@ def _parse_model_spec(
     context = _default_model_context(cfg, input_shape=input_shape, num_classes=num_classes)
     source = str(_path_get(cfg, "model.backend", "auto")).lower()
     name = str(_path_get(cfg, "model.name", "SimpleCNN")).strip()
-    if source in {"timm", "hf"} and not name:
+    if source in {"timm", "hf", "torchvision", "torchtext", "torchaudio"} and not name:
         raise ValueError(
             f"model.backend={source} requires model.name to be set to the exact backend name/card."
         )
@@ -198,6 +198,23 @@ def _resolve_timm_model_name(spec: ModelSpec) -> str:
     return spec.name
 
 
+def _filtered_model_kwargs(spec: ModelSpec) -> Dict[str, Any]:
+    kwargs = dict(spec.model_kwargs)
+    for reserved_key in (
+        "pretrained",
+        "timm_kwargs",
+        "hf_task",
+        "hf_local_files_only",
+        "hf_trust_remote_code",
+        "hf_gradient_checkpointing",
+        "hf_kwargs",
+        "hf_config_overrides",
+        "hf_cache_dir",
+    ):
+        kwargs.pop(reserved_key, None)
+    return kwargs
+
+
 def _load_timm_model(spec: ModelSpec):
     try:
         import timm
@@ -208,7 +225,7 @@ def _load_timm_model(spec: ModelSpec):
         ) from e
 
     timm_name = _resolve_timm_model_name(spec)
-    create_kwargs = dict(spec.model_kwargs)
+    create_kwargs = _filtered_model_kwargs(spec)
     create_kwargs.update(spec.timm_kwargs)
 
     create_kwargs.setdefault("num_classes", int(spec.num_classes))
@@ -323,19 +340,7 @@ def _load_hf_model(spec: ModelSpec):
     local_files_only = bool(spec.hf_local_files_only)
     trust_remote_code = bool(spec.hf_trust_remote_code)
 
-    common_kwargs = dict(spec.model_kwargs)
-    for reserved_key in (
-        "pretrained",
-        "hf_task",
-        "hf_local_files_only",
-        "hf_trust_remote_code",
-        "hf_gradient_checkpointing",
-        "hf_kwargs",
-        "hf_config_overrides",
-        "hf_cache_dir",
-        "timm_kwargs",
-    ):
-        common_kwargs.pop(reserved_key, None)
+    common_kwargs = _filtered_model_kwargs(spec)
     common_kwargs.update(spec.hf_kwargs)
 
     if task == "sequence_classification":
@@ -373,6 +378,113 @@ def _load_hf_model(spec: ModelSpec):
     return _HFAdapter(model=model, task=task)
 
 
+def _load_torchvision_model(spec: ModelSpec):
+    try:
+        import torchvision.models as tv_models
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "torchvision backend requested but torchvision is not installed. "
+            "Install with: pip install torchvision"
+        ) from e
+
+    kwargs = _filtered_model_kwargs(spec)
+    pretrained = bool(spec.model_kwargs.get("pretrained", False))
+    model_name = str(spec.name).strip()
+
+    if hasattr(tv_models, "get_model"):
+        if pretrained:
+            kwargs.setdefault("weights", "DEFAULT")
+        kwargs.setdefault("num_classes", int(spec.num_classes))
+        return tv_models.get_model(model_name, **kwargs)
+
+    if not hasattr(tv_models, model_name):
+        available = sorted(
+            name
+            for name in dir(tv_models)
+            if callable(getattr(tv_models, name, None)) and not name.startswith("_")
+        )
+        raise ValueError(
+            f"Unknown torchvision model '{model_name}'. "
+            f"Available callable symbols include: {', '.join(available[:40])}"
+        )
+    model_fn = getattr(tv_models, model_name)
+    if pretrained:
+        kwargs.setdefault("pretrained", True)
+    kwargs.setdefault("num_classes", int(spec.num_classes))
+    return model_fn(**kwargs)
+
+
+def _load_torchtext_model(spec: ModelSpec):
+    try:
+        import torchtext.models as tt_models
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "torchtext backend requested but torchtext is not installed. "
+            "Install with: pip install torchtext"
+        ) from e
+
+    kwargs = _filtered_model_kwargs(spec)
+    model_name = str(spec.name).strip()
+    pretrained = bool(spec.model_kwargs.get("pretrained", False))
+
+    if not hasattr(tt_models, model_name):
+        available = sorted(name for name in dir(tt_models) if not name.startswith("_"))
+        raise ValueError(
+            f"Unknown torchtext model/bundle '{model_name}'. "
+            f"Available symbols include: {', '.join(available[:40])}"
+        )
+    target = getattr(tt_models, model_name)
+
+    if hasattr(target, "get_model"):
+        if pretrained:
+            # Most bundles expose pretrained weights through get_model().
+            try:
+                return target.get_model(**kwargs)
+            except TypeError:
+                return target.get_model()
+        if hasattr(target, "transform"):
+            try:
+                return target.get_model(**kwargs)
+            except TypeError:
+                return target.get_model()
+    if callable(target):
+        return target(**kwargs)
+
+    raise ValueError(
+        f"torchtext symbol '{model_name}' is not directly instantiable. "
+        "Use a bundle/class exposing `get_model()` or a callable model class."
+    )
+
+
+def _load_torchaudio_model(spec: ModelSpec):
+    try:
+        import torchaudio.models as ta_models
+    except Exception as e:  # pragma: no cover
+        raise RuntimeError(
+            "torchaudio backend requested but torchaudio is not installed. "
+            "Install with: pip install torchaudio"
+        ) from e
+
+    kwargs = _filtered_model_kwargs(spec)
+    model_name = str(spec.name).strip()
+    if not hasattr(ta_models, model_name):
+        available = sorted(
+            name
+            for name in dir(ta_models)
+            if callable(getattr(ta_models, name, None)) and not name.startswith("_")
+        )
+        raise ValueError(
+            f"Unknown torchaudio model '{model_name}'. "
+            f"Available callable symbols include: {', '.join(available[:40])}"
+        )
+    model_fn = getattr(ta_models, model_name)
+    if not callable(model_fn):
+        raise ValueError(
+            f"torchaudio symbol '{model_name}' is not callable."
+        )
+    return model_fn(**kwargs)
+
+
 def _is_timm_candidate(name: str) -> bool:
     try:
         import timm
@@ -386,19 +498,57 @@ def _is_hf_candidate(name: str, spec: ModelSpec) -> bool:
     return "/" in str(name)
 
 
+def _is_torchvision_candidate(name: str) -> bool:
+    try:
+        import torchvision.models as tv_models
+    except Exception:
+        return False
+    if hasattr(tv_models, "get_model"):
+        try:
+            return str(name) in set(tv_models.list_models())
+        except Exception:
+            return False
+    return hasattr(tv_models, str(name))
+
+
+def _is_torchtext_candidate(name: str) -> bool:
+    try:
+        import torchtext.models as tt_models
+    except Exception:
+        return False
+    return hasattr(tt_models, str(name))
+
+
+def _is_torchaudio_candidate(name: str) -> bool:
+    try:
+        import torchaudio.models as ta_models
+    except Exception:
+        return False
+    return hasattr(ta_models, str(name))
+
+
 def _resolve_source(spec: ModelSpec) -> str:
     source = spec.source.lower()
     if source == "local":
         return "appfl"
-    if source in {"timm", "hf"}:
+    if source in {"timm", "hf", "torchvision", "torchtext", "torchaudio"}:
         return source
     if source != "auto":
-        raise ValueError("model.backend must be one of: auto, local, timm, hf")
+        raise ValueError(
+            "model.backend must be one of: auto, local, timm, hf, "
+            "torchvision, torchtext, torchaudio"
+        )
 
     if spec.name in MODEL_REGISTRY:
         return "appfl"
     if _is_timm_candidate(spec.name):
         return "timm"
+    if _is_torchvision_candidate(spec.name):
+        return "torchvision"
+    if _is_torchtext_candidate(spec.name):
+        return "torchtext"
+    if _is_torchaudio_candidate(spec.name):
+        return "torchaudio"
     if _is_hf_candidate(spec.name, spec):
         return "hf"
 
@@ -418,6 +568,9 @@ def load_model(
     Backends:
     - ``local``: local models in ``appfl_sim.models``.
     - ``timm``: exact model name via ``model.name``.
+    - ``torchvision``: exact torchvision model name via ``model.name``.
+    - ``torchtext``: exact torchtext model/bundle symbol via ``model.name``.
+    - ``torchaudio``: exact torchaudio model name via ``model.name``.
     - ``hf``: exact model card id via ``model.name``.
 
     Aliases are intentionally disabled to avoid implicit behavior.
@@ -429,6 +582,12 @@ def load_model(
         return _load_appfl_model(spec)
     if source == "timm":
         return _load_timm_model(spec)
+    if source == "torchvision":
+        return _load_torchvision_model(spec)
+    if source == "torchtext":
+        return _load_torchtext_model(spec)
+    if source == "torchaudio":
+        return _load_torchaudio_model(spec)
     if source == "hf":
         return _load_hf_model(spec)
 

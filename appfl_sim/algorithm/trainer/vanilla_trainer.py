@@ -3,6 +3,7 @@ import time
 import torch
 import importlib
 import numpy as np
+import torch.optim.lr_scheduler as lr_scheduler
 from torch.nn import Module
 from omegaconf import DictConfig
 from typing import Tuple, Dict, Optional, Any, List
@@ -306,6 +307,42 @@ class VanillaTrainer(BaseTrainer):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def _build_lr_scheduler(
+        self, optimizer: torch.optim.Optimizer, scheduler_steps: int
+    ) -> Optional[torch.optim.lr_scheduler.LRScheduler]:
+        enabled = bool(self.train_configs.get("lr_decay_enable", False))
+        decay_type = str(self.train_configs.get("lr_decay_type", "none")).strip().lower()
+        if (not enabled) or decay_type in {"", "none", "off", "false"}:
+            return None
+
+        scheduler_steps = max(1, int(scheduler_steps))
+        if decay_type in {"exp", "exponential"}:
+            gamma = float(self.train_configs.get("lr_decay_gamma", 0.99))
+            return lr_scheduler.ExponentialLR(optimizer, gamma=gamma)
+        if decay_type in {"cos", "cosine"}:
+            t_max = int(self.train_configs.get("lr_decay_t_max", 0))
+            if t_max <= 0:
+                t_max = scheduler_steps
+            eta_min = float(self.train_configs.get("lr_decay_eta_min", 0.0))
+            return lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=max(1, t_max),
+                eta_min=eta_min,
+            )
+        raise ValueError(
+            f"Unsupported optimization.lr_decay.type={decay_type}. "
+            "Supported: none, exponential, cosine."
+        )
+
+    def _apply_lr_floor(self, optimizer: torch.optim.Optimizer) -> None:
+        min_lr = float(self.train_configs.get("lr_decay_min_lr", 0.0))
+        if min_lr <= 0.0:
+            return
+        for param_group in optimizer.param_groups:
+            current = float(param_group.get("lr", 0.0))
+            if current < min_lr:
+                param_group["lr"] = float(min_lr)
+
     def train(self, **kwargs):
         """
         Train the model for a certain number of local epochs or steps and store the mode state
@@ -340,10 +377,10 @@ class VanillaTrainer(BaseTrainer):
         has_val_split = self.val_dataloader is not None
         has_test_split = self.test_dataloader is not None
         has_any_eval_split = has_val_split or has_test_split
-        do_validation = bool(self.train_configs.get("do_validation", True)) and (
+        do_validation = bool(self.train_configs.get("do_post_evaluation", True)) and (
             has_any_eval_split
         )
-        do_pre_validation = bool(self.train_configs.get("do_pre_validation", True)) and (
+        do_pre_validation = bool(self.train_configs.get("do_pre_evaluation", True)) and (
             has_any_eval_split
         )
         metric_names_for_log = []
@@ -539,6 +576,9 @@ class VanillaTrainer(BaseTrainer):
             if override_local_steps is not None:
                 effective_local_epochs = int(override_local_steps)
             self.val_results["current_local_steps"] = effective_local_epochs
+            local_lr_scheduler = self._build_lr_scheduler(
+                optimizer, scheduler_steps=effective_local_epochs
+            )
             for epoch in range(effective_local_epochs):
                 start_time = time.time()
                 target_true, target_pred = [], []
@@ -650,11 +690,17 @@ class VanillaTrainer(BaseTrainer):
                         test_stats_obj=test_stats if do_validation else None,
                     )
                 )
+                if local_lr_scheduler is not None:
+                    local_lr_scheduler.step()
+                    self._apply_lr_floor(optimizer)
         else:
             effective_local_steps = int(self.train_configs.num_local_steps)
             if override_local_steps is not None:
                 effective_local_steps = int(override_local_steps)
             self.val_results["current_local_steps"] = effective_local_steps
+            local_lr_scheduler = self._build_lr_scheduler(
+                optimizer, scheduler_steps=effective_local_steps
+            )
             start_time = time.time()
             target_true, target_pred = [], []
             step_examples = 0
@@ -689,6 +735,9 @@ class VanillaTrainer(BaseTrainer):
                             step_correct += correct
                             total_correct += correct
                         step_count += 1
+                        if local_lr_scheduler is not None:
+                            local_lr_scheduler.step()
+                            self._apply_lr_floor(optimizer)
                         if step_count >= effective_local_steps:
                             break
             else:
@@ -713,6 +762,9 @@ class VanillaTrainer(BaseTrainer):
                         correct = int(np.sum(np.argmax(pred, axis=1) == label.reshape(-1)))
                         step_correct += correct
                         total_correct += correct
+                    if local_lr_scheduler is not None:
+                        local_lr_scheduler.step()
+                        self._apply_lr_floor(optimizer)
             train_stats = step_metrics_manager.aggregate(total_len=step_examples)
             if float(train_stats.get("accuracy", -1.0)) < 0.0 and step_has_logits:
                 train_stats["accuracy"] = float(step_correct / max(step_examples, 1))

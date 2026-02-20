@@ -108,20 +108,23 @@ def fetch_torchvision_dataset(args):
     _ensure_targets(raw_test)
     active_logger.info("[%s] building federated client splits.", tag)
 
-    split_map, client_datasets = clientize_raw_dataset(raw_train, args)
-    split_map, client_datasets, server_dataset, args = finalize_dataset_outputs(
-        split_map=split_map,
+    client_datasets = clientize_raw_dataset(raw_train, args)
+    client_datasets, server_dataset, dataset_meta = finalize_dataset_outputs(
         client_datasets=client_datasets,
         server_dataset=raw_test,
-        args=args,
+        dataset_meta=args,
         raw_train=raw_train,
     )
-    args.need_embedding = False
-    args.seq_len = None
-    args.num_embeddings = None
+    dataset_meta.need_embedding = False
+    dataset_meta.seq_len = None
+    dataset_meta.num_embeddings = None
     if hasattr(raw_train, "classes"):
-        args.num_classes = max(int(args.num_classes), int(len(raw_train.classes)))
+        dataset_meta.num_classes = max(
+            int(dataset_meta.num_classes), int(len(raw_train.classes))
+        )
     else:
-        args.num_classes = int(infer_num_classes(raw_train))
-    active_logger.info("[%s] finished loading (%d clients).", tag, int(args.num_clients))
-    return split_map, client_datasets, server_dataset, args
+        dataset_meta.num_classes = int(infer_num_classes(raw_train))
+    active_logger.info(
+        "[%s] finished loading (%d clients).", tag, int(dataset_meta.num_clients)
+    )
+    return client_datasets, server_dataset, dataset_meta

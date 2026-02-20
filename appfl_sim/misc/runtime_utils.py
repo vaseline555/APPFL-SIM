@@ -19,8 +19,66 @@ from appfl_sim.misc.config_utils import (
     _cfg_bool,
     _cfg_get,
     _resolve_algorithm_components,
+    _resolve_client_logging_policy,
+    _resolve_client_state_policy,
     _resolve_num_sampled_clients,
 )
+from appfl_sim.misc.data_utils import _build_client_groups
+
+def _maybe_select_round_local_steps(server, round_idx: int):
+    scheduler = getattr(server, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "select_local_steps"):
+        return None
+    try:
+        return int(scheduler.select_local_steps(round_idx=int(round_idx)))
+    except Exception:
+        return None
+
+def _normalize_uploaded_state(uploaded):
+    if isinstance(uploaded, tuple):
+        return uploaded[0]
+    return uploaded
+
+def _run_local_client_update(
+    client,
+    *,
+    global_state,
+    round_idx: int,
+    round_local_steps: Optional[int],
+):
+    client.download(global_state)
+    if round_local_steps is None:
+        train_result = client.update(round_idx=round_idx)
+    else:
+        train_result = client.update(
+            round_idx=round_idx, local_steps=int(round_local_steps)
+        )
+    state = _normalize_uploaded_state(client.upload())
+    return train_result, state
+
+
+def _resolve_runtime_policies(config: DictConfig, runtime_cfg: Dict[str, Any]) -> Dict[str, Any]:
+    num_clients = int(runtime_cfg["num_clients"])
+    algorithm_components = _resolve_algorithm_components(config)
+    state_policy = _resolve_client_state_policy(config)
+    train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
+    num_sampled_clients = _resolve_num_sampled_clients(
+        config, num_clients=len(train_client_ids)
+    )
+    logging_policy = _resolve_client_logging_policy(
+        config,
+        num_clients=num_clients,
+        num_sampled_clients=num_sampled_clients,
+    )
+    return {
+        "algorithm_components": algorithm_components,
+        "num_clients": num_clients,
+        "state_policy": state_policy,
+        "train_client_ids": train_client_ids,
+        "holdout_client_ids": holdout_client_ids,
+        "num_sampled_clients": num_sampled_clients,
+        "logging_policy": logging_policy,
+    }
 
 
 def id_generator(size=6, chars=string.ascii_uppercase + string.digits):
