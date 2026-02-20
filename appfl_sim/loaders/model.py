@@ -129,7 +129,7 @@ def _parse_model_spec(
             f"model.backend={source} requires model.name to be set to the exact backend name/card."
         )
     model_configs = _as_dict(_path_get(cfg, "model.configs", {}))
-    model_path = str(_path_get(cfg, "model.path", "./models"))
+    model_path = str(_path_get(cfg, "model.path", "./appfl_sim/models"))
     in_channels = int(model_configs.get("in_channels", context.get("in_channels", 1)))
     resolved_num_classes = int(
         model_configs.get("num_classes", context.get("num_classes", num_classes))
