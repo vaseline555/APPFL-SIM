@@ -41,6 +41,7 @@ from appfl_sim.misc.config_utils import (
 from appfl_sim.misc.data_utils import (
     _apply_holdout_dataset_ratio,
     _build_client_groups,
+    _parse_holdout_dataset_ratio,
     _resolve_client_eval_dataset,
     _dataset_has_eval_split,
     _sample_train_clients,
@@ -77,9 +78,77 @@ from appfl_sim.misc.system_utils import (
     _release_clients,
 )
 
+
+def _maybe_select_round_local_steps(server, round_idx: int):
+    scheduler = getattr(server, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "select_local_steps"):
+        return None
+    try:
+        return int(scheduler.select_local_steps(round_idx=int(round_idx)))
+    except Exception:
+        return None
+
+
+def _weighted_global_gen_error(
+    stats: dict,
+    sample_sizes: dict,
+) -> float | None:
+    if not stats:
+        return None
+    total = 0.0
+    accum = 0.0
+    for cid, client_stats in stats.items():
+        if not isinstance(client_stats, dict):
+            continue
+        if "local_gen_error" not in client_stats:
+            continue
+        value = client_stats.get("local_gen_error")
+        if not isinstance(value, (int, float)):
+            continue
+        weight = float(sample_sizes.get(cid, 0))
+        if weight <= 0.0:
+            weight = 1.0
+        accum += weight * float(value)
+        total += weight
+    if total <= 0.0:
+        return None
+    return float(accum / total)
+
+
+def _maybe_observe_round_gen_error(server, global_gen_error: float, round_idx: int):
+    scheduler = getattr(server, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "observe_global_gen_error"):
+        return None
+    try:
+        return scheduler.observe_global_gen_error(
+            global_gen_error=float(global_gen_error),
+            round_idx=int(round_idx),
+        )
+    except Exception:
+        return None
+
+
+def _validate_bandit_dataset_ratio(config: DictConfig) -> None:
+    algorithm = str(_cfg_get(config, "algorithm.algorithm", "fedavg")).strip().lower()
+    if algorithm not in {"swucb", "swts"}:
+        return
+    ratios = _parse_holdout_dataset_ratio(config)
+    if ratios is None:
+        raise ValueError(
+            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` is required "
+            "and must include validation split, e.g. [80,10,10]."
+        )
+    if len(ratios) < 3:
+        raise ValueError(
+            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` must have "
+            "three entries (train/val/test), e.g. [80,10,10]."
+        )
+
+
 def run_serial(config) -> None:
     if not isinstance(config, DictConfig):
         config = OmegaConf.create(_cfg_to_dict(config))
+    _validate_bandit_dataset_ratio(config)
 
     set_seed_everything(int(_cfg_get(config, "experiment.seed", 42)))
     t0 = time.time()
@@ -215,6 +284,7 @@ def run_serial(config) -> None:
                 train_client_ids=train_client_ids,
                 num_sampled_clients=int(num_sampled_clients),
             )
+            round_local_steps = _maybe_select_round_local_steps(server, round_idx)
             global_state = server.model.state_dict()
 
             updates = {}
@@ -226,7 +296,12 @@ def run_serial(config) -> None:
                     if client.id not in selected:
                         continue
                     client.download(global_state)
-                    train_result = client.update(round_idx=round_idx)
+                    if round_local_steps is None:
+                        train_result = client.update(round_idx=round_idx)
+                    else:
+                        train_result = client.update(
+                            round_idx=round_idx, local_steps=int(round_local_steps)
+                        )
                     state = client.upload()
                     if isinstance(state, tuple):
                         state = state[0]
@@ -259,7 +334,12 @@ def run_serial(config) -> None:
                         )
                     for client in chunk_clients:
                         client.download(global_state)
-                        train_result = client.update(round_idx=round_idx)
+                        if round_local_steps is None:
+                            train_result = client.update(round_idx=round_idx)
+                        else:
+                            train_result = client.update(
+                                round_idx=round_idx, local_steps=int(round_local_steps)
+                            )
                         state = client.upload()
                         if isinstance(state, tuple):
                             state = state[0]
@@ -270,6 +350,11 @@ def run_serial(config) -> None:
                         _release_clients(chunk_clients)
 
             weights = server.aggregate(updates, sample_sizes)
+            round_gen_error = _weighted_global_gen_error(stats, sample_sizes)
+            if round_gen_error is not None:
+                _maybe_observe_round_gen_error(
+                    server, global_gen_error=round_gen_error, round_idx=round_idx
+                )
             global_eval_metrics = None
             if enable_global_eval and _should_eval_round(
                 round_idx,
@@ -383,6 +468,7 @@ def run_serial(config) -> None:
                 len(train_client_ids),
                 stats,
                 weights,
+                round_local_steps=round_local_steps,
                 global_eval_metrics=global_eval_metrics,
                 federated_eval_metrics=federated_eval_metrics,
                 federated_eval_in_metrics=federated_eval_in_metrics,
@@ -515,9 +601,19 @@ def _broadcast_model_state_inplace(model, *, src: int = 0) -> None:
     import torch.distributed as dist
 
     state = model.state_dict()
+    backend = str(dist.get_backend()).strip().lower()
     for key in sorted(state.keys()):
         tensor = state[key]
         if not torch.is_tensor(tensor):
+            continue
+        if backend == "nccl" and tensor.device.type == "cpu":
+            # NCCL does not support CPU tensors. Broadcast via CUDA staging buffer.
+            device = torch.device("cuda", torch.cuda.current_device())
+            with torch.no_grad():
+                staged = tensor.detach().to(device=device, non_blocking=True)
+                dist.broadcast(staged, src=src)
+                tensor.copy_(staged.to(device="cpu", non_blocking=False))
+            del staged
             continue
         dist.broadcast(tensor, src=src)
 
@@ -527,6 +623,7 @@ def run_distributed(config, backend: str) -> None:
 
     if not isinstance(config, DictConfig):
         config = OmegaConf.create(_cfg_to_dict(config))
+    _validate_bandit_dataset_ratio(config)
     if backend not in {"nccl", "gloo"}:
         raise ValueError("backend must be one of: serial, nccl, gloo")
     if not dist.is_initialized():
@@ -714,13 +811,15 @@ def run_distributed(config, backend: str) -> None:
                     train_client_ids=train_client_ids,
                     num_sampled_clients=int(num_sampled_clients),
                 )
-                payload = {"selected_ids": selected_ids}
+                local_steps = _maybe_select_round_local_steps(server, round_idx)
+                payload = {"selected_ids": selected_ids, "local_steps": local_steps}
             else:
                 payload = None
             bcast_obj = [payload]
             dist.broadcast_object_list(bcast_obj, src=0)
             payload = bcast_obj[0]
             selected_ids = list(payload["selected_ids"])
+            round_local_steps = payload.get("local_steps", None)
             sync_model = server.model if rank == 0 else model
             _broadcast_model_state_inplace(sync_model, src=0)
             if on_demand_model is not None and sync_model is not on_demand_model:
@@ -735,7 +834,12 @@ def run_distributed(config, backend: str) -> None:
                     if client.id not in selected_set:
                         continue
                     client.download(global_state)
-                    train_result = client.update(round_idx=round_idx)
+                    if round_local_steps is None:
+                        train_result = client.update(round_idx=round_idx)
+                    else:
+                        train_result = client.update(
+                            round_idx=round_idx, local_steps=int(round_local_steps)
+                        )
                     state = client.upload()
                     if isinstance(state, tuple):
                         state = state[0]
@@ -770,7 +874,12 @@ def run_distributed(config, backend: str) -> None:
                         )
                     for client in chunk_clients:
                         client.download(global_state)
-                        train_result = client.update(round_idx=round_idx)
+                        if round_local_steps is None:
+                            train_result = client.update(round_idx=round_idx)
+                        else:
+                            train_result = client.update(
+                                round_idx=round_idx, local_steps=int(round_local_steps)
+                            )
                         state = client.upload()
                         if isinstance(state, tuple):
                             state = state[0]
@@ -804,6 +913,11 @@ def run_distributed(config, backend: str) -> None:
                         sample_sizes[int(cid)] = int(payload_item.get("num_examples", 0))
                         stats[int(cid)] = payload_item.get("stats", {})
                 weights = server.aggregate(updates, sample_sizes)
+                round_gen_error = _weighted_global_gen_error(stats, sample_sizes)
+                if round_gen_error is not None:
+                    _maybe_observe_round_gen_error(
+                        server, global_gen_error=round_gen_error, round_idx=round_idx
+                    )
     
             sync_model = server.model if rank == 0 else model
             _broadcast_model_state_inplace(sync_model, src=0)
@@ -879,6 +993,7 @@ def run_distributed(config, backend: str) -> None:
                         len(train_client_ids),
                         stats,
                         weights,
+                        round_local_steps=round_local_steps,
                         global_eval_metrics=global_eval_metrics,
                         federated_eval_metrics=federated_eval_metrics,
                         federated_eval_in_metrics=federated_eval_in_metrics,

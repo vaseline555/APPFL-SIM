@@ -138,6 +138,7 @@ def _log_round(
     total_train_clients: int,
     stats,
     weights,
+    round_local_steps: Optional[int] = None,
     global_eval_metrics: Optional[Dict[str, float]] = None,
     federated_eval_metrics: Optional[Dict[str, float]] = None,
     federated_eval_in_metrics: Optional[Dict[str, float]] = None,
@@ -192,6 +193,9 @@ def _log_round(
             f"({(100.0 * float(selected_count) / float(max(1, total_train_clients))):.2f}%)",
         ),
     ]
+    if round_local_steps is not None:
+        round_metrics["policy"] = {"tau_t": int(round_local_steps)}
+        lines.append(_entity_line("Policy:", f"tau_t={int(round_local_steps)}"))
 
     if stats:
         train_parts: List[str] = []
@@ -370,6 +374,7 @@ def _log_round(
                 _join_metric_parts([f"err.: {avg_value:.4f}/{std_value:.4f}"]),
             )
         )
+
 
     do_pre_val = _cfg_bool(config, "eval.do_pre_evaluation", True)
     do_post_val = _cfg_bool(config, "eval.do_post_evaluation", True)
