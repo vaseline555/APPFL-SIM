@@ -2,6 +2,7 @@ import math
 from collections import deque
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
+import numpy as np
 from omegaconf import DictConfig
 
 from appfl_sim.algorithm.aggregator import BaseAggregator
@@ -34,6 +35,8 @@ class SwucbScheduler(SyncScheduler):
         self.current_round: int = 0
         self.last_selected_action: int = int(self.action_space[0])
         self.last_reward: Optional[float] = None
+        seed = scheduler_configs.get("seed", None)
+        self._rng = np.random.default_rng(None if seed is None else int(seed))
 
     def pull(self, round_idx: int) -> int:
         self.current_round = max(1, int(round_idx))

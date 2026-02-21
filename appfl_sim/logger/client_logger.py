@@ -190,10 +190,8 @@ class ClientAgentFileLogger:
     def log_title(self, titles: List) -> None:
         self.titles = titles
         self._widths = [max(len(str(t)), 10) for t in titles]
-        if not self.show_titles:
-            return
-        title = " ".join(["%*s" % (ln, t) for ln, t in zip(self._widths, titles)])
-        self.info(title, round_label=self._round_label)
+        # Do not emit an unconditional header line here.
+        # Headers are emitted by `log_content` according to `title_every_n`.
 
     def set_title(self, titles: List) -> None:
         if not hasattr(self, "titles"):

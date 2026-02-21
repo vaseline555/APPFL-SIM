@@ -40,7 +40,7 @@ algorithm:
   scheduler_kwargs:
     action_space: [50, 200, 800, 3200]
     window_size: 10
-    likelihood_variance: 1.0
+    likelihood_variance: 0.1
     prior_variance: 1.0
     seed: 42
   trainer_kwargs: {}

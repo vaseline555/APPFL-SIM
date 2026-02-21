@@ -214,6 +214,7 @@ def run_serial(config) -> None:
     interrupted = False
     try:
         for round_idx in range(1, num_rounds + 1):
+            round_t0 = time.time()
             selected_ids = _sample_train_clients(
                 train_client_ids=train_client_ids,
                 num_sampled_clients=int(num_sampled_clients),
@@ -405,6 +406,7 @@ def run_serial(config) -> None:
                 stats,
                 weights,
                 round_local_steps=round_local_steps,
+                round_wall_time_sec=(time.time() - round_t0),
                 global_gen_error=round_gen_error,
                 global_eval_metrics=global_eval_metrics,
                 federated_eval_metrics=federated_eval_metrics,
@@ -618,6 +620,7 @@ def run_distributed(config, backend: str) -> None:
     interrupted = False
     try:
         for round_idx in range(1, num_rounds + 1):
+            round_t0 = time.time() if rank == 0 else None
             if rank == 0:
                 selected_ids = _sample_train_clients(
                     train_client_ids=train_client_ids,
@@ -809,6 +812,11 @@ def run_distributed(config, backend: str) -> None:
                         stats,
                         weights,
                         round_local_steps=round_local_steps,
+                        round_wall_time_sec=(
+                            (time.time() - float(round_t0))
+                            if isinstance(round_t0, (int, float))
+                            else None
+                        ),
                         global_gen_error=round_gen_error,
                         global_eval_metrics=global_eval_metrics,
                     federated_eval_metrics=federated_eval_metrics,

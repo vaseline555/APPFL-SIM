@@ -510,8 +510,6 @@ class ClientAgent:
             )
         if hasattr(self.client_agent_config, "experiment_id"):
             kwargs["experiment_id"] = self.client_agent_config.experiment_id
-        kwargs["title_every_n"] = 1
-        kwargs["show_titles"] = True
         self.logger = ClientAgentFileLogger(**kwargs)
 
     def _load_data(self) -> None:

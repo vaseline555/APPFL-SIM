@@ -138,6 +138,7 @@ def _log_round(
     stats,
     weights,
     round_local_steps: Optional[int] = None,
+    round_wall_time_sec: Optional[float] = None,
     global_gen_error: Optional[float] = None,
     global_eval_metrics: Optional[Dict[str, float]] = None,
     federated_eval_metrics: Optional[Dict[str, float]] = None,
@@ -199,6 +200,10 @@ def _log_round(
     if round_local_steps is not None:
         round_metrics["policy"] = {"tau_t": int(round_local_steps)}
         lines.append(_entity_line("Policy:", f"tau_t={int(round_local_steps)}"))
+    if isinstance(round_wall_time_sec, (int, float)):
+        wall_sec = float(round_wall_time_sec)
+        round_metrics["timing"] = {"round_wall_time_sec": wall_sec}
+        lines.append(_entity_line("Round Time:", f"{wall_sec:.3f}s"))
 
     if stats:
         train_parts: List[str] = []

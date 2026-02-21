@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Mapping, Tuple
 
@@ -391,11 +392,29 @@ def _load_torchvision_model(spec: ModelSpec):
     pretrained = bool(spec.model_kwargs.get("pretrained", False))
     model_name = str(spec.name).strip()
 
+    def _build_with_pruning(build_fn, init_kwargs: Dict[str, Any]):
+        curr = dict(init_kwargs)
+        while True:
+            try:
+                return build_fn(**curr)
+            except TypeError as e:
+                msg = str(e)
+                hit = re.search(r"unexpected keyword argument ['\"]([^'\"]+)['\"]", msg)
+                if hit is None:
+                    raise
+                bad_key = str(hit.group(1))
+                if bad_key not in curr:
+                    raise
+                curr.pop(bad_key, None)
+
     if hasattr(tv_models, "get_model"):
         if pretrained:
             kwargs.setdefault("weights", "DEFAULT")
         kwargs.setdefault("num_classes", int(spec.num_classes))
-        return tv_models.get_model(model_name, **kwargs)
+        return _build_with_pruning(
+            lambda **kw: tv_models.get_model(model_name, **kw),
+            kwargs,
+        )
 
     if not hasattr(tv_models, model_name):
         available = sorted(
@@ -411,7 +430,7 @@ def _load_torchvision_model(spec: ModelSpec):
     if pretrained:
         kwargs.setdefault("pretrained", True)
     kwargs.setdefault("num_classes", int(spec.num_classes))
-    return model_fn(**kwargs)
+    return _build_with_pruning(model_fn, kwargs)
 
 
 def _load_torchtext_model(spec: ModelSpec):

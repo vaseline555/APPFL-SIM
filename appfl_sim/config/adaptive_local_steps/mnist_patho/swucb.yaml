@@ -1,5 +1,5 @@
 experiment:
-  name: mnist_pahto_swucb
+  name: mnist_patho_swucb
   seed: 42
   device: cuda
   server_device: cuda
