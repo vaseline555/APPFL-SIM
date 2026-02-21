@@ -199,6 +199,7 @@ def _build_train_cfg(
         "lr_decay_t_max": int(_cfg_get(config, "optimization.lr_decay.t_max", 0)),
         "lr_decay_eta_min": float(_cfg_get(config, "optimization.lr_decay.eta_min", 0.0)),
         "lr_decay_min_lr": float(_cfg_get(config, "optimization.lr_decay.min_lr", 0.0)),
+        "num_rounds": int(_cfg_get(config, "train.num_rounds", 20)),
         "max_grad_norm": float(_cfg_get(config, "train.max_grad_norm", 0.0)),
         "logging_output_dirname": str(run_log_dir),
         "logging_output_filename": "client",

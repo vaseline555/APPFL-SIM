@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 from omegaconf import DictConfig
-from torch.utils.data import ConcatDataset, random_split
+from torch.utils.data import ConcatDataset, Subset, random_split
 from appfl_sim.logger import ServerAgentFileLogger
 from appfl_sim.misc.config_utils import _cfg_get, _cfg_set
 
@@ -84,6 +84,90 @@ def _safe_split_lengths(n: int, ratios: List[float]) -> List[int]:
                 lengths[idx] = 1
     return lengths
 
+
+def _dataset_targets(dataset) -> Optional[np.ndarray]:
+    try:
+        n = int(len(dataset))
+    except Exception:
+        return None
+    if n <= 0:
+        return np.asarray([], dtype=np.int64)
+
+    targets = getattr(dataset, "targets", None)
+    if targets is not None:
+        if torch.is_tensor(targets):
+            arr = targets.detach().cpu().numpy()
+        else:
+            arr = np.asarray(targets)
+        if arr.size == n:
+            return arr.reshape(-1).astype(np.int64, copy=False)
+
+    out = np.empty(n, dtype=np.int64)
+    for i in range(n):
+        try:
+            item = dataset[i]
+        except Exception:
+            return None
+        if not isinstance(item, (tuple, list)) or len(item) < 2:
+            return None
+        y = item[1]
+        if torch.is_tensor(y):
+            if y.numel() == 0:
+                return None
+            y = y.reshape(-1)[0].item()
+        elif isinstance(y, np.ndarray):
+            if y.size == 0:
+                return None
+            y = y.reshape(-1)[0].item()
+        out[i] = int(y)
+    return out
+
+
+def _stratified_split_dataset(
+    dataset,
+    ratios: List[float],
+    seed: int,
+):
+    total = int(len(dataset))
+    labels = _dataset_targets(dataset)
+    if labels is None or labels.size != total:
+        return None
+
+    rng = np.random.default_rng(seed)
+    num_parts = len(ratios)
+    split_bins = [[] for _ in range(num_parts)]
+    all_indices = np.arange(total, dtype=np.int64)
+    classes = np.unique(labels)
+
+    for cls in classes:
+        cls_idx = all_indices[labels == cls]
+        if cls_idx.size == 0:
+            continue
+        cls_idx = rng.permutation(cls_idx)
+        expected = np.asarray(ratios, dtype=float) * float(cls_idx.size)
+        counts = np.floor(expected).astype(int)
+        remain = int(cls_idx.size - counts.sum())
+        if remain > 0:
+            order = np.argsort(-(expected - counts))
+            for j in range(remain):
+                counts[int(order[j % num_parts])] += 1
+        cursor = 0
+        for part_id, cnt in enumerate(counts.tolist()):
+            if cnt <= 0:
+                continue
+            split_bins[part_id].append(cls_idx[cursor : cursor + cnt])
+            cursor += cnt
+
+    subsets = []
+    for part in split_bins:
+        if part:
+            idx = np.concatenate(part).astype(np.int64, copy=False)
+            idx = rng.permutation(idx)
+        else:
+            idx = np.asarray([], dtype=np.int64)
+        subsets.append(Subset(dataset, idx.tolist()))
+    return subsets
+
 def _normalize_client_tuple(entry) -> Tuple[Optional[object], Optional[object], Optional[object]]:
     if not isinstance(entry, tuple):
         raise ValueError("Each client dataset entry must be a tuple.")
@@ -132,9 +216,16 @@ def _apply_holdout_dataset_ratio(
             else:
                 out.append((merged, merged, merged))
             continue
-        lengths = _safe_split_lengths(total, ratios)
-        generator = torch.Generator().manual_seed(seed + 7919 + int(cid))
-        splits = random_split(merged, lengths, generator=generator)
+        split_seed = seed + 7919 + int(cid)
+        splits = _stratified_split_dataset(
+            merged,
+            ratios=ratios,
+            seed=split_seed,
+        )
+        if splits is None:
+            lengths = _safe_split_lengths(total, ratios)
+            generator = torch.Generator().manual_seed(split_seed)
+            splits = random_split(merged, lengths, generator=generator)
         if train_only:
             out.append((splits[0], None, None))
         elif len(ratios) == 2:

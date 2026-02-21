@@ -1,5 +1,5 @@
 experiment:
-  name: alg-fedavg
+  name: mnist_patho_swts
   seed: 42
   device: cuda
   server_device: cuda
@@ -20,24 +20,29 @@ model:
   name: LeNet
   backend: local
 train:
-  num_rounds: 200
+  num_rounds: 500
   num_clients: 10
   num_sampled_clients: 10
   update_base: iter
-  local_iters: 150
+  local_iters: 1
   batch_size: 32
   shuffle: true
   eval_batch_size: 256
 algorithm:
-  name: fedavg
+  name: swts
   mix_coefs: sample_ratio
   optimize_memory: true
   aggregator: FedAvgAggregator
-  scheduler: SyncScheduler
+  scheduler: SwtsScheduler
   trainer: VanillaTrainer
   aggregator_kwargs:
     client_weights_mode: sample_ratio
-  scheduler_kwargs: {}
+  scheduler_kwargs:
+    action_space: [50, 200, 800, 32000]
+    window_size: 10
+    likelihood_variance: 1.0
+    prior_variance: 1.0
+    seed: 42
   trainer_kwargs: {}
 optimization:
   optimizer: SGD
@@ -69,7 +74,7 @@ eval:
     - 10
 logging:
   path: ./logs
-  name: genfl_fedavg
+  name: genfl_swts
   backend: file
   type: both
   configs:

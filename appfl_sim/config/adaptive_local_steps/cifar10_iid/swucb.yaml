@@ -1,5 +1,5 @@
 experiment:
-  name: alg-fedavg
+  name: cifar10_iid_swucb
   seed: 42
   device: cuda
   server_device: cuda
@@ -7,37 +7,38 @@ experiment:
   stateful: false
 dataset:
   path: ./data
-  name: MNIST
+  name: CIFAR10
   backend: auto
   download: true
 split:
-  type: pathological
+  type: iid
   infer_num_clients: false
-  configs:
-    min_classes: 2
 model:
   path: ./models
-  name: LeNet
-  backend: local
+  name: VGG11
+  backend: torchvision
 train:
-  num_rounds: 200
+  num_rounds: 500
   num_clients: 10
   num_sampled_clients: 10
   update_base: iter
-  local_iters: 150
+  local_iters: 1
   batch_size: 32
   shuffle: true
   eval_batch_size: 256
 algorithm:
-  name: fedavg
+  name: swucb
   mix_coefs: sample_ratio
   optimize_memory: true
   aggregator: FedAvgAggregator
-  scheduler: SyncScheduler
+  scheduler: SwucbScheduler
   trainer: VanillaTrainer
   aggregator_kwargs:
     client_weights_mode: sample_ratio
-  scheduler_kwargs: {}
+  scheduler_kwargs:
+    action_space: [50, 200, 800, 3200]
+    window_size: 10
+    exploration_alpha: 0.1
   trainer_kwargs: {}
 optimization:
   optimizer: SGD
@@ -69,7 +70,7 @@ eval:
     - 10
 logging:
   path: ./logs
-  name: genfl_fedavg
+  name: genfl_swucb
   backend: file
   type: both
   configs:

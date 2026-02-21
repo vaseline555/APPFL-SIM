@@ -459,17 +459,45 @@ def split_subset_for_client(
     sample_indices = rng.permutation(sample_indices)
 
     n = len(sample_indices)
-    n_test = int(n * test_size)
-    if test_size > 0 and n > 1:
-        n_test = max(1, min(n_test, n - 1))
+    if not (test_size > 0 and n > 1):
+        train_idx = sample_indices
+        test_idx = np.asarray([], dtype=np.int64)
     else:
-        n_test = 0
-
-    test_idx = sample_indices[:n_test]
-    train_idx = sample_indices[n_test:]
+        # Class-aware split: keep at least one example per class in train when possible.
+        targets_all = extract_targets(raw_train)
+        local_targets = targets_all[sample_indices]
+        train_parts = []
+        test_parts = []
+        for cls in np.unique(local_targets):
+            cls_mask = local_targets == cls
+            cls_indices = sample_indices[cls_mask]
+            cls_indices = rng.permutation(cls_indices)
+            if len(cls_indices) <= 1:
+                train_parts.append(cls_indices)
+                continue
+            cls_n_test = int(len(cls_indices) * float(test_size))
+            cls_n_test = max(1, min(cls_n_test, len(cls_indices) - 1))
+            test_parts.append(cls_indices[:cls_n_test])
+            train_parts.append(cls_indices[cls_n_test:])
+        train_idx = (
+            np.concatenate(train_parts).astype(np.int64)
+            if train_parts
+            else np.asarray([], dtype=np.int64)
+        )
+        test_idx = (
+            np.concatenate(test_parts).astype(np.int64)
+            if test_parts
+            else np.asarray([], dtype=np.int64)
+        )
+        train_idx = rng.permutation(train_idx) if len(train_idx) > 0 else train_idx
+        test_idx = rng.permutation(test_idx) if len(test_idx) > 0 else test_idx
 
     train_subset = Subset(raw_train, train_idx.tolist())
-    test_subset = Subset(raw_train, test_idx.tolist()) if n_test > 0 else Subset(raw_train, [])
+    test_subset = (
+        Subset(raw_train, test_idx.tolist())
+        if len(test_idx) > 0
+        else Subset(raw_train, [])
+    )
 
     train_targets = extract_targets(train_subset) if len(train_subset) > 0 else np.array([], dtype=np.int64)
     test_targets = extract_targets(test_subset) if len(test_subset) > 0 else np.array([], dtype=np.int64)

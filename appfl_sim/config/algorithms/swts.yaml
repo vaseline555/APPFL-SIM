@@ -20,7 +20,7 @@ model:
   name: LeNet
   backend: local
 train:
-  num_rounds: 200
+  num_rounds: 500
   num_clients: 10
   num_sampled_clients: 10
   update_base: iter
@@ -39,7 +39,7 @@ algorithm:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
     action_space: [50, 100, 500, 1000]
-    window_size: 3
+    window_size: 10
     likelihood_variance: 1.0
     prior_variance: 1.0
     seed: 42

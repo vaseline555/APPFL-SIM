@@ -1,5 +1,5 @@
 experiment:
-  name: alg-fedavg
+  name: mnist_iid_fedavg
   seed: 42
   device: cuda
   server_device: cuda
@@ -11,20 +11,18 @@ dataset:
   backend: auto
   download: true
 split:
-  type: pathological
+  type: iid
   infer_num_clients: false
-  configs:
-    min_classes: 2
 model:
   path: ./models
   name: LeNet
   backend: local
 train:
-  num_rounds: 200
+  num_rounds: 500
   num_clients: 10
   num_sampled_clients: 10
   update_base: iter
-  local_iters: 150
+  local_iters: 50
   batch_size: 32
   shuffle: true
   eval_batch_size: 256
