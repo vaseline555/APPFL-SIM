@@ -162,10 +162,10 @@ def run_serial(config) -> None:
     )
     eager_clients = None
     worker_pool: Optional[List[ClientAgent]] = None
-    use_on_demand = not bool(state_policy["stateful"])
-    on_demand_model = copy.deepcopy(model) if use_on_demand else None
+    stateful_mode = bool(state_policy["stateful"])
+    on_demand_model = None if stateful_mode else copy.deepcopy(model)
 
-    if not use_on_demand:
+    if stateful_mode:
         eager_clients = _build_clients(
             config=config,
             model=model,
@@ -192,6 +192,11 @@ def run_serial(config) -> None:
                 trainer_name=str(algorithm_components["trainer_name"]),
                 pool_size=chunk_size,
                 num_workers_override=on_demand_workers["train"],
+            )
+    if stateful_mode:
+        if eager_clients is None or worker_pool is not None:
+            raise RuntimeError(
+                "Invalid client lifecycle: experiment.stateful=true requires persistent eager clients."
             )
 
     server_logger.info(
@@ -527,11 +532,11 @@ def run_distributed(config, backend: str) -> None:
     )
     eager_clients = None
     worker_pool: Optional[List[ClientAgent]] = None
-    use_on_demand = not bool(state_policy["stateful"])
-    on_demand_model = copy.deepcopy(model) if use_on_demand else None
+    stateful_mode = bool(state_policy["stateful"])
+    on_demand_model = None if stateful_mode else copy.deepcopy(model)
     local_client_logging_enabled = bool(logging_policy["client_logging_enabled"])
 
-    if not use_on_demand:
+    if stateful_mode:
         eager_clients = _build_clients(
             config=config,
             model=model,
@@ -558,6 +563,11 @@ def run_distributed(config, backend: str) -> None:
                 trainer_name=str(algorithm_components["trainer_name"]),
                 pool_size=chunk_size,
                 num_workers_override=on_demand_workers["train"],
+            )
+    if stateful_mode:
+        if eager_clients is None or worker_pool is not None:
+            raise RuntimeError(
+                "Invalid client lifecycle: experiment.stateful=true requires persistent eager clients."
             )
 
     tracker = None

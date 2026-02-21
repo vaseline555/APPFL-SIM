@@ -4,7 +4,7 @@ experiment:
   device: cuda
   server_device: cuda
   backend: nccl
-  stateful: false
+  stateful: true
 dataset:
   path: ./data
   name: MNIST

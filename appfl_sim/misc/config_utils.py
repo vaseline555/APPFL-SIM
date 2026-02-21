@@ -12,7 +12,6 @@ def _default_config_path() -> Path:
     package_root = Path(__file__).resolve().parent.parent
     candidates = [
         package_root / "config" / "examples" / "simulation.yaml",
-        package_root.parent / "config" / "examples" / "simulation.yaml",
     ]
     for path in candidates:
         if path.exists():
@@ -259,7 +258,6 @@ def _resolve_client_state_policy(config: DictConfig) -> Dict[str, object]:
 
     return {
         "stateful": bool(stateful),
-        "use_on_demand": not bool(stateful),
         "source": source,
     }
 

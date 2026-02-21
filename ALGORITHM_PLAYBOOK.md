@@ -193,7 +193,7 @@ PYTHONPATH=. .venv/bin/python tools/export_appfl_plugin.py \
 Exporter output includes:
 - APPFL-style module files under `src/appfl/algorithm/...`
 - Auto-vendored `src/appfl/metrics/*` when exported trainer depends on `MetricsManager`.
-- Config template under `config/algorithms/<algo>.yaml`
+- Config template under `appfl_sim/config/algorithms/<algo>.yaml`
 - Patch/install instructions (artifact mode)
 - Optional compatibility audit with APPFL tree:
   `--check-appfl-root /path/to/APPFL-main`
