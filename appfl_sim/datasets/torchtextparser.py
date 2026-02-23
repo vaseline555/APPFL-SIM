@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 
 from appfl_sim.datasets.common import (
-    TensorBackedDataset,
+    BasicTensorDataset,
     clientize_raw_dataset,
     finalize_dataset_outputs,
     infer_num_classes,
@@ -23,13 +23,12 @@ logger = logging.getLogger(__name__)
 def _tokenizer_from_args(args):
     tokenizer = None
     if bool(args.use_model_tokenizer):
-        from transformers import AutoTokenizer
-
-        model_name = str(getattr(args, "model_name", "")).strip()
-        model_name = model_name if "/" in model_name else ""
-
-        tokenizer_name = model_name or "bert-base-uncased"
         try:
+            from transformers import AutoTokenizer
+
+            model_name = str(getattr(args, "model_name", "")).strip()
+            model_name = model_name if "/" in model_name else ""
+            tokenizer_name = model_name or "bert-base-uncased"
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
         except Exception:
             tokenizer = None
@@ -144,8 +143,8 @@ def fetch_torchtext_dataset(args):
         te_ids = torch.tensor([encode(t) for t in te_texts], dtype=torch.long)
         args.num_embeddings = len(vocab)
 
-    raw_train = TensorBackedDataset(tr_ids, tr_labels, name=f"[{args.dataset_name}] TRAIN")
-    raw_test = TensorBackedDataset(te_ids, te_labels, name=f"[{args.dataset_name}] TEST")
+    raw_train = BasicTensorDataset(tr_ids, tr_labels, name=f"[{args.dataset_name}] TRAIN")
+    raw_test = BasicTensorDataset(te_ids, te_labels, name=f"[{args.dataset_name}] TEST")
     active_logger.info("[%s] building federated client splits.", tag)
 
     client_datasets = clientize_raw_dataset(raw_train, args)

@@ -1,8 +1,9 @@
+import gc
 import torch
 from typing import Dict, OrderedDict, Union, Any, Optional
 from omegaconf import DictConfig
 from appfl_sim.algorithm.aggregator.fedavg_aggregator import FedAvgAggregator
-from appfl_sim.misc.system_utils import safe_inplace_operation, optimize_memory_cleanup
+from appfl_sim.misc.system_utils import safe_inplace_operation
 
 
 class FedNovaAggregator(FedAvgAggregator):
@@ -16,7 +17,7 @@ class FedNovaAggregator(FedAvgAggregator):
     def __init__(
         self,
         model: Optional[torch.nn.Module] = None,
-        aggregator_configs: DictConfig = DictConfig({}),
+        aggregator_configs: Optional[DictConfig] = None,
         logger: Optional[Any] = None,
     ):
         super().__init__(
@@ -77,9 +78,8 @@ class FedNovaAggregator(FedAvgAggregator):
                             self.step[name] = safe_inplace_operation(
                                 self.step[name], "add", weighted_diff
                             )
-                            optimize_memory_cleanup(
-                                diff, normalized_diff, weighted_diff, force_gc=False
-                            )
+                            del diff, normalized_diff, weighted_diff
+                gc.collect()
         else:
             for name in self.global_state:
                 if (

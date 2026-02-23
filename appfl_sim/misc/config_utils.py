@@ -5,18 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from omegaconf import DictConfig, OmegaConf
-from appfl_sim.logger import ServerAgentFileLogger
 
 
 def _default_config_path() -> Path:
     package_root = Path(__file__).resolve().parent.parent
-    candidates = [
-        package_root / "config" / "examples" / "simulation.yaml",
-    ]
-    for path in candidates:
-        if path.exists():
-            return path
-    return candidates[0]
+    return package_root / "config" / "examples" / "simulation.yaml"
 
 def _resolve_config_path(config_path: str) -> Path:
     raw = Path(config_path).expanduser()
@@ -55,22 +48,6 @@ def _resolve_config_path(config_path: str) -> Path:
         f"Config file not found for '{config_path}'. Tried:\n{tried}"
     )
 
-def _print_help() -> None:
-    print(
-        """
-        APPFL-SIM runner
-
-        Usage:
-        python -m appfl_sim.runner --config /path/to/config.yaml
-        appfl-sim experiment.backend=serial dataset.name=MNIST train.num_clients=3 train.num_rounds=2
-
-        Distributed notes:
-        - backend=nccl uses one process per visible GPU.
-        - backend=gloo uses CPU processes (auto-sized by CPU capacity and num_clients).
-        - backend=serial is the default for lightweight experiments.
-        """.strip()
-    )
-
 def _cfg_to_dict(cfg) -> Dict:
     if isinstance(cfg, DictConfig):
         return dict(OmegaConf.to_container(cfg, resolve=True))
@@ -78,7 +55,9 @@ def _cfg_to_dict(cfg) -> Dict:
         return dict(vars(cfg))
     if isinstance(cfg, dict):
         return dict(cfg)
-    return dict(vars(cfg))
+    if hasattr(cfg, "__dict__"):
+        return dict(vars(cfg))
+    return {}
 
 def _cfg_get(config: DictConfig | dict, path: str, default: Any = None) -> Any:
     parts = [p for p in str(path).split(".") if p]
@@ -165,6 +144,7 @@ def _build_train_cfg(
     device_text = str(device).strip().lower()
     default_pin_memory = device_text.startswith("cuda")
     pin_memory = _cfg_bool(config, "train.pin_memory", default_pin_memory)
+    stateful_mode = _cfg_bool(config, "experiment.stateful", False)
     update_base_raw = str(_cfg_get(config, "train.update_base", "epoch")).strip().lower()
     if update_base_raw == "iter":
         mode = "step"
@@ -185,8 +165,10 @@ def _build_train_cfg(
         "num_workers": int(num_workers),
         "train_pin_memory": _cfg_bool(config, "train.train_pin_memory", pin_memory),
         "eval_pin_memory": _cfg_bool(config, "train.eval_pin_memory", pin_memory),
-        "dataloader_persistent_workers": _cfg_bool(
-            config, "train.dataloader_persistent_workers", False
+        "dataloader_persistent_workers": (
+            True
+            if (stateful_mode and int(num_workers) > 0)
+            else _cfg_bool(config, "train.dataloader_persistent_workers", False)
         ),
         "dataloader_prefetch_factor": int(_cfg_get(config, "train.dataloader_prefetch_factor", 2)),
         "optim": str(_cfg_get(config, "optimization.optimizer", "SGD")),
@@ -245,32 +227,6 @@ def _resolve_client_logging_policy(
         "total_clients": int(num_clients),
         "forced_server_only": bool(forced_server_only),
     }
-
-def _resolve_client_state_policy(config: DictConfig) -> Dict[str, object]:
-    """Client lifecycle policy.
-
-    Default is stateless (on-demand): instantiate sampled client(s), run, then free.
-    Stateful mode is explicit via `experiment.stateful=true`.
-
-    """
-    stateful = _cfg_bool(config, "experiment.stateful", False)
-    source = "experiment.stateful"
-
-    return {
-        "stateful": bool(stateful),
-        "source": source,
-    }
-
-def _resolve_on_demand_worker_policy(
-    config: DictConfig,
-    logger: Optional[ServerAgentFileLogger] = None,
-) -> Dict[str, int]:
-    base_workers = max(0, int(_cfg_get(config, "train.num_workers", 0)))
-    train_workers = base_workers
-    eval_workers = base_workers
-    if logger is not None:
-        del logger
-    return {"train": train_workers, "eval": eval_workers}
 
 def _to_pascal_case(name: str) -> str:
     text = str(name or "").strip()
@@ -407,14 +363,15 @@ def _allow_reusable_on_demand_pool(
             return False
     return True
 
-def _merge_runtime_cfg(config: DictConfig, loader_args: SimpleNamespace | dict) -> Dict:
+def _merge_runtime_cfg(config: DictConfig, loader_args: Any) -> Dict:
     runtime_cfg = _cfg_to_dict(config)
-    if isinstance(loader_args, SimpleNamespace):
-        runtime_cfg.update(vars(loader_args))
-    elif isinstance(loader_args, dict):
+    if isinstance(loader_args, dict):
         runtime_cfg.update(loader_args)
-    runtime_cfg["num_clients"] = int(_cfg_get(config, "train.num_clients", runtime_cfg.get("K", 0)))
-    runtime_cfg["K"] = int(runtime_cfg["num_clients"])
+    elif hasattr(loader_args, "__dict__"):
+        runtime_cfg.update(vars(loader_args))
+    runtime_cfg["num_clients"] = int(
+        _cfg_get(config, "train.num_clients", runtime_cfg.get("num_clients", 0))
+    )
     return runtime_cfg
 
 def _resolve_num_sampled_clients(config: DictConfig, num_clients: int) -> int:
@@ -431,7 +388,7 @@ def _resolve_num_sampled_clients(config: DictConfig, num_clients: int) -> int:
 
     return int(num_clients)
 
-def _extract_config_path(argv: list[str]) -> tuple[str | None, list[str]]:
+def _parse_cli_tokens(argv: list[str]) -> tuple[str | None, str | None, list[str]]:
     config_path = None
     remaining: list[str] = []
     idx = 0
@@ -453,16 +410,26 @@ def _extract_config_path(argv: list[str]) -> tuple[str | None, list[str]]:
             continue
         remaining.append(token)
         idx += 1
-    return config_path, remaining
-
-def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
     backend = None
     out: list[str] = []
     idx = 0
-    while idx < len(tokens):
-        tok = tokens[idx]
+    while idx < len(remaining):
+        tok = remaining[idx]
         if tok in {"-h", "--help"}:
-            _print_help()
+            print(
+                """
+                APPFL-SIM runner
+
+                Usage:
+                python -m appfl_sim.runner --config /path/to/config.yaml
+                appfl-sim experiment.backend=serial dataset.name=MNIST train.num_clients=3 train.num_rounds=2
+
+                Distributed notes:
+                - backend=nccl uses one process per visible GPU.
+                - backend=gloo uses CPU processes (auto-sized by CPU capacity and num_clients).
+                - backend=serial is the default for lightweight experiments.
+                """.strip()
+            )
             raise SystemExit(0)
         if tok in {"serial", "nccl", "gloo"}:
             backend = tok
@@ -476,14 +443,14 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
                 out.append(f"{key.replace('-', '_')}={value}")
                 idx += 1
                 continue
-            key = keyval.replace("-", "_")
-            if idx + 1 < len(tokens) and not tokens[idx + 1].startswith("--"):
-                out.append(f"{key}={tokens[idx + 1]}")
-                idx += 2
-            else:
-                out.append(f"{key}=true")
-                idx += 1
-            continue
+                key = keyval.replace("-", "_")
+                if idx + 1 < len(remaining) and not remaining[idx + 1].startswith("--"):
+                    out.append(f"{key}={remaining[idx + 1]}")
+                    idx += 2
+                else:
+                    out.append(f"{key}=true")
+                    idx += 1
+                continue
         if "=" in tok:
             key, value = tok.split("=", 1)
             key = key.replace("-", "_")
@@ -492,4 +459,4 @@ def _normalize_cli_tokens(tokens: list[str]) -> tuple[str | None, list[str]]:
             else:
                 out.append(f"{key}={value}")
         idx += 1
-    return backend, out
+    return config_path, backend, out

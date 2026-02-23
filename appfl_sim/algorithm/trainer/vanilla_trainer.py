@@ -1,3 +1,4 @@
+import gc
 import copy
 import time
 import math
@@ -20,7 +21,6 @@ from appfl_sim.misc.system_utils import parse_device_str, apply_model_device
 from appfl_sim.misc.system_utils import (
     extract_model_state_optimized,
     safe_inplace_operation,
-    optimize_memory_cleanup,
 )
 import logging
 
@@ -42,10 +42,6 @@ try:
 except Exception:  # pragma: no cover
     PrivacyEngine = None
     BatchMemoryManager = None
-
-logging.getLogger().handlers.clear()
-logging.getLogger().setLevel(logging.WARNING)
-
 
 def _make_dataloader(
     dataset,
@@ -96,10 +92,12 @@ class VanillaTrainer(BaseTrainer):
         metric: Optional[Any] = None,
         train_dataset: Optional[Dataset] = None,
         val_dataset: Optional[Dataset] = None,
-        train_configs: DictConfig = DictConfig({}),
+        train_configs: Optional[DictConfig] = None,
         logger: Optional[Any] = None,
         **kwargs,
     ):
+        if train_configs is None:
+            train_configs = DictConfig({})
         super().__init__(
             model=model,
             loss_fn=loss_fn,
@@ -110,22 +108,19 @@ class VanillaTrainer(BaseTrainer):
             logger=logger,
             **kwargs,
         )
-        if not hasattr(train_configs, "mode"):
-            train_configs.mode = "epoch"
-        if not hasattr(train_configs, "optim"):
-            train_configs.optim = str(
-                train_configs.get("optimizer", train_configs.get("optim", "SGD"))
-            )
-        if not hasattr(train_configs, "lr"):
-            train_configs.lr = float(train_configs.get("lr", 0.01))
-        if not hasattr(train_configs, "weight_decay"):
-            train_configs.weight_decay = float(train_configs.get("weight_decay", 0.0))
-        if not hasattr(train_configs, "batch_size"):
-            train_configs.batch_size = int(train_configs.get("batch_size", 32))
-        if not hasattr(train_configs, "eval_batch_size"):
-            train_configs.eval_batch_size = int(
-                train_configs.get("eval_batch_size", train_configs.get("batch_size", 32))
-            )
+        train_configs.mode = str(train_configs.get("mode", "epoch"))
+        train_configs.optim = str(train_configs.get("optim", "SGD"))
+        train_configs.lr = float(train_configs.get("lr", 0.01))
+        train_configs.weight_decay = float(train_configs.get("weight_decay", 0.0))
+        train_configs.batch_size = int(train_configs.get("batch_size", 32))
+        train_configs.eval_batch_size = int(
+            train_configs.get("eval_batch_size", train_configs.get("batch_size", 32))
+        )
+        train_configs.device = str(train_configs.get("device", "cpu"))
+        if train_configs.mode == "epoch":
+            train_configs.num_local_epochs = int(train_configs.get("num_local_epochs", 1))
+        else:
+            train_configs.num_local_steps = int(train_configs.get("num_local_steps", 1))
         if (
             float(train_configs.get("max_grad_norm", 0.0)) > 0.0
             and not train_configs.get("clip_grad", False)
@@ -134,17 +129,22 @@ class VanillaTrainer(BaseTrainer):
             train_configs.clip_value = float(train_configs.max_grad_norm)
             train_configs.clip_norm = float(train_configs.get("clip_norm", 2.0))
 
-        # Check for optimize_memory in train_configs, default to True
-        self.optimize_memory = getattr(train_configs, "optimize_memory", True)
+        self.optimize_memory = bool(train_configs.get("optimize_memory", True))
         if self.metric is None:
             self.metric = _default_classification_accuracy
         self.eval_metric_names = parse_metric_names(
             self.train_configs.get("eval_metrics", None)
         )
+        self.model_state = None
+        self.val_results: Optional[Dict[str, Any]] = None
+        self.model_prev = None
+        self.named_parameters = (
+            {name for name, _ in self.model.named_parameters()} if self.model is not None else set()
+        )
 
         self.privacy_engine = None
-        if not hasattr(self.train_configs, "device"):
-            self.train_configs.device = "cpu"
+        if self.train_dataset is None:
+            raise ValueError("train_dataset must be provided for VanillaTrainer.")
         num_workers = int(self.train_configs.get("num_workers", 0))
         train_pin_memory = bool(self.train_configs.get("train_pin_memory", False))
         eval_pin_memory = bool(
@@ -177,7 +177,7 @@ class VanillaTrainer(BaseTrainer):
             if self.val_dataset is not None
             else None
         )
-        self.test_dataset = getattr(self, "test_dataset", None)
+        self.test_dataset = kwargs.get("test_dataset", None)
         self.test_dataloader = (
             _make_dataloader(
                 self.test_dataset,
@@ -191,10 +191,7 @@ class VanillaTrainer(BaseTrainer):
             if self.test_dataset is not None
             else None
         )
-        if (
-            hasattr(self.train_configs, "enable_wandb")
-            and self.train_configs.enable_wandb
-        ):
+        if bool(self.train_configs.get("enable_wandb", False)):
             self.enabled_wandb = True
             self.wandb_logging_id = self.train_configs.wandb_logging_id
         else:
@@ -295,15 +292,10 @@ class VanillaTrainer(BaseTrainer):
 
     def _offload_model_to_cpu(self) -> None:
         """Move model/loss to CPU to avoid VRAM accumulation across many clients."""
-        try:
-            self.model = self.model.to("cpu")
-        except Exception:
-            pass
-        try:
-            if hasattr(self.loss_fn, "to"):
-                self.loss_fn = self.loss_fn.to("cpu")
-        except Exception:
-            pass
+        self.model = self.model.to("cpu")
+        loss_to = getattr(self.loss_fn, "to", None)
+        if callable(loss_to):
+            self.loss_fn = loss_to("cpu")
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
@@ -315,7 +307,7 @@ class VanillaTrainer(BaseTrainer):
             return None
 
         base_lr = float(self.train_configs.get("lr", 0.01))
-        round_idx = max(1, int(getattr(self, "round", 1)))
+        round_idx = max(1, int(self.round))
         elapsed_rounds = max(0, round_idx - 1)
 
         if decay_type in {"exp", "exponential"}:
@@ -362,8 +354,9 @@ class VanillaTrainer(BaseTrainer):
                 override_local_steps = max(1, int(override_local_steps))
             except Exception:
                 override_local_steps = None
-        if hasattr(self.logger, "set_round_label"):
-            self.logger.set_round_label(f"Round {int(self.round):04d}")
+        set_round_label = getattr(self.logger, "set_round_label", None)
+        if callable(set_round_label):
+            set_round_label(f"Round {int(self.round):04d}")
         self.val_results = {"round": self.round + 1}
 
         # Store the previous model state for gradient computation
@@ -546,10 +539,9 @@ class VanillaTrainer(BaseTrainer):
 
         # Start training
         optim_module = importlib.import_module("torch.optim")
-        optim_name = self.train_configs.get("optim", self.train_configs.get("optimizer", "SGD"))
-        assert hasattr(optim_module, optim_name), (
-            f"Optimizer {optim_name} not found in torch.optim"
-        )
+        optim_name = self.train_configs.get("optim", "SGD")
+        if optim_name not in optim_module.__dict__:
+            raise ValueError(f"Optimizer {optim_name} not found in torch.optim")
         optimizer = getattr(optim_module, optim_name)(
             self.model.parameters(),
             lr=float(self.train_configs.get("lr", 0.01)),
@@ -740,7 +732,7 @@ class VanillaTrainer(BaseTrainer):
                 for _ in range(effective_local_steps):
                     try:
                         data, target = next(data_iter)
-                    except:  # noqa E722
+                    except StopIteration:
                         data_iter = iter(self.train_dataloader)
                         data, target = next(data_iter)
                     loss, pred, label = self._train_batch(optimizer, data, target)
@@ -846,12 +838,14 @@ class VanillaTrainer(BaseTrainer):
         if self.train_configs.get("use_dp", False) and (
             self.train_configs.get("dp_mechanism", "laplace") == "gaussian"
         ):
-            assert hasattr(self.train_configs, "clip_value"), (
-                "Using laplace differential privacy, and gradient clipping value must be specified"
-            )
-            assert hasattr(self.train_configs, "epsilon"), (
-                "Using laplace differential privacy, and privacy budget (epsilon) must be specified"
-            )
+            if "clip_value" not in self.train_configs:
+                raise ValueError(
+                    "Using gaussian differential privacy requires train_configs.clip_value."
+                )
+            if "epsilon" not in self.train_configs:
+                raise ValueError(
+                    "Using gaussian differential privacy requires train_configs.epsilon."
+                )
             sensitivity = (
                 2.0 * self.train_configs.clip_value * float(self.train_configs.get("lr", 0.01))
             )
@@ -863,12 +857,14 @@ class VanillaTrainer(BaseTrainer):
         elif self.train_configs.get("use_dp", False) and (
             self.train_configs.get("dp_mechanism", "laplace") == "laplace"
         ):
-            assert hasattr(self.train_configs, "clip_value"), (
-                "Using laplace differential privacy, and gradient clipping value must be specified"
-            )
-            assert hasattr(self.train_configs, "epsilon"), (
-                "Using laplace differential privacy, and privacy budget (epsilon) must be specified"
-            )
+            if "clip_value" not in self.train_configs:
+                raise ValueError(
+                    "Using laplace differential privacy requires train_configs.clip_value."
+                )
+            if "epsilon" not in self.train_configs:
+                raise ValueError(
+                    "Using laplace differential privacy requires train_configs.epsilon."
+                )
             sensitivity = (
                 2.0 * self.train_configs.clip_value * float(self.train_configs.get("lr", 0.01))
             )
@@ -943,10 +939,9 @@ class VanillaTrainer(BaseTrainer):
                     len(self.train_dataset)
                 ),
             }
-            if hasattr(self, "model_prev"):
-                del self.model_prev
+            del self.model_prev
             del local_state, delta_state
-            optimize_memory_cleanup(force_gc=True)
+            gc.collect()
         else:
             # Move to CPU for communication
             if "cuda" in self.train_configs.device:
@@ -954,7 +949,7 @@ class VanillaTrainer(BaseTrainer):
                     for k in self.model_state:
                         if self.model_state[k].device.type != "cpu":
                             self.model_state[k] = self.model_state[k].cpu()
-                    optimize_memory_cleanup(force_gc=True)
+                    gc.collect()
                 else:
                     for k in self.model_state:
                         self.model_state[k] = self.model_state[k].cpu()
@@ -962,9 +957,8 @@ class VanillaTrainer(BaseTrainer):
             # Compute the gradient if needed
             if send_gradient:
                 self._compute_gradient()
-                if hasattr(self, "model_prev"):
-                    del self.model_prev
-                optimize_memory_cleanup(force_gc=True)
+                del self.model_prev
+                gc.collect()
 
         if self._should_offload_after_local_job():
             self._offload_model_to_cpu()
@@ -1039,7 +1033,7 @@ class VanillaTrainer(BaseTrainer):
         return result
 
     def get_parameters(self) -> Dict:
-        if not hasattr(self, "model_state"):
+        if self.model_state is None:
             if self.optimize_memory:
                 self.model_state = extract_model_state_optimized(
                     self.model, include_buffers=True, cpu_transfer=True
@@ -1050,7 +1044,7 @@ class VanillaTrainer(BaseTrainer):
                 }
         return (
             (self.model_state, self.val_results)
-            if hasattr(self, "val_results")
+            if self.val_results is not None
             else self.model_state
         )
 
@@ -1058,19 +1052,16 @@ class VanillaTrainer(BaseTrainer):
         """
         Check if the configurations are valid.
         """
-        assert hasattr(self.train_configs, "mode"), "Training mode must be specified"
-        assert self.train_configs.mode in [
-            "epoch",
-            "step",
-        ], "Training mode must be either 'epoch' or 'step'"
+        if "mode" not in self.train_configs:
+            raise ValueError("Training mode must be specified.")
+        if self.train_configs.mode not in {"epoch", "step"}:
+            raise ValueError("Training mode must be either 'epoch' or 'step'.")
         if self.train_configs.mode == "epoch":
-            assert hasattr(self.train_configs, "num_local_epochs"), (
-                "Number of local epochs must be specified"
-            )
+            if "num_local_epochs" not in self.train_configs:
+                raise ValueError("Number of local epochs must be specified.")
         else:
-            assert hasattr(self.train_configs, "num_local_steps"), (
-                "Number of local steps must be specified"
-            )
+            if "num_local_steps" not in self.train_configs:
+                raise ValueError("Number of local steps must be specified.")
 
     @torch.no_grad()
     def evaluate(
@@ -1132,8 +1123,9 @@ class VanillaTrainer(BaseTrainer):
         device = self.device
         was_training = self.model.training
         self.model = apply_model_device(self.model, self.device_config, device)
-        if hasattr(self.loss_fn, "to"):
-            self.loss_fn = self.loss_fn.to(device)
+        loss_to = getattr(self.loss_fn, "to", None)
+        if callable(loss_to):
+            self.loss_fn = loss_to(device)
         self.model.eval()
         manager = self._new_metrics_manager()
         total_examples = 0
@@ -1174,13 +1166,11 @@ class VanillaTrainer(BaseTrainer):
         output = self.model(data)
         loss = self.loss_fn(output, target)
         loss.backward()
-        if getattr(self.train_configs, "clip_grad", False):
-            assert hasattr(self.train_configs, "clip_value"), (
-                "Gradient clipping value must be specified"
-            )
-            assert hasattr(self.train_configs, "clip_norm"), (
-                "Gradient clipping norm must be specified"
-            )
+        if bool(self.train_configs.get("clip_grad", False)):
+            if "clip_value" not in self.train_configs:
+                raise ValueError("Gradient clipping value must be specified.")
+            if "clip_norm" not in self.train_configs:
+                raise ValueError("Gradient clipping norm must be specified.")
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(),
                 self.train_configs.clip_value,
@@ -1194,11 +1184,6 @@ class VanillaTrainer(BaseTrainer):
         Compute the gradient of the model and store in `self.model_state`,
         where gradient = prev_model - new_model
         """
-        if not hasattr(self, "named_parameters"):
-            self.named_parameters = set()
-            for name, _ in self.model.named_parameters():
-                self.named_parameters.add(name)
-
         if self.optimize_memory:
             with torch.no_grad():
                 for name in self.model_state:
@@ -1211,8 +1196,8 @@ class VanillaTrainer(BaseTrainer):
                         self.model_state[name] = safe_inplace_operation(
                             prev_param, "sub", self.model_state[name], alpha=1
                         )
-            optimize_memory_cleanup(self.model_prev, force_gc=True)
             del self.model_prev
+            gc.collect()
         else:
             for name in self.model_state:
                 if name in self.named_parameters:

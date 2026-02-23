@@ -263,20 +263,6 @@ def safe_inplace_operation(
     return tensor
 
 
-def optimize_memory_cleanup(
-    *objects: Any,
-    force_gc: bool = True,
-    clear_cuda_cache: bool = False,
-) -> None:
-    for obj in objects:
-        if obj is not None:
-            del obj
-    if force_gc:
-        gc.collect()
-    if clear_cuda_cache and torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-
 def _maybe_force_server_cpu(
     config: DictConfig,
     enable_global_eval: bool,

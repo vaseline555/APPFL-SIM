@@ -134,7 +134,6 @@ def fetch_flamby(args):
         server_dataset = client_datasets[0][1] if client_datasets else None
 
     args.num_clients = len(client_datasets)
-    args.K = len(client_datasets)
     args.flamby_center_ids = [int(c) for c in selected_centers]
     args.num_classes = int(cfg["num_classes"])
     args.need_embedding = False

@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from appfl_sim.datasets.common import (
-    TensorBackedDataset,
+    BasicTensorDataset,
     extract_targets,
     make_load_tag,
     package_dataset_outputs,
@@ -83,7 +83,7 @@ def fetch_tff_dataset(args):
 
             x_tensor = torch.stack(xs) if xs else torch.zeros(0, 1, 28, 28)
             y_tensor = torch.tensor(ys, dtype=torch.long)
-            full_ds = TensorBackedDataset(
+            full_ds = BasicTensorDataset(
                 x_tensor, y_tensor, name=f"[TFF-EMNIST] CLIENT<{cid}>"
             )
 
@@ -139,7 +139,7 @@ def fetch_tff_dataset(args):
 
             x_tensor = torch.stack(xs) if xs else torch.zeros(0, 3, 84, 84)
             y_tensor = torch.tensor(ys, dtype=torch.long)
-            full_ds = TensorBackedDataset(
+            full_ds = BasicTensorDataset(
                 x_tensor, y_tensor, name=f"[TFF-CELEBA] CLIENT<{cid}>"
             )
 
@@ -214,7 +214,7 @@ def fetch_tff_dataset(args):
                 torch.stack(xs) if xs else torch.zeros(0, seq_len, dtype=torch.long)
             )
             y_tensor = torch.tensor(ys, dtype=torch.long)
-            full_ds = TensorBackedDataset(
+            full_ds = BasicTensorDataset(
                 x_tensor, y_tensor, name=f"[TFF-{tff_name.upper()}] CLIENT<{cid}>"
             )
 

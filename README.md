@@ -124,7 +124,8 @@ Built-in dataset loader modes:
 
 - `auto` (routes by dataset name)
 - `custom` (user callable/path-based parser)
-- `external` (external data sources: `hf`, `timm`)
+- `hf` (HuggingFace datasets; `dataset.name` can be plain repo id like `randall-lab/beans` or `hf:<repo>`)
+- `external` (external data sources: `hf`, `timm`; use `dataset.configs.source` or `dataset.name=timm:<name>`)
 - `torchvision`, `torchtext`, `torchaudio`, `medmnist`
 - `flamby` (adapted from APPFL example loader)
 - `leaf` (adapted LEAF loader with optional auto download+preprocess)
@@ -146,6 +147,7 @@ Internal parser modules live under `appfl_sim/datasets/`:
 - `tffparser.py`
 - `customparser.py`
 - `externalparser.py`
+- `hfparser.py`
 
 Fixed-pool dataset client selection knobs (`leaf` / `flamby` / `tff`):
 

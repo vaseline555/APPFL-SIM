@@ -2,13 +2,12 @@ import gc
 import copy
 import torch
 from omegaconf import DictConfig
-from appfl_sim.algorithm.aggregator import BaseAggregator
+from appfl_sim.algorithm.aggregator.base_aggregator import BaseAggregator
 from typing import Union, Dict, OrderedDict, Any, Optional
 from appfl_sim.privacy.secure_aggregator import SecureAggregator
 from appfl_sim.misc.system_utils import (
     clone_state_dict_optimized,
     safe_inplace_operation,
-    optimize_memory_cleanup,
 )
 
 
@@ -26,9 +25,12 @@ class FedAvgAggregator(BaseAggregator):
     def __init__(
         self,
         model: Optional[torch.nn.Module] = None,
-        aggregator_configs: DictConfig = DictConfig({}),
+        aggregator_configs: Optional[DictConfig] = None,
         logger: Optional[Any] = None,
     ):
+        super().__init__()
+        if aggregator_configs is None:
+            aggregator_configs = DictConfig({})
         self.model = model
         self.logger = logger
         self.aggregator_configs = aggregator_configs
@@ -37,8 +39,7 @@ class FedAvgAggregator(BaseAggregator):
             raw_mode = "sample_ratio"
         self.client_weights_mode = raw_mode
 
-        # Check for optimize_memory in aggregator_configs, default to True
-        self.optimize_memory = getattr(aggregator_configs, "optimize_memory", True)
+        self.optimize_memory = bool(aggregator_configs.get("optimize_memory", True))
 
         if self.model is not None:
             self.named_parameters = set()
@@ -57,7 +58,7 @@ class FedAvgAggregator(BaseAggregator):
             return 1.0 / max(1, int(total_clients))
 
         if mode in {"sample_ratio", "adaptive"}:
-            if hasattr(self, "client_sample_size") and client_id in self.client_sample_size:
+            if client_id in self.client_sample_size:
                 total = float(sum(self.client_sample_size.values()))
                 if total > 0.0:
                     return float(self.client_sample_size[client_id]) / total
@@ -99,6 +100,8 @@ class FedAvgAggregator(BaseAggregator):
         """
         Take the weighted average of local models from clients and return the global model.
         """
+        if not local_models:
+            return self.get_parameters()
 
         # detect masked payload format
         def _is_masked_payload(x):
@@ -146,7 +149,7 @@ class FedAvgAggregator(BaseAggregator):
                                 )
                             else:
                                 self.global_state[name] = tensor.detach().clone()
-                    optimize_memory_cleanup(force_gc=True)
+                    gc.collect()
                 else:
                     for name, tensor in aggregated_state.items():
                         if name in self.global_state:
@@ -165,36 +168,14 @@ class FedAvgAggregator(BaseAggregator):
         # Memory optimization: Initialize global state efficiently
         if self.global_state is None:
             if self.model is not None:
-                try:
-                    if self.optimize_memory:
-                        # More memory-efficient initialization
-                        self.global_state = {}
-                        model_state = self.model.state_dict()
-                        first_model = list(local_models.values())[0]
-                        with torch.no_grad():
-                            for name in first_model:
-                                if name in model_state:
-                                    self.global_state[name] = (
-                                        model_state[name].clone().detach()
-                                    )
-                        gc.collect()
-                    else:
-                        self.global_state = {
-                            name: self.model.state_dict()[name]
-                            for name in list(local_models.values())[0]
-                        }
-                except:  # noqa E722
-                    if self.optimize_memory:
-                        self.global_state = {}
-                        with torch.no_grad():
-                            for name, tensor in list(local_models.values())[0].items():
-                                self.global_state[name] = tensor.detach().clone()
-                        gc.collect()
-                    else:
-                        self.global_state = {
-                            name: tensor.detach().clone()
-                            for name, tensor in list(local_models.values())[0].items()
-                        }
+                self.global_state = {}
+                model_state = self.model.state_dict()
+                first_model = list(local_models.values())[0]
+                with torch.no_grad():
+                    for name, tensor in first_model.items():
+                        source = model_state[name] if name in model_state else tensor
+                        self.global_state[name] = source.detach().clone()
+                gc.collect()
             else:
                 if self.optimize_memory:
                     self.global_state = {}
@@ -231,9 +212,9 @@ class FedAvgAggregator(BaseAggregator):
                         self.global_state[name] = safe_inplace_operation(
                             param_sum, "div", len(local_models)
                         )
-                        optimize_memory_cleanup(param_sum, force_gc=False)
+                        del param_sum
 
-            optimize_memory_cleanup(force_gc=True)
+            gc.collect()
             self.step.clear()
         else:
             # Original behavior
@@ -289,7 +270,7 @@ class FedAvgAggregator(BaseAggregator):
                             self.step[name] = safe_inplace_operation(
                                 self.step[name], "add", weighted_diff
                             )
-                            optimize_memory_cleanup(diff, weighted_diff, force_gc=False)
+                            del diff, weighted_diff
         else:
             # Original behavior
             for name in self.global_state:

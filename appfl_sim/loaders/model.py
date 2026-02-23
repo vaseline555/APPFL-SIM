@@ -99,6 +99,18 @@ def _default_model_context(
         inferred_in_features *= int(dim)
 
     model_configs = _as_dict(_path_get(cfg, "model.configs", {}))
+    need_embedding_cfg = _safe_bool(
+        _path_get(cfg, "need_embedding", model_configs.get("need_embedding", False)),
+        False,
+    )
+    seq_len_cfg = _safe_int(
+        model_configs.get("seq_len", _path_get(cfg, "seq_len", 128)),
+        128,
+    )
+    num_embeddings_cfg = _safe_int(
+        model_configs.get("num_embeddings", _path_get(cfg, "num_embeddings", 10000)),
+        10000,
+    )
     context = {
         "model_name": _path_get(cfg, "model.name", "SimpleCNN"),
         "num_classes": _safe_int(num_classes, 0),
@@ -108,9 +120,11 @@ def _default_model_context(
         "hidden_size": _safe_int(model_configs.get("hidden_size", 64), 64),
         "dropout": _safe_float(model_configs.get("dropout", 0.0), 0.0),
         "num_layers": _safe_int(model_configs.get("num_layers", 2), 2),
-        "num_embeddings": _safe_int(model_configs.get("num_embeddings", 10000), 10000),
+        "num_embeddings": num_embeddings_cfg,
         "embedding_size": _safe_int(model_configs.get("embedding_size", 128), 128),
-        "seq_len": _safe_int(model_configs.get("seq_len", 128), 128),
+        "seq_len": seq_len_cfg,
+        "need_embedding": need_embedding_cfg,
+        "is_seq2seq": _safe_bool(model_configs.get("is_seq2seq", False), False),
         "B": _safe_int(_path_get(cfg, "train.batch_size", 32), 32),
     }
     context.update(model_configs)
@@ -125,11 +139,22 @@ def _parse_model_spec(
     context = _default_model_context(cfg, input_shape=input_shape, num_classes=num_classes)
     source = str(_path_get(cfg, "model.backend", "auto")).lower()
     name = str(_path_get(cfg, "model.name", "SimpleCNN")).strip()
+    model_configs = _as_dict(_path_get(cfg, "model.configs", {}))
+    needs_embedding = _safe_bool(context.get("need_embedding", False), False)
+    if (
+        needs_embedding
+        and source in {"auto", "local", "appfl"}
+        and name.lower() == "simplecnn"
+    ):
+        # Default image model is incompatible with tokenized/text datasets.
+        # Use a minimal local text model unless user explicitly selects one.
+        name = "StackedLSTM"
+        context["model_name"] = name
+        model_configs.setdefault("is_seq2seq", False)
     if source in {"timm", "hf", "torchvision", "torchtext", "torchaudio"} and not name:
         raise ValueError(
             f"model.backend={source} requires model.name to be set to the exact backend name/card."
         )
-    model_configs = _as_dict(_path_get(cfg, "model.configs", {}))
     model_path = str(_path_get(cfg, "model.path", "./appfl_sim/models"))
     in_channels = int(model_configs.get("in_channels", context.get("in_channels", 1)))
     resolved_num_classes = int(

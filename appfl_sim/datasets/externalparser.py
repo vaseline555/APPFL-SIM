@@ -10,7 +10,7 @@ import torch
 from PIL import Image
 
 from appfl_sim.datasets.common import (
-    TensorBackedDataset,
+    BasicTensorDataset,
     clientize_raw_dataset,
     finalize_dataset_outputs,
     infer_num_classes,
@@ -157,10 +157,22 @@ def _to_image_tensor(value: Any) -> torch.Tensor:
     if arr.ndim != 3:
         raise ValueError(f"Unsupported image shape: {arr.shape}")
 
-    if arr.shape[0] in {1, 3} and arr.shape[-1] not in {1, 3}:
-        chw = arr
+    # Normalize image channels to fixed RGB (3 channels) so mixed grayscale/RGB
+    # datasets can be stacked safely.
+    if arr.shape[-1] in {1, 3, 4}:  # HWC
+        hwc = arr
+    elif arr.shape[0] in {1, 3, 4}:  # CHW
+        hwc = np.transpose(arr, (1, 2, 0))
     else:
-        chw = np.transpose(arr, (2, 0, 1))
+        raise ValueError(f"Unsupported image channel layout: {arr.shape}")
+
+    channels = int(hwc.shape[-1])
+    if channels == 1:
+        hwc = np.repeat(hwc, 3, axis=-1)
+    elif channels >= 4:
+        hwc = hwc[..., :3]
+
+    chw = np.transpose(hwc, (2, 0, 1))
     tensor = torch.from_numpy(chw).float()
     if tensor.max() > 1.0:
         tensor = tensor / 255.0
@@ -185,7 +197,7 @@ def _to_audio_tensor(value: Any, num_frames: int) -> torch.Tensor:
 def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: str):
     row_count = len(rows)
     if row_count == 0:
-        return TensorBackedDataset(
+        return BasicTensorDataset(
             torch.zeros(0, 1, dtype=torch.float32),
             torch.zeros(0, dtype=torch.long),
             name=name,
@@ -208,7 +220,7 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
         args.need_embedding = True
         args.seq_len = int(x_tensor.shape[1])
         args.num_embeddings = int(vocab_size)
-        return TensorBackedDataset(x_tensor, labels, name=name)
+        return BasicTensorDataset(x_tensor, labels, name=name)
 
     if isinstance(first, Image.Image) or (
         isinstance(first, np.ndarray) and np.asarray(first).ndim in {2, 3}
@@ -217,7 +229,7 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
         args.need_embedding = False
         args.seq_len = None
         args.num_embeddings = None
-        return TensorBackedDataset(x_tensor, labels, name=name)
+        return BasicTensorDataset(x_tensor, labels, name=name)
 
     if isinstance(first, dict) and "array" in first:
         nframes = int(getattr(args, "audio_num_frames", 16000))
@@ -225,7 +237,7 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
         args.need_embedding = False
         args.seq_len = None
         args.num_embeddings = None
-        return TensorBackedDataset(x_tensor, labels, name=name)
+        return BasicTensorDataset(x_tensor, labels, name=name)
 
     x_np = np.asarray(features)
     x_tensor = torch.as_tensor(x_np)
@@ -238,7 +250,7 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
     args.need_embedding = False
     args.seq_len = None
     args.num_embeddings = None
-    return TensorBackedDataset(x_tensor, labels, name=name)
+    return BasicTensorDataset(x_tensor, labels, name=name)
 
 
 def _parse_external_spec(args) -> Tuple[str, str]:

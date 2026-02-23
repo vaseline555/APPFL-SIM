@@ -498,6 +498,7 @@ def _start_summary_lines(
         f"Start {mode.upper()} simulation",
         f"  * Experiment: {_cfg_get(config, 'experiment.name', 'appfl-sim')}",
         f"  * Algorithm: {_cfg_get(config, 'algorithm.name', 'fedavg')}",
+        f"  * Model: {_cfg_get(config, 'model.name', 'SimpleCNN')}",
         f"  * Dataset: {_cfg_get(config, 'dataset.name', 'MNIST')}",
         f"  * Rounds: {_cfg_get(config, 'train.num_rounds', 20)}",
         f"  * Total Clients: {num_clients}",

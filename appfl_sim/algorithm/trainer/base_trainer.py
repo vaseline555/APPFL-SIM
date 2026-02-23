@@ -26,11 +26,13 @@ class BaseTrainer:
         metric: Optional[Any] = None,
         train_dataset: Optional[Dataset] = None,
         val_dataset: Optional[Dataset] = None,
-        train_configs: DictConfig = DictConfig({}),
+        train_configs: Optional[DictConfig] = None,
         logger: Optional[Any] = None,
         client_id: Optional[Any] = None,
         **kwargs,
     ):
+        if train_configs is None:
+            train_configs = DictConfig({})
         self.round = 0
         self.model = model
         self.loss_fn = loss_fn

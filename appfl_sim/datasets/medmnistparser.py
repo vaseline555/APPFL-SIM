@@ -28,7 +28,13 @@ logger = logging.getLogger(__name__)
 class MedMNISTWrapper(Dataset):
     def __init__(self, base_dataset, name: str):
         self.base_dataset = base_dataset
-        labels = np.asarray(base_dataset.labels).reshape(-1)
+        labels_raw = np.asarray(base_dataset.labels)
+        if labels_raw.ndim > 1 and labels_raw.shape[-1] > 1:
+            raise ValueError(
+                "This simulator currently supports single-label MedMNIST datasets only. "
+                "Multi-label targets are not supported in the default training pipeline."
+            )
+        labels = labels_raw.reshape(-1)
         self.targets = torch.from_numpy(labels).long()
         self.name = name
 
@@ -37,7 +43,12 @@ class MedMNISTWrapper(Dataset):
 
     def __getitem__(self, index: int):
         x, y = self.base_dataset[index]
-        y = torch.as_tensor(y).long().reshape(-1)[0]
+        y_tensor = torch.as_tensor(y).long().reshape(-1)
+        if y_tensor.numel() != 1:
+            raise ValueError(
+                "This simulator currently supports single-label MedMNIST targets only."
+            )
+        y = y_tensor[0]
         return x, y
 
     def __repr__(self):

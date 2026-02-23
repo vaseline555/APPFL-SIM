@@ -36,7 +36,7 @@ algorithm:
   aggregator_kwargs:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
-    action_space: [50, 200, 800, 32000]
+    action_space: [75, 150, 300, 1200]
     window_size: 10
     likelihood_variance: 0.1
     prior_variance: 1.0

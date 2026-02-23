@@ -18,7 +18,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## Dataset (`dataset`)
 - `path` (default: `./data`): dataset root path. (prev. `dataset_dir`)
 - `name` (default: `MNIST`): dataset name. (prev. `dataset`)
-- `backend` (default: `torchvision`): loader mode (`torchvision`, `torchtext`, `torchaudio`, `medmnist`, `leaf`, `flamby`, `tff`, `external`, `custom`). (prev. `dataset_loader`)
+- `backend` (default: `torchvision`): loader mode (`torchvision`, `torchtext`, `torchaudio`, `medmnist`, `leaf`, `flamby`, `tff`, `hf`, `external`, `custom`). (prev. `dataset_loader`)
 - `download` (default: `true`): download datasets if missing.
 - `load_dataset` return contract: `(client_datasets, server_dataset, dataset_meta)`.
 - `configs` (default: `{}`): dataset-agnostic keyword arguments.

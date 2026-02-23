@@ -1,6 +1,6 @@
 from __future__ import annotations
+from dataclasses import dataclass, field
 import logging
-from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Tuple
 
 import numpy as np
@@ -54,7 +54,7 @@ def make_load_tag(dataset_name: str, benchmark: str | None = None) -> str:
     return f"{bench}-{ds}" if bench else ds
 
 
-class TensorBackedDataset(Dataset):
+class BasicTensorDataset(Dataset):
     def __init__(self, inputs: torch.Tensor, targets: torch.Tensor, name: str = "dataset"):
         self.inputs = inputs
         self.targets = targets.long()
@@ -68,6 +68,42 @@ class TensorBackedDataset(Dataset):
 
     def __repr__(self) -> str:
         return self.name
+
+
+@dataclass
+class DatasetArgs:
+    num_clients: int = 20
+    seed: int = 42
+    dataset_name: str = "MNIST"
+    dataset_backend: str = "torchvision"
+    data_dir: str = "./data"
+    download: bool = True
+    test_size: float = 0.2
+    split_type: str = "iid"
+    dirichlet_alpha: float = 0.3
+    min_classes: int = 2
+    unbalanced_keep_min: float = 0.5
+    infer_num_clients: bool = False
+    seq_len: int = 128
+    num_embeddings: int = 10000
+    use_model_tokenizer: bool = False
+    model_name: str = "SimpleCNN"
+    in_channels: int | None = None
+    audio_num_frames: int = 16000
+    flamby_data_terms_accepted: bool = True
+    leaf_raw_data_fraction: float = 1.0
+    leaf_min_samples_per_client: int = 2
+    leaf_image_root: str = ""
+    ext_source: str = ""
+    ext_dataset_name: str = ""
+    ext_train_split: str = "train"
+    ext_test_split: str = "test"
+    ext_feature_key: str = ""
+    ext_label_key: str = ""
+    ext_config_name: str = ""
+    custom_entrypoint: str = ""
+    custom_kwargs: Dict[str, Any] = field(default_factory=dict)
+    logger: Any = None
 
 
 def _get_path(payload: Any, path: str, default: Any) -> Any:
@@ -86,25 +122,40 @@ def _get_path(payload: Any, path: str, default: Any) -> Any:
     return default if cur is None else cur
 
 
-def to_namespace(args: Any) -> SimpleNamespace:
-    if isinstance(args, SimpleNamespace) and hasattr(args, "dataset_name") and hasattr(args, "data_dir"):
-        ns = SimpleNamespace(**vars(args))
-        if getattr(ns, "K", None) is None:
-            ns.K = int(getattr(ns, "num_clients", 0))
+def _coerce_num_clients(raw: Any, fallback: int = 0) -> int:
+    try:
+        if raw is None:
+            return int(fallback)
+        return int(raw)
+    except Exception:
+        return int(fallback)
+
+
+def _as_mapping(args: Any) -> Dict[str, Any]:
+    if isinstance(args, dict):
+        return dict(args)
+    return dict(vars(args))
+
+
+def to_namespace(args: Any) -> DatasetArgs:
+    if isinstance(args, DatasetArgs):
+        ns = DatasetArgs()
+        ns.__dict__.update(vars(args))
+        ns.num_clients = _coerce_num_clients(getattr(ns, "num_clients", None), 20)
+        return ns
+    if hasattr(args, "dataset_name") and hasattr(args, "data_dir"):
+        payload = _as_mapping(args)
+        ns = DatasetArgs()
+        ns.__dict__.update(payload)
+        ns.num_clients = _coerce_num_clients(getattr(ns, "num_clients", None), 20)
         return ns
     if isinstance(args, dict) and "dataset_name" in args and "data_dir" in args:
-        ns = SimpleNamespace(**dict(args))
-        if getattr(ns, "K", None) is None:
-            ns.K = int(getattr(ns, "num_clients", 0))
+        ns = DatasetArgs()
+        ns.__dict__.update(dict(args))
+        ns.num_clients = _coerce_num_clients(getattr(ns, "num_clients", None), 20)
         return ns
 
-    payload: Any
-    if isinstance(args, SimpleNamespace):
-        payload = vars(args)
-    elif isinstance(args, dict):
-        payload = args
-    else:
-        payload = vars(args)
+    payload: Any = _as_mapping(args)
 
     dataset_cfg = _get_path(payload, "dataset.configs", {})
     model_cfg = _get_path(payload, "model.configs", {})
@@ -118,9 +169,13 @@ def to_namespace(args: Any) -> SimpleNamespace:
     except Exception:
         test_size = 0.2
 
-    ns = SimpleNamespace(
-        num_clients=int(_get_path(payload, "train.num_clients", 20)),
-        K=None,
+    num_clients = _coerce_num_clients(
+        _get_path(payload, "train.num_clients", 20),
+        20,
+    )
+
+    return DatasetArgs(
+        num_clients=num_clients,
         seed=int(_get_path(payload, "experiment.seed", 42)),
         dataset_name=str(_get_path(payload, "dataset.name", "MNIST")),
         dataset_backend=str(_get_path(payload, "dataset.backend", "torchvision")),
@@ -152,8 +207,6 @@ def to_namespace(args: Any) -> SimpleNamespace:
         custom_entrypoint=str(_get_path(dataset_cfg, "entrypoint", "")),
         custom_kwargs=_get_path(dataset_cfg, "kwargs", {}),
     )
-    ns.K = int(ns.num_clients)
-    return ns
 
 
 def _safe_int(value: Any, default: int) -> int:
@@ -180,7 +233,7 @@ def _safe_bool(value: Any, default: bool) -> bool:
 
 def resolve_fixed_pool_clients(
     available_clients: List[Any],
-    args: SimpleNamespace,
+    args: DatasetArgs,
     prefix: str = "",
 ) -> List[Any]:
     """Resolve client subset for fixed-pool datasets (LEAF/FLamby/TFF)."""
@@ -252,9 +305,16 @@ def concat_targets(datasets: Iterable[Dataset]) -> np.ndarray:
     return np.concatenate(chunks).astype(np.int64)
 
 
+def _train_dataset_from_entry(entry):
+    if not isinstance(entry, tuple) or len(entry) < 1:
+        return None
+    return entry[0]
+
+
 def _first_nonempty_train_dataset(client_datasets):
-    for train_ds, _ in client_datasets:
-        if len(train_ds) > 0:
+    for entry in client_datasets:
+        train_ds = _train_dataset_from_entry(entry)
+        if train_ds is not None and len(train_ds) > 0:
             return train_ds
     return None
 
@@ -262,7 +322,7 @@ def _first_nonempty_train_dataset(client_datasets):
 def package_dataset_outputs(
     client_datasets,
     server_dataset,
-    dataset_meta: SimpleNamespace,
+    dataset_meta: DatasetArgs,
 ):
     return client_datasets, server_dataset, dataset_meta
 
@@ -453,6 +513,7 @@ def split_subset_for_client(
     client_id: int,
     test_size: float,
     seed: int,
+    raw_targets: np.ndarray | None = None,
 ):
     sample_indices = np.asarray(sample_indices, dtype=np.int64)
     rng = np.random.default_rng(seed + client_id)
@@ -464,7 +525,7 @@ def split_subset_for_client(
         test_idx = np.asarray([], dtype=np.int64)
     else:
         # Class-aware split: keep at least one example per class in train when possible.
-        targets_all = extract_targets(raw_train)
+        targets_all = raw_targets if raw_targets is not None else extract_targets(raw_train)
         local_targets = targets_all[sample_indices]
         train_parts = []
         test_parts = []
@@ -508,7 +569,7 @@ def split_subset_for_client(
 
 def clientize_raw_dataset(
     raw_train: Dataset,
-    args: SimpleNamespace,
+    args: DatasetArgs,
 ):
     targets = extract_targets(raw_train)
     split_type = str(args.split_type).strip().lower()
@@ -535,6 +596,7 @@ def clientize_raw_dataset(
             client_id=cid,
             test_size=float(args.test_size),
             seed=int(args.seed),
+            raw_targets=targets,
         )
         client_datasets.append((train_ds, test_ds))
 
@@ -542,12 +604,11 @@ def clientize_raw_dataset(
 
 
 def set_common_metadata(
-    args: SimpleNamespace,
+    args: DatasetArgs,
     client_datasets,
     raw_train: Dataset | None = None,
 ):
     args.num_clients = len(client_datasets)
-    args.K = len(client_datasets)
 
     shape_source = raw_train if raw_train is not None and len(raw_train) > 0 else _first_nonempty_train_dataset(client_datasets)
     args.input_shape = infer_input_shape(shape_source) if shape_source is not None else (1,)
@@ -555,7 +616,13 @@ def set_common_metadata(
     if raw_train is not None and len(raw_train) > 0:
         args.num_classes = infer_num_classes(raw_train)
     else:
-        train_targets = concat_targets(train_ds for train_ds, _ in client_datasets)
+        train_targets = concat_targets(
+            train_ds
+            for train_ds in (
+                _train_dataset_from_entry(entry) for entry in client_datasets
+            )
+            if train_ds is not None
+        )
         args.num_classes = int(np.unique(train_targets).size) if train_targets.size > 0 else 0
 
     if getattr(args, "in_channels", None) is None:

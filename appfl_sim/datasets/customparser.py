@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import Dataset
 
 from appfl_sim.datasets.common import (
-    TensorBackedDataset,
+    BasicTensorDataset,
     clientize_raw_dataset,
     finalize_dataset_outputs,
     make_load_tag,
@@ -26,7 +26,7 @@ from appfl_sim.datasets.common import (
 logger = logging.getLogger(__name__)
 
 
-def _to_tensor_backed_dataset(payload: Any, name: str) -> Dataset:
+def _to_basic_tensor_dataset(payload: Any, name: str) -> Dataset:
     if isinstance(payload, Dataset):
         return payload
 
@@ -63,7 +63,7 @@ def _to_tensor_backed_dataset(payload: Any, name: str) -> Dataset:
     else:
         x_tensor = x_tensor.float()
 
-    return TensorBackedDataset(x_tensor, y_tensor, name=name)
+    return BasicTensorDataset(x_tensor, y_tensor, name=name)
 
 
 def _normalize_loader_result(result: Any, args: Any):
@@ -170,9 +170,9 @@ def _load_train_test_from_directory(data_dir: Path) -> Tuple[Dataset, Dataset | 
                 test_obj = torch.load(path, map_location="cpu")
             break
 
-    train_ds = _to_tensor_backed_dataset(train_obj, "[CUSTOM] TRAIN")
+    train_ds = _to_basic_tensor_dataset(train_obj, "[CUSTOM] TRAIN")
     test_ds = (
-        _to_tensor_backed_dataset(test_obj, "[CUSTOM] TEST") if test_obj is not None else None
+        _to_basic_tensor_dataset(test_obj, "[CUSTOM] TEST") if test_obj is not None else None
     )
     return train_ds, test_ds
 
@@ -191,7 +191,7 @@ def _load_from_path(args):
         try:
             return _normalize_loader_result(payload, args)
         except (TypeError, ValueError, KeyError):
-            train_ds = _to_tensor_backed_dataset(payload, "[CUSTOM] TRAIN")
+            train_ds = _to_basic_tensor_dataset(payload, "[CUSTOM] TRAIN")
             client_datasets = clientize_raw_dataset(train_ds, args)
             return finalize_dataset_outputs(
                 client_datasets=client_datasets,

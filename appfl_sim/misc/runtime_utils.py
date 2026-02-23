@@ -20,7 +20,6 @@ from appfl_sim.misc.config_utils import (
     _cfg_get,
     _resolve_algorithm_components,
     _resolve_client_logging_policy,
-    _resolve_client_state_policy,
     _resolve_num_sampled_clients,
 )
 from appfl_sim.misc.data_utils import _build_client_groups
@@ -60,7 +59,10 @@ def _run_local_client_update(
 def _resolve_runtime_policies(config: DictConfig, runtime_cfg: Dict[str, Any]) -> Dict[str, Any]:
     num_clients = int(runtime_cfg["num_clients"])
     algorithm_components = _resolve_algorithm_components(config)
-    state_policy = _resolve_client_state_policy(config)
+    state_policy = {
+        "stateful": bool(_cfg_bool(config, "experiment.stateful", False)),
+        "source": "experiment.stateful",
+    }
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     num_sampled_clients = _resolve_num_sampled_clients(
         config, num_clients=len(train_client_ids)
@@ -235,14 +237,18 @@ def _rebind_client_for_on_demand_job(
     num_workers_override: Optional[int] = None,
 ) -> None:
     dataset_entry = client_datasets[int(client_id)]
-    if len(dataset_entry) == 2:
+    if len(dataset_entry) == 1:
+        train_ds = dataset_entry[0]
+        val_ds = None
+        test_ds = None
+    elif len(dataset_entry) == 2:
         train_ds, test_ds = dataset_entry
         val_ds = None
     elif len(dataset_entry) == 3:
         train_ds, val_ds, test_ds = dataset_entry
     else:
         raise ValueError(
-            "Each client dataset entry must be tuple(train,test) or tuple(train,val,test)."
+            "Each client dataset entry must be tuple(train), tuple(train,test), or tuple(train,val,test)."
         )
 
     client.id = int(client_id)
@@ -357,7 +363,7 @@ def _build_clients(
     share_model: bool = False,
     num_workers_override: Optional[int] = None,
 ):
-    from appfl_sim.agent import ClientAgent, ClientAgentConfig
+    from appfl_sim.agent import ClientAgent
 
     train_cfg = _build_train_cfg(
         config,
@@ -369,24 +375,31 @@ def _build_clients(
     clients = []
     for cid in local_client_ids:
         dataset_entry = client_datasets[int(cid)]
-        if len(dataset_entry) == 2:
+        if len(dataset_entry) == 1:
+            train_ds = dataset_entry[0]
+            val_ds = None
+            test_ds = None
+        elif len(dataset_entry) == 2:
             train_ds, test_ds = dataset_entry
             val_ds = None
         elif len(dataset_entry) == 3:
             train_ds, val_ds, test_ds = dataset_entry
         else:
             raise ValueError(
-                "Each client dataset entry must be tuple(train,test) or tuple(train,val,test)."
+                "Each client dataset entry must be tuple(train), tuple(train,test), or tuple(train,val,test)."
             )
-        client_cfg = ClientAgentConfig(
-            train_configs=OmegaConf.create(
-                {
+        client_cfg = OmegaConf.create(
+            {
+                "train_configs": {
                     **train_cfg,
-                    "loss_fn": str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss")),
-                }
-            ),
-            model_configs=OmegaConf.create({}),
-            data_configs=OmegaConf.create({}),
+                    "trainer": str(trainer_name),
+                    "loss_fn": str(
+                        _cfg_get(config, "optimization.criterion", "CrossEntropyLoss")
+                    ),
+                },
+                "model_configs": {},
+                "data_configs": {},
+            }
         )
         client_cfg.client_id = str(int(cid))
         client_cfg.experiment_id = str(_cfg_get(config, "experiment.name", "appfl-sim"))
@@ -395,7 +408,7 @@ def _build_clients(
         client.train_dataset = train_ds
         client.val_dataset = val_ds
         client.test_dataset = test_ds
-        client.client_agent_config.train_configs.trainer = str(trainer_name)
+        client.trainer = None
         client._load_trainer()
         client.id = int(cid)
         clients.append(
@@ -438,31 +451,33 @@ def _build_server(
     server_dataset,
     algorithm_components: Optional[Dict[str, Any]] = None,
 ) -> ServerAgent:
-    from appfl_sim.agent import ServerAgent, ServerAgentConfig
+    from appfl_sim.agent import ServerAgent
 
     if algorithm_components is None:
         algorithm_components = _resolve_algorithm_components(config)
     num_clients = int(runtime_cfg["num_clients"])
     num_sampled_clients = _resolve_num_sampled_clients(config, num_clients=num_clients)
-    server_cfg = ServerAgentConfig(
-        client_configs=OmegaConf.create(
-            {
+    server_cfg = OmegaConf.create(
+        {
+            "client_configs": {
                 "train_configs": {
-                    "loss_fn": str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss")),
+                    "loss_fn": str(
+                        _cfg_get(config, "optimization.criterion", "CrossEntropyLoss")
+                    ),
                     "eval_metrics": _cfg_get(config, "eval.metrics", ["acc1"]),
                 },
                 "model_configs": {},
-            }
-        ),
-        server_configs=OmegaConf.create(
-            {
+            },
+            "server_configs": {
                 "num_clients": num_clients,
                 "num_global_epochs": int(_cfg_get(config, "train.num_rounds", 20)),
                 "num_sampled_clients": int(num_sampled_clients),
                 "device": str(_cfg_get(config, "experiment.server_device", "cpu")),
                 "eval_show_progress": _cfg_bool(config, "eval.show_eval_progress", True),
                 "eval_batch_size": int(
-                    _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))
+                    _cfg_get(
+                        config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32)
+                    )
                 ),
                 "num_workers": int(_cfg_get(config, "train.num_workers", 0)),
                 "eval_metrics": _cfg_get(config, "eval.metrics", ["acc1"]),
@@ -473,8 +488,8 @@ def _build_server(
                     **dict(algorithm_components["scheduler_kwargs"]),
                     "num_clients": num_clients,
                 },
-            }
-        ),
+            },
+        }
     )
     server = ServerAgent(server_agent_config=server_cfg)
     server.model = model

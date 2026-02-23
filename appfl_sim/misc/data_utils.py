@@ -171,6 +171,9 @@ def _stratified_split_dataset(
 def _normalize_client_tuple(entry) -> Tuple[Optional[object], Optional[object], Optional[object]]:
     if not isinstance(entry, tuple):
         raise ValueError("Each client dataset entry must be a tuple.")
+    if len(entry) == 1:
+        train_ds = entry[0]
+        return train_ds, None, None
     if len(entry) == 2:
         train_ds, test_ds = entry
         return train_ds, None, test_ds
@@ -251,9 +254,9 @@ def _validate_loader_output(client_datasets, runtime_cfg: Dict) -> None:
             f"but num_clients={num_clients}"
         )
     for cid, pair in enumerate(client_datasets):
-        if not (isinstance(pair, tuple) and len(pair) in {2, 3}):
+        if not (isinstance(pair, tuple) and len(pair) in {1, 2, 3}):
             raise ValueError(
-                f"client_datasets[{cid}] must be tuple(train,test) or tuple(train,val,test)."
+                f"client_datasets[{cid}] must be tuple(train), tuple(train,test), or tuple(train,val,test)."
             )
 
 def _build_client_groups(config: DictConfig, num_clients: int) -> Tuple[List[int], List[int]]:
@@ -318,14 +321,18 @@ def _resolve_client_eval_dataset(
     eval_split: str,
 ):
     item = client_datasets[int(client_id)]
-    if len(item) == 2:
+    if len(item) == 1:
+        train_ds = item[0]
+        val_ds = None
+        test_ds = None
+    elif len(item) == 2:
         train_ds, test_ds = item
         val_ds = None
     elif len(item) == 3:
         train_ds, val_ds, test_ds = item
     else:
         raise ValueError(
-            "Each client dataset entry must be tuple(train,test) or tuple(train,val,test)."
+            "Each client dataset entry must be tuple(train), tuple(train,test), or tuple(train,val,test)."
         )
     del train_ds
     chosen = str(eval_split).strip().lower()

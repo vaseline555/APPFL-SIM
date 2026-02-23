@@ -1,3 +1,4 @@
+import gc
 import threading
 from typing import Any, Union, Dict, OrderedDict
 from concurrent.futures import Future
@@ -6,7 +7,6 @@ from omegaconf import DictConfig
 
 from appfl_sim.algorithm.scheduler.base_scheduler import BaseScheduler
 from appfl_sim.algorithm.aggregator import BaseAggregator
-from appfl_sim.misc.system_utils import optimize_memory_cleanup
 
 
 class SyncScheduler(BaseScheduler):
@@ -21,7 +21,7 @@ class SyncScheduler(BaseScheduler):
         self._num_global_epochs = 0
         self._access_lock = threading.Lock()
 
-        self.optimize_memory = getattr(scheduler_configs, "optimize_memory", True)
+        self.optimize_memory = bool(scheduler_configs.get("optimize_memory", True))
 
     def schedule(
         self,
@@ -32,12 +32,7 @@ class SyncScheduler(BaseScheduler):
         with self._access_lock:
             future = Future()
 
-            if self.optimize_memory:
-                self.local_models[client_id] = local_model
-                if len(self.local_models) > self.num_clients // 2:
-                    optimize_memory_cleanup(force_gc=True)
-            else:
-                self.local_models[client_id] = local_model
+            self.local_models[client_id] = local_model
 
             for key, value in kwargs.items():
                 if key not in self.aggregation_kwargs:
@@ -53,7 +48,6 @@ class SyncScheduler(BaseScheduler):
                     temp_futures = dict(self.future)
                     self.local_models.clear()
                     self.aggregation_kwargs.clear()
-                    optimize_memory_cleanup(force_gc=True)
 
                     while temp_futures:
                         cid, client_future = temp_futures.popitem()
@@ -61,7 +55,7 @@ class SyncScheduler(BaseScheduler):
                             self._parse_aggregated_model(aggregated_model, cid)
                         )
                     self.future.clear()
-                    optimize_memory_cleanup(temp_futures, force_gc=True)
+                    gc.collect()
                 else:
                     aggregated_model = self.aggregator.aggregate(
                         self.local_models, **self.aggregation_kwargs

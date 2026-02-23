@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
 import json
 import logging
 import random
@@ -31,6 +32,11 @@ _DEFAULT_LEAF_META = {
 _LEAF_SUPPORTED = set(_DEFAULT_LEAF_META.keys())
 
 logger = logging.getLogger(__name__)
+
+
+def _stable_hash_to_mod(value: str, mod: int) -> int:
+    digest = hashlib.sha256(value.encode("utf-8", errors="ignore")).hexdigest()
+    return int(digest[:16], 16) % max(1, int(mod))
 
 
 class _LeafLoggerAdapter:
@@ -253,7 +259,7 @@ class LeafClientDataset(Dataset):
                 text = str(value)
 
             tokens = list(text) if self.dataset_key == "shakespeare" else text.split()
-            ids = [abs(hash(tok)) % vocab for tok in tokens]
+            ids = [_stable_hash_to_mod(str(tok), vocab) for tok in tokens]
 
         if len(ids) < seq_len:
             ids += [0] * (seq_len - len(ids))
@@ -496,7 +502,7 @@ def _text_to_token_ids(
         else:
             text = str(value)
         tokens = list(text) if dataset_key == "shakespeare" else text.split()
-        ids = [abs(hash(tok)) % vocab for tok in tokens]
+        ids = [_stable_hash_to_mod(str(tok), vocab) for tok in tokens]
     if len(ids) < seq_len:
         ids += [0] * (seq_len - len(ids))
     return ids[:seq_len]
@@ -603,7 +609,6 @@ def fetch_leaf(args):
         client_datasets.append((tr_ds, te_ds))
 
     args.num_clients = len(client_datasets)
-    args.K = len(client_datasets)
     args.num_classes = (
         len(label_to_idx) if label_to_idx else int(defaults.get("num_classes", 0))
     )
@@ -638,10 +643,3 @@ def fetch_leaf(args):
         server_dataset=None,
         dataset_meta=args,
     )
-
-
-# backward alias
-
-def fetch_leaf_preprocessed(dataset_name: str, root: str):
-    args = to_namespace({"dataset": {"name": dataset_name, "path": root}})
-    return fetch_leaf(args)

@@ -9,18 +9,13 @@ import warnings
 import importlib
 import torch.nn as nn
 from datetime import datetime
-from appfl_sim.agent.config import ClientAgentConfig
 from appfl_sim.algorithm.trainer import BaseTrainer
 from omegaconf import DictConfig, OmegaConf
-from typing import Union, Dict, OrderedDict, Tuple, Optional
+from typing import Union, Dict, OrderedDict, Tuple, Optional, Any
 from appfl_sim.logger import ClientAgentFileLogger
 from appfl_sim.misc.runtime_utils import (
     create_instance_from_file,
     run_function_from_file,
-    get_function_from_file,
-    create_instance_from_file_source,
-    get_function_from_file_source,
-    run_function_from_file_source,
 )
 
 
@@ -70,66 +65,6 @@ except Exception:  # pragma: no cover
 
     wandb = _WandbStub()
 
-try:
-    from appfl_sim.misc.data_readiness.metrics import (
-        imbalance_degree,
-        completeness,
-        get_data_range,
-        sparsity,
-        variance,
-        skewness,
-        entropy,
-        kurtosis,
-        class_distribution,
-        brisque,
-        total_variation,
-        dataset_sharpness,
-        calculate_outlier_proportion,
-        quantify_time_to_event_imbalance,
-    )
-    from appfl_sim.misc.data_readiness.plots import (
-        plot_class_distribution,
-        plot_data_sample,
-        plot_data_distribution,
-        plot_class_variance,
-        plot_outliers,
-        plot_feature_correlations,
-        plot_feature_statistics,
-        get_feature_space_distribution,
-    )
-    _HAS_DATA_READINESS = True
-except Exception:  # pragma: no cover
-    _HAS_DATA_READINESS = False
-
-    def _missing_dr_dependency(*args, **kwargs):
-        raise ImportError(
-            "Data-readiness metrics/plots require optional APPFL extras dependencies."
-        )
-
-    imbalance_degree = _missing_dr_dependency
-    completeness = _missing_dr_dependency
-    get_data_range = _missing_dr_dependency
-    sparsity = _missing_dr_dependency
-    variance = _missing_dr_dependency
-    skewness = _missing_dr_dependency
-    entropy = _missing_dr_dependency
-    kurtosis = _missing_dr_dependency
-    class_distribution = _missing_dr_dependency
-    brisque = _missing_dr_dependency
-    total_variation = _missing_dr_dependency
-    dataset_sharpness = _missing_dr_dependency
-    calculate_outlier_proportion = _missing_dr_dependency
-    quantify_time_to_event_imbalance = _missing_dr_dependency
-
-    plot_class_distribution = _missing_dr_dependency
-    plot_data_sample = _missing_dr_dependency
-    plot_data_distribution = _missing_dr_dependency
-    plot_class_variance = _missing_dr_dependency
-    plot_outliers = _missing_dr_dependency
-    plot_feature_correlations = _missing_dr_dependency
-    plot_feature_statistics = _missing_dr_dependency
-    get_feature_space_distribution = _missing_dr_dependency
-
 
 class ClientAgent:
     """
@@ -150,13 +85,26 @@ class ClientAgent:
     """
 
     def __init__(
-        self, client_agent_config: Optional[ClientAgentConfig] = None, **kwargs
+        self, client_agent_config: Optional[DictConfig | Dict[str, Any]] = None, **kwargs
     ) -> None:
-        self.client_agent_config = (
-            client_agent_config if client_agent_config is not None else ClientAgentConfig()
-        )
-        # Check for optimize_memory in client_agent_config, default to True
-        self.optimize_memory = getattr(self.client_agent_config, "optimize_memory", True)
+        del kwargs
+        if client_agent_config is None:
+            self.client_agent_config = self._default_config()
+        elif isinstance(client_agent_config, DictConfig):
+            self.client_agent_config = client_agent_config
+        else:
+            self.client_agent_config = OmegaConf.create(client_agent_config)
+        self.client_id: Optional[str] = None
+        self.logger = None
+        self.model = None
+        self.loss_fn = None
+        self.metric = None
+        self.trainer = None
+        self.train_dataset = None
+        self.val_dataset = None
+        self.test_dataset = None
+        self._ensure_config_contract()
+        self.optimize_memory = bool(self.client_agent_config.get("optimize_memory", True))
         self._create_logger()
         self._init_wandb()
         self._load_model()
@@ -168,25 +116,30 @@ class ClientAgent:
     def load_config(self, config: DictConfig) -> None:
         """Load additional configurations provided by the server."""
         self.client_agent_config = OmegaConf.merge(self.client_agent_config, config)
+        self._ensure_config_contract()
         self._load_model()
         self._load_loss()
         self._load_metric()
         self._load_trainer()
 
+    def _ensure_config_contract(self) -> None:
+        missing = [name for name in ("train_configs", "model_configs", "data_configs") if name not in self.client_agent_config]
+        if missing:
+            raise ValueError(
+                f"ClientAgentConfig is missing required sections: {', '.join(missing)}"
+            )
+        for name in ("train_configs", "model_configs", "data_configs"):
+            if self.client_agent_config.get(name) is None:
+                raise ValueError(f"ClientAgentConfig.{name} must not be None.")
+        train_cfg = self.client_agent_config.train_configs
+        if "trainer" not in train_cfg:
+            raise ValueError("ClientAgentConfig.train_configs.trainer is required.")
+
     def get_id(self) -> str:
         """Return a unique client id for server to distinguish clients."""
-        if not hasattr(self, "client_id"):
-            if hasattr(self.client_agent_config, "client_id"):
+        if self.client_id is None:
+            if "client_id" in self.client_agent_config:
                 self.client_id = str(self.client_agent_config.client_id)
-            elif hasattr(self.client_agent_config, "train_configs") and hasattr(
-                self.client_agent_config.train_configs, "logging_id"
-            ):
-                self.client_id = str(self.client_agent_config.train_configs.logging_id)
-                # Emit a deprecated warning
-                warnings.warn(
-                    message="client_agent_config.train_configs.logging_id is deprecated. Please use client_id instead.",
-                    category=DeprecationWarning,
-                )
             else:
                 warnings.warn(
                     message="Client ID (client_id) not specified. Generating a random one.",
@@ -246,7 +199,7 @@ class ClientAgent:
         return self.get_parameters()
 
     def evaluate(self, split: str = "test", **kwargs) -> Dict:
-        if not hasattr(self, "trainer") or self.trainer is None:
+        if self.trainer is None:
             return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0}
         if hasattr(self.trainer, "evaluate"):
             try:
@@ -277,492 +230,155 @@ class ClientAgent:
 
         torch.save(self.model.state_dict(), checkpoint_path)
 
-    def generate_readiness_report(self, client_config):
-        """
-        Generate data readiness report based on the configuration provided by the server.
-        """
-        if not _HAS_DATA_READINESS:
-            raise ImportError(
-                "Data-readiness report requested, but optional data-readiness dependencies are unavailable."
-            )
-        if hasattr(client_config, "data_readiness_configs") and hasattr(
-            client_config.data_readiness_configs, "dr_metrics"
-        ):
-            results = {}
-            plot_results = {"plots": {}}
-            to_combine_results = {"to_combine": {}}
-
-            # Determine how to retrieve data input and labels based on dataset attributes
-            if hasattr(self.train_dataset, "data_label"):
-                data_labels = self.train_dataset.data_label.tolist()
-            else:
-                try:
-                    data_labels = [label.item() for _, label in self.train_dataset]
-                except:  # noqa E722
-                    data_labels = [label for _, label in self.train_dataset]
-
-            if hasattr(self.train_dataset, "data_input"):
-                data_input = self.train_dataset.data_input
-            else:
-                data_input = torch.stack(
-                    [input_data for input_data, _ in self.train_dataset]
-                )
-
-            if hasattr(
-                client_config.data_readiness_configs.dr_metrics, "cadremodule_configs"
-            ) and hasattr(
-                client_config.data_readiness_configs.dr_metrics.cadremodule_configs,
-                "cadremodule_kwargs",
-            ):
-                cadremodule_kwargs = getattr(
-                    client_config.data_readiness_configs.dr_metrics.cadremodule_configs,
-                    "cadremodule_kwargs",
-                    {},
-                )
-            else:
-                cadremodule_kwargs = {}
-
-            # data_input, data_labels = balance_data(data_input, data_labels)
-            # data_input, explained_variance = apply_pca(data_input)
-            # data_input = normalize_data(data_input)
-
-            # Define metrics with corresponding computation functions
-            standard_metrics = {
-                "class_imbalance": lambda: round(imbalance_degree(data_labels), 2),
-                "sample_size": lambda: len(data_labels),
-                "num_classes": lambda: len(set(data_labels)),
-                "data_shape": lambda: (len(data_input), *data_input[0].size()),
-                "completeness": lambda: completeness(data_input),
-                "data_range": lambda: get_data_range(data_input),
-                "overall_sparsity": lambda: sparsity(data_input),
-                "variance": lambda: variance(data_input),
-                "skewness": lambda: skewness(data_input),
-                "entropy": lambda: entropy(data_input),
-                "kurtosis": lambda: kurtosis(data_input),
-                "class_distribution": lambda: class_distribution(data_labels),
-                "brisque": lambda: brisque(data_input),
-                "total_variation": lambda: total_variation(data_input),
-                "sharpness": lambda: dataset_sharpness(data_input),
-                "outlier_proportion": lambda: calculate_outlier_proportion(data_input),
-                "time_to_event_imbalance": lambda: quantify_time_to_event_imbalance(
-                    data_labels
-                ),
-            }
-
-            plots = {
-                "class_distribution_plot": lambda: plot_class_distribution(data_labels),
-                "data_sample_plot": lambda: plot_data_sample(data_input),
-                "data_distribution_plot": lambda: plot_data_distribution(data_input),
-                "class_variance_plot": lambda: plot_class_variance(
-                    data_input, data_labels
-                ),
-                "outlier_detection_plot": lambda: plot_outliers(data_input),
-                # "time_to_event_plot": lambda: plot_time_to_event_distribution(data_labels), # TODO: Add time to event plot
-                "feature_correlation_plot": lambda: plot_feature_correlations(
-                    data_input
-                ),
-                "feature_statistics_plot": lambda: plot_feature_statistics(data_input),
-            }
-            combine = {
-                "feature_space_distribution": lambda: get_feature_space_distribution(
-                    data_input
-                ),
-            }
-
-            # Handle standard metrics
-            for metric_name, compute_function in standard_metrics.items():
-                if hasattr(client_config.data_readiness_configs, "dr_metrics"):
-                    if metric_name in client_config.data_readiness_configs.dr_metrics:
-                        if getattr(
-                            client_config.data_readiness_configs.dr_metrics, metric_name
-                        ):
-                            results[metric_name] = compute_function()
-
-            # Handle plot-specific metrics
-            for metric_name, compute_function in plots.items():
-                if hasattr(client_config.data_readiness_configs.dr_metrics, "plot"):
-                    if (
-                        metric_name
-                        in client_config.data_readiness_configs.dr_metrics.plot
-                    ):
-                        if getattr(
-                            client_config.data_readiness_configs.dr_metrics.plot,
-                            metric_name,
-                        ):
-                            plot_results["plots"][metric_name] = compute_function()
-
-            # Combine results with plot results
-            results.update(plot_results)
-
-            # Handle combined metrics
-            for metric_name, compute_function in combine.items():
-                if hasattr(client_config.data_readiness_configs.dr_metrics, "combine"):
-                    if (
-                        metric_name
-                        in client_config.data_readiness_configs.dr_metrics.combine
-                    ):
-                        if getattr(
-                            client_config.data_readiness_configs.dr_metrics.combine,
-                            metric_name,
-                        ):
-                            to_combine_results["to_combine"][metric_name] = (
-                                compute_function()
-                            )
-
-            results.update(to_combine_results)
-
-            # Handle CADRE module metrics
-            if hasattr(
-                client_config.data_readiness_configs.dr_metrics, "cadremodule_configs"
-            ) and hasattr(
-                client_config.data_readiness_configs.dr_metrics.cadremodule_configs,
-                "cadremodule_path",
-            ):
-                self.specified_metrics = create_instance_from_file(
-                    client_config.data_readiness_configs.dr_metrics.cadremodule_configs.cadremodule_path,
-                    client_config.data_readiness_configs.dr_metrics.cadremodule_configs.get(
-                        "cadremodule_name", None
-                    ),
-                    self.train_dataset,
-                )
-                results["specified_metrics"] = dict(
-                    [
-                        next(
-                            iter(
-                                self.specified_metrics.metric(
-                                    **cadremodule_kwargs
-                                ).items()
-                            )
-                        )
-                    ]
-                )
-
-            return results
-        else:
-            return "Data readiness metrics not available in configuration"
-
-    def adapt_data(self, client_config):
-        """
-        Modify the data based on the configuration provided by the daragent configs
-        """
-
-        if hasattr(
-            client_config.data_readiness_configs.dr_metrics, "cadremodule_configs"
-        ) and hasattr(
-            client_config.data_readiness_configs.dr_metrics.cadremodule_configs,
-            "cadremodule_path",
-        ):
-            self.specified_metrics = create_instance_from_file(
-                client_config.data_readiness_configs.dr_metrics.cadremodule_configs.cadremodule_path,
-                client_config.data_readiness_configs.dr_metrics.cadremodule_configs.get(
-                    "cadremodule_name", None
-                ),
-                self.train_dataset,
-            )
-
-        if hasattr(
-            client_config.data_readiness_configs.dr_metrics, "cadremodule_configs"
-        ) and hasattr(
-            client_config.data_readiness_configs.dr_metrics.cadremodule_configs,
-            "cadremodule_kwargs",
-        ):
-            cadremodule_kwargs = getattr(
-                client_config.data_readiness_configs.dr_metrics.cadremodule_configs,
-                "cadremodule_kwargs",
-                {},
-            )
-        else:
-            cadremodule_kwargs = {}
-
-        ai_ready_data = self.specified_metrics.remedy(
-            self.specified_metrics.metric(**cadremodule_kwargs),
-            self.logger,
-            **cadremodule_kwargs,
-        )
-        self.train_dataset = ai_ready_data["ai_ready_dataset"]
-        metadata = ai_ready_data["metadata"]
-
-        return metadata
-
     def _create_logger(self):
         """
         Create logger for the client agent to log local training process.
         You can modify or overwrite this method to create your own logger.
         """
-        if hasattr(self, "logger"):
+        if self.logger is not None:
             return
         kwargs = {}
         kwargs["logging_id"] = self.get_id()
-        if not hasattr(self.client_agent_config, "train_configs"):
-            kwargs["file_dir"] = "./output"
-            kwargs["file_name"] = "result"
-        else:
-            if not self.client_agent_config.train_configs.get(
-                "client_logging_enabled", True
-            ):
-                self.logger = _NullClientLogger()
-                return
-            kwargs["file_dir"] = self.client_agent_config.train_configs.get(
-                "logging_output_dirname", "./output"
-            )
-            kwargs["file_name"] = self.client_agent_config.train_configs.get(
-                "logging_output_filename", "result"
-            )
-        if hasattr(self.client_agent_config, "experiment_id"):
-            kwargs["experiment_id"] = self.client_agent_config.experiment_id
+        train_cfg = self.client_agent_config.train_configs
+        if not train_cfg.get("client_logging_enabled", True):
+            self.logger = _NullClientLogger()
+            return
+        kwargs["file_dir"] = train_cfg.get(
+            "logging_output_dirname", "./logs"
+        )
+        kwargs["file_name"] = train_cfg.get(
+            "logging_output_filename", "log"
+        )
         self.logger = ClientAgentFileLogger(**kwargs)
 
     def _load_data(self) -> None:
         """Get train and validation dataloaders from local dataloader file."""
-        if hasattr(self, "train_dataset") and self.train_dataset is not None:
-            if not hasattr(self, "val_dataset"):
-                self.val_dataset = None
+        if self.train_dataset is not None:
             return
-        if not hasattr(self.client_agent_config, "data_configs"):
+        data_cfg = self.client_agent_config.data_configs
+        if "dataset_path" not in data_cfg:
             self.train_dataset, self.val_dataset = None, None
             return
-        if not (
-            hasattr(self.client_agent_config.data_configs, "dataset_source")
-            or hasattr(self.client_agent_config.data_configs, "dataset_path")
-        ):
-            self.train_dataset, self.val_dataset = None, None
-            return
-        if hasattr(self.client_agent_config.data_configs, "dataset_source"):
-            self.train_dataset, self.val_dataset = run_function_from_file_source(
-                self.client_agent_config.data_configs.dataset_source,
-                self.client_agent_config.data_configs.dataset_name,
-                **(
-                    self.client_agent_config.data_configs.dataset_kwargs
-                    if hasattr(self.client_agent_config.data_configs, "dataset_kwargs")
-                    else {}
-                ),
-            )
-        else:
-            self.train_dataset, self.val_dataset = run_function_from_file(
-                self.client_agent_config.data_configs.dataset_path,
-                self.client_agent_config.data_configs.dataset_name,
-                **(
-                    self.client_agent_config.data_configs.dataset_kwargs
-                    if hasattr(self.client_agent_config.data_configs, "dataset_kwargs")
-                    else {}
-                ),
-            )
-
-            # Convert target to Long if it is not already
-            # self.train_dataset = apply_pca_to_dataset(self.train_dataset)
-            # self.val_dataset = apply_pca_to_dataset(self.val_dataset)
-
-            # self.train_dataset = normalize_dataset(self.train_dataset)
-            # self.val_dataset = normalize_dataset(self.val_dataset)
-
-            # self.train_dataset = balance_classes_undersample(self.train_dataset)
+        self.train_dataset, self.val_dataset = run_function_from_file(
+            data_cfg.dataset_path,
+            data_cfg.get("dataset_name", None),
+            **data_cfg.get("dataset_kwargs", {}),
+        )
 
     def _load_model(self) -> None:
         """
-        Load model from various sources with optional keyword arguments `model_kwargs`:
-        - `model_path` and `model_name`: load model from a local file (usually for local simulation)
-        - `model_source` and `model_name`: load model from a raw file source string (usually sent from the server)
-        - Users can define their own way to load the model from other sources
+        Load model from `model_configs.model_path` (optional in simulator wiring).
         """
-        if hasattr(self, "model") and self.model is not None:
+        if self.model is not None:
             return
-        if not hasattr(self.client_agent_config, "model_configs"):
-            self.model = None
-            return
-        if hasattr(self.client_agent_config.model_configs, "model_path"):
-            kwargs = self.client_agent_config.model_configs.get("model_kwargs", {})
-            if hasattr(self.client_agent_config.model_configs, "model_name"):
+        model_cfg = self.client_agent_config.model_configs
+        if "model_path" in model_cfg:
+            kwargs = model_cfg.get("model_kwargs", {})
+            if "model_name" in model_cfg:
                 self.model = create_instance_from_file(
-                    self.client_agent_config.model_configs.model_path,
-                    self.client_agent_config.model_configs.model_name,
+                    model_cfg.model_path,
+                    model_cfg.model_name,
                     **kwargs,
                 )
             else:
                 self.model = run_function_from_file(
-                    self.client_agent_config.model_configs.model_path, None, **kwargs
-                )
-        elif hasattr(self.client_agent_config.model_configs, "model_source"):
-            kwargs = self.client_agent_config.model_configs.get("model_kwargs", {})
-            if hasattr(self.client_agent_config.model_configs, "model_name"):
-                self.model = create_instance_from_file_source(
-                    self.client_agent_config.model_configs.model_source,
-                    self.client_agent_config.model_configs.model_name,
-                    **kwargs,
-                )
-            else:
-                self.model = run_function_from_file_source(
-                    self.client_agent_config.model_configs.model_source, None, **kwargs
+                    model_cfg.model_path, None, **kwargs
                 )
         else:
             self.model = None
 
     def _load_loss(self) -> None:
         """
-        Load loss function from various sources with optional keyword arguments `loss_fn_kwargs`:
-        - `loss_fn_path` and `loss_fn_name`: load loss function from a local file (usually for local simulation)
-        - `loss_fn_source` and `loss_fn_name`: load loss function from a raw file source string (usually sent from the server)
-        - `loss_fn`: load commonly-used loss function from `torch.nn` module
-        - Users can define their own way to load the loss function from other sources
+        Load loss function from `train_configs.loss_fn` in `torch.nn` (optional).
         """
-        if hasattr(self, "loss_fn") and self.loss_fn is not None:
+        if self.loss_fn is not None:
             return
-        if not hasattr(self.client_agent_config, "train_configs"):
-            self.loss_fn = None
-            return
-        if hasattr(self.client_agent_config.train_configs, "loss_fn_path"):
-            kwargs = self.client_agent_config.train_configs.get("loss_fn_kwargs", {})
-            self.loss_fn = create_instance_from_file(
-                self.client_agent_config.train_configs.loss_fn_path,
-                self.client_agent_config.train_configs.loss_fn_name
-                if hasattr(self.client_agent_config.train_configs, "loss_fn_name")
-                else None,
-                **kwargs,
-            )
-        elif hasattr(self.client_agent_config.train_configs, "loss_fn"):
-            kwargs = self.client_agent_config.train_configs.get("loss_fn_kwargs", {})
-            if hasattr(nn, self.client_agent_config.train_configs.loss_fn):
-                self.loss_fn = getattr(
-                    nn, self.client_agent_config.train_configs.loss_fn
-                )(**kwargs)
+        train_cfg = self.client_agent_config.train_configs
+        if "loss_fn" in train_cfg:
+            if hasattr(nn, train_cfg.loss_fn):
+                self.loss_fn = getattr(nn, train_cfg.loss_fn)()
             else:
                 self.loss_fn = None
-        elif hasattr(self.client_agent_config.train_configs, "loss_fn_source"):
-            kwargs = self.client_agent_config.train_configs.get("loss_fn_kwargs", {})
-            self.loss_fn = create_instance_from_file_source(
-                self.client_agent_config.train_configs.loss_fn_source,
-                self.client_agent_config.train_configs.loss_fn_name
-                if hasattr(self.client_agent_config.train_configs, "loss_fn_name")
-                else None,
-                **kwargs,
-            )
         else:
             self.loss_fn = None
 
     def _load_metric(self) -> None:
         """
-        Load metric function from various sources:
-        - `metric_path` and `metric_name`: load metric function from a local file (usually for local simulation)
-        - `metric_source` and `metric_name`: load metric function from a raw file source string (usually sent from the server)
-        - Users can define their own way to load the metric function from other sources
+        Custom metric function loading is disabled in appfl-sim agent contract.
         """
-        if hasattr(self, "metric") and self.metric is not None:
+        if self.metric is not None:
             return
-        if not hasattr(self.client_agent_config, "train_configs"):
-            self.metric = None
-            return
-        if hasattr(self.client_agent_config.train_configs, "metric_path"):
-            self.metric = get_function_from_file(
-                self.client_agent_config.train_configs.metric_path,
-                self.client_agent_config.train_configs.metric_name
-                if hasattr(self.client_agent_config.train_configs, "metric_name")
-                else None,
-            )
-        elif hasattr(self.client_agent_config.train_configs, "metric_source"):
-            self.metric = get_function_from_file_source(
-                self.client_agent_config.train_configs.metric_source,
-                self.client_agent_config.train_configs.metric_name
-                if hasattr(self.client_agent_config.train_configs, "metric_name")
-                else None,
-            )
-        else:
-            self.metric = None
+        self.metric = None
 
     def _load_trainer(self) -> None:
         """Obtain a local trainer"""
-        if hasattr(self, "trainer") and self.trainer is not None:
-            return
-        if not hasattr(self.client_agent_config, "train_configs"):
-            self.trainer = None
+        if self.trainer is not None:
             return
         if (
-            not hasattr(self.client_agent_config.train_configs, "trainer")
-            and not hasattr(self.client_agent_config.train_configs, "trainer_path")
-            and not hasattr(self.client_agent_config.train_configs, "trainer_source")
+            self.train_dataset is None
+            and self.val_dataset is None
+            and self.test_dataset is None
         ):
-            self.trainer = None
             return
-        if hasattr(self.client_agent_config.train_configs, "trainer_path"):
-            self.trainer = create_instance_from_file(
-                self.client_agent_config.train_configs.trainer_path,
-                self.client_agent_config.train_configs.trainer,
-                model=self.model,
-                loss_fn=self.loss_fn,
-                metric=self.metric,
-                train_dataset=self.train_dataset,
-                val_dataset=self.val_dataset,
-                test_dataset=getattr(self, "test_dataset", None),
-                train_configs=self.client_agent_config.train_configs,
-                logger=self.logger,
-            )
-        elif hasattr(self.client_agent_config.train_configs, "trainer_source"):
-            self.trainer = create_instance_from_file_source(
-                self.client_agent_config.train_configs.trainer_source,
-                self.client_agent_config.train_configs.trainer,
-                model=self.model,
-                loss_fn=self.loss_fn,
-                metric=self.metric,
-                train_dataset=self.train_dataset,
-                val_dataset=self.val_dataset,
-                test_dataset=getattr(self, "test_dataset", None),
-                train_configs=self.client_agent_config.train_configs,
-                logger=self.logger,
-            )
-        else:
-            trainer_module = importlib.import_module("appfl_sim.algorithm.trainer")
-            if not hasattr(
-                trainer_module, self.client_agent_config.train_configs.trainer
-            ):
-                if self.client_agent_config.train_configs.trainer == "MonaiTrainer":
-                    raise ImportError(
-                        'Monai is not installed. Please install Monai to use MonaiTrainer using: pip install "appfl[monai]" or pip install -e ".[monai]" if installing from source.'
-                    )
-                raise ValueError(
-                    f"Invalid trainer name: {self.client_agent_config.train_configs.trainer}"
+        train_cfg = self.client_agent_config.train_configs
+        trainer_module = importlib.import_module("appfl_sim.algorithm.trainer")
+        if not hasattr(trainer_module, train_cfg.trainer):
+            if train_cfg.trainer == "MonaiTrainer":
+                raise ImportError(
+                    'Monai is not installed. Please install Monai to use MonaiTrainer using: pip install "appfl[monai]" or pip install -e ".[monai]" if installing from source.'
                 )
-            self.trainer: BaseTrainer = getattr(
-                trainer_module, self.client_agent_config.train_configs.trainer
-            )(
-                model=self.model,
-                loss_fn=self.loss_fn,
-                metric=self.metric,
-                train_dataset=self.train_dataset,
-                val_dataset=self.val_dataset,
-                test_dataset=getattr(self, "test_dataset", None),
-                train_configs=self.client_agent_config.train_configs,
-                logger=self.logger,
-                client_id=self.get_id(),  # currently, only useful for MonaiTrainer
-            )
-
-    def _load_compressor(self) -> None:
-        """Compression is disabled in appfl[sim]."""
-        self.compressor = None
-        self.enable_compression = False
+            raise ValueError(f"Invalid trainer name: {train_cfg.trainer}")
+        self.trainer: BaseTrainer = getattr(trainer_module, train_cfg.trainer)(
+            model=self.model,
+            loss_fn=self.loss_fn,
+            metric=self.metric,
+            train_dataset=self.train_dataset,
+            val_dataset=self.val_dataset,
+            test_dataset=getattr(self, "test_dataset", None),
+            train_configs=train_cfg,
+            logger=self.logger,
+            client_id=self.get_id(),
+        )
 
     def _init_wandb(self) -> None:
         """
         Initialize Weights and Biases for logging.
         """
-        if not hasattr(self.client_agent_config, "wandb_configs"):
-            self.client_agent_config.train_configs.enable_wandb = wandb.run is not None
-            self.client_agent_config.train_configs.wandb_logging_id = self.get_id()
-            return
-        if not self.client_agent_config.wandb_configs.get("enable_wandb", False):
-            self.client_agent_config.train_configs.enable_wandb = wandb.run is not None
-            self.client_agent_config.train_configs.wandb_logging_id = self.get_id()
-            return
-        wandb.init(
-            entity=self.client_agent_config.wandb_configs.get("entity", None),
-            project=self.client_agent_config.wandb_configs.get("project", None),
-            dir=self.client_agent_config.train_configs.get(
-                "logging_output_dirname", "./output"
-            ),
-            id=self.client_agent_config.get("experiment_id", wandb.util.generate_id()),
-            name=self.client_agent_config.wandb_configs.get("exp_name", "appfl"),
-            config=OmegaConf.to_container(self.client_agent_config, resolve=True),
-            resume="allow",
+        train_cfg = self.client_agent_config.train_configs
+        train_cfg.enable_wandb = wandb.run is not None
+        train_cfg.wandb_logging_id = self.get_id()
+
+    @staticmethod
+    def _default_config() -> DictConfig:
+        return OmegaConf.create(
+            {
+                "optimize_memory": True,
+                "train_configs": {
+                    "trainer": "VanillaTrainer",
+                    "device": "cpu",
+                    "mode": "epoch",
+                    "num_local_epochs": 1,
+                    "batch_size": 32,
+                    "eval_batch_size": 128,
+                    "num_workers": 0,
+                    "train_data_shuffle": True,
+                    "train_pin_memory": False,
+                    "eval_pin_memory": False,
+                    "dataloader_persistent_workers": False,
+                    "dataloader_prefetch_factor": 2,
+                    "optim": "SGD",
+                    "lr": 0.01,
+                    "weight_decay": 0.0,
+                    "max_grad_norm": 0.0,
+                    "client_logging_enabled": True,
+                    "do_pre_evaluation": True,
+                    "do_post_evaluation": True,
+                    "eval_metrics": ["acc1"],
+                },
+                "model_configs": {},
+                "data_configs": {},
+            }
         )
-        self.client_agent_config.train_configs.enable_wandb = True
-        self.client_agent_config.train_configs.wandb_logging_id = self.get_id()
 
     @property
     def runtime_context(self):

@@ -26,11 +26,9 @@ from appfl_sim.misc.config_utils import (
     _cfg_to_dict,
     _default_config_path,
     _ensure_model_cfg,
-    _extract_config_path,
     _merge_runtime_cfg,
-    _normalize_cli_tokens,
+    _parse_cli_tokens,
     _resolve_config_path,
-    _resolve_on_demand_worker_policy,
 )
 from appfl_sim.misc.data_utils import (
     _apply_holdout_dataset_ratio,
@@ -124,7 +122,8 @@ def run_serial(config) -> None:
         f"scheduler={algorithm_components['scheduler_name']} "
         f"trainer={algorithm_components['trainer_name']}"
     )
-    on_demand_workers = _resolve_on_demand_worker_policy(config, logger=server_logger)
+    base_workers = max(0, int(_cfg_get(config, "train.num_workers", 0)))
+    on_demand_workers = {"train": base_workers, "eval": base_workers}
     enable_global_eval = _cfg_bool(config, "eval.enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
@@ -198,6 +197,16 @@ def run_serial(config) -> None:
             raise RuntimeError(
                 "Invalid client lifecycle: experiment.stateful=true requires persistent eager clients."
             )
+    stateful_dataloader_ids = None
+    if stateful_mode and eager_clients is not None:
+        stateful_dataloader_ids = {
+            int(client.id): (
+                id(client.trainer.train_dataloader),
+                id(client.trainer.val_dataloader) if client.trainer.val_dataloader is not None else -1,
+                id(client.trainer.test_dataloader) if client.trainer.test_dataloader is not None else -1,
+            )
+            for client in eager_clients
+        }
 
     server_logger.info(
         _start_summary_lines(
@@ -230,6 +239,17 @@ def run_serial(config) -> None:
             updates = {}
             sample_sizes = {}
             stats = {}
+            if stateful_dataloader_ids is not None:
+                for client in eager_clients:
+                    current_ids = (
+                        id(client.trainer.train_dataloader),
+                        id(client.trainer.val_dataloader) if client.trainer.val_dataloader is not None else -1,
+                        id(client.trainer.test_dataloader) if client.trainer.test_dataloader is not None else -1,
+                    )
+                    if current_ids != stateful_dataloader_ids[int(client.id)]:
+                        raise RuntimeError(
+                            "Stateful mode requires persistent per-client dataloaders across rounds."
+                        )
             if eager_clients is not None:
                 selected = set(selected_ids)
                 for client in eager_clients:
@@ -494,9 +514,8 @@ def run_distributed(config, backend: str) -> None:
     holdout_client_ids = policy["holdout_client_ids"]
     num_sampled_clients = int(policy["num_sampled_clients"])
     logging_policy = policy["logging_policy"]
-    on_demand_workers = _resolve_on_demand_worker_policy(
-        config, logger=bootstrap_logger if rank == 0 else None
-    )
+    base_workers = max(0, int(_cfg_get(config, "train.num_workers", 0)))
+    on_demand_workers = {"train": base_workers, "eval": base_workers}
     enable_global_eval = _cfg_bool(config, "eval.enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
@@ -569,6 +588,16 @@ def run_distributed(config, backend: str) -> None:
             raise RuntimeError(
                 "Invalid client lifecycle: experiment.stateful=true requires persistent eager clients."
             )
+    stateful_dataloader_ids = None
+    if stateful_mode and eager_clients is not None:
+        stateful_dataloader_ids = {
+            int(client.id): (
+                id(client.trainer.train_dataloader),
+                id(client.trainer.val_dataloader) if client.trainer.val_dataloader is not None else -1,
+                id(client.trainer.test_dataloader) if client.trainer.test_dataloader is not None else -1,
+            )
+            for client in eager_clients
+        }
 
     tracker = None
     server = None
@@ -653,6 +682,17 @@ def run_distributed(config, backend: str) -> None:
     
             selected_local_ids = sorted(int(cid) for cid in selected_ids if int(cid) in local_client_set)
             local_payload = {}
+            if stateful_dataloader_ids is not None:
+                for client in eager_clients:
+                    current_ids = (
+                        id(client.trainer.train_dataloader),
+                        id(client.trainer.val_dataloader) if client.trainer.val_dataloader is not None else -1,
+                        id(client.trainer.test_dataloader) if client.trainer.test_dataloader is not None else -1,
+                    )
+                    if current_ids != stateful_dataloader_ids[int(client.id)]:
+                        raise RuntimeError(
+                            "Stateful mode requires persistent per-client dataloaders across rounds."
+                        )
             if eager_clients is not None:
                 selected_set = set(selected_local_ids)
                 for client in eager_clients:
@@ -869,8 +909,7 @@ def run_distributed(config, backend: str) -> None:
 
 def parse_config(argv: list[str] | None = None) -> tuple[str, DictConfig]:
     argv = list(sys.argv[1:] if argv is None else argv)
-    config_path, remaining = _extract_config_path(argv)
-    backend_override, dotlist = _normalize_cli_tokens(remaining)
+    config_path, backend_override, dotlist = _parse_cli_tokens(argv)
 
     default_path = _default_config_path()
     if not default_path.exists():

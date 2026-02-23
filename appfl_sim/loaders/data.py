@@ -6,6 +6,7 @@ from appfl_sim.datasets import (
     fetch_custom_dataset,
     fetch_external_dataset,
     fetch_flamby,
+    fetch_hf_dataset,
     fetch_leaf,
     fetch_medmnist_dataset,
     fetch_tff_dataset,
@@ -60,6 +61,7 @@ def load_dataset(args: Any):
     - `auto`: infer parser by dataset name/library.
     - `custom`: local path or callable parser (`dataset.path` / `dataset.configs.entrypoint`).
     - `external`: external source parser (`dataset.configs.source` in `hf` or `timm`).
+    - `hf`: first-class HuggingFace dataset backend (supports plain repo id in `dataset.name`).
     - built-ins: `torchvision`, `torchtext`, `torchaudio`, `medmnist`, `flamby`, `leaf`, `tff`.
     """
     args = to_namespace(args)
@@ -70,9 +72,9 @@ def load_dataset(args: Any):
 
     if mode in {"custom"}:
         return fetch_custom_dataset(args)
-    if mode in {"external", "hf", "timm"}:
-        if mode in {"hf", "timm"}:
-            args.external_source = mode
+    if mode == "hf":
+        return fetch_hf_dataset(args)
+    if mode == "external":
         return fetch_external_dataset(args)
     if mode == "torchvision":
         return fetch_torchvision_dataset(args)
@@ -90,7 +92,9 @@ def load_dataset(args: Any):
         return fetch_tff_dataset(args)
 
     # auto mode
-    if dataset_lower.startswith("hf:") or dataset_lower.startswith("timm:"):
+    if dataset_lower.startswith("hf:"):
+        return fetch_hf_dataset(args)
+    if dataset_lower.startswith("timm:"):
         return fetch_external_dataset(args)
     if dataset_upper in LEAF_DATASETS:
         return fetch_leaf(args)
