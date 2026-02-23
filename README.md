@@ -80,7 +80,6 @@ Default simulation config lives at:
 - Algorithm placeholders: `appfl_sim/config/algorithms/*.yaml`
 - Evaluation-focused examples: `appfl_sim/config/algorithms/evaluation/*.yaml`
 - HF template: `appfl_sim/config/examples/external_datasets/hf/template.yaml`
-- timm template: `appfl_sim/config/examples/external_datasets/timm/template.yaml`
 
 ## MPI setting
 
@@ -125,7 +124,6 @@ Built-in dataset loader modes:
 - `auto` (routes by dataset name)
 - `custom` (user callable/path-based parser)
 - `hf` (HuggingFace datasets; `dataset.name` can be plain repo id like `randall-lab/beans` or `hf:<repo>`)
-- `external` (external data sources: `hf`, `timm`; use `dataset.configs.source` or `dataset.name=timm:<name>`)
 - `torchvision`, `torchtext`, `torchaudio`, `medmnist`
 - `flamby` (adapted from APPFL example loader)
 - `leaf` (adapted LEAF loader with optional auto download+preprocess)
@@ -146,7 +144,6 @@ Internal parser modules live under `appfl_sim/datasets/`:
 - `leafparser.py`
 - `tffparser.py`
 - `customparser.py`
-- `externalparser.py`
 - `hfparser.py`
 
 Fixed-pool dataset client selection knobs (`leaf` / `flamby` / `tff`):
@@ -196,9 +193,8 @@ Custom loader contract:
 Model backend control:
 
 - `model_source=appfl` for local models in `appfl_sim/models`
-- `model_source=timm` for timm models (`model_name` must be exact timm model name)
 - `model_source=hf` for HuggingFace models (`model_name` must be exact model card id)
-- `model_source=auto` resolves `appfl -> timm -> hf`
+- `model_source=auto` resolves `appfl -> hf`
 
 To avoid config sprawl, keep one template per backend and override model/dataset at CLI:
 

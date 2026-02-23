@@ -31,7 +31,6 @@ all = [
   "Pillow>=10.0",
   "tensorboard>=2.16",
   "wandb>=0.17",
-  "timm>=1.0",
   "huggingface-hub>=0.24",
   "medmnist>=3.0",
   "torchtext>=0.6",

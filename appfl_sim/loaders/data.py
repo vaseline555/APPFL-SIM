@@ -4,7 +4,6 @@ from typing import Any
 
 from appfl_sim.datasets import (
     fetch_custom_dataset,
-    fetch_external_dataset,
     fetch_flamby,
     fetch_hf_dataset,
     fetch_leaf,
@@ -60,7 +59,6 @@ def load_dataset(args: Any):
     `dataset.backend` modes:
     - `auto`: infer parser by dataset name/library.
     - `custom`: local path or callable parser (`dataset.path` / `dataset.configs.entrypoint`).
-    - `external`: external source parser (`dataset.configs.source` in `hf` or `timm`).
     - `hf`: first-class HuggingFace dataset backend (supports plain repo id in `dataset.name`).
     - built-ins: `torchvision`, `torchtext`, `torchaudio`, `medmnist`, `flamby`, `leaf`, `tff`.
     """
@@ -74,8 +72,6 @@ def load_dataset(args: Any):
         return fetch_custom_dataset(args)
     if mode == "hf":
         return fetch_hf_dataset(args)
-    if mode == "external":
-        return fetch_external_dataset(args)
     if mode == "torchvision":
         return fetch_torchvision_dataset(args)
     if mode == "torchtext":
@@ -90,12 +86,15 @@ def load_dataset(args: Any):
         return fetch_leaf(args)
     if mode == "tff":
         return fetch_tff_dataset(args)
+    if mode != "auto":
+        raise ValueError(
+            "dataset.backend must be one of: auto, custom, hf, "
+            "torchvision, torchtext, torchaudio, medmnist, flamby, leaf, tff"
+        )
 
     # auto mode
     if dataset_lower.startswith("hf:"):
         return fetch_hf_dataset(args)
-    if dataset_lower.startswith("timm:"):
-        return fetch_external_dataset(args)
     if dataset_upper in LEAF_DATASETS:
         return fetch_leaf(args)
     if dataset_upper in FLAMBY_DATASET_KEYS:

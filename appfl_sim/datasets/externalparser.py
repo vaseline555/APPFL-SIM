@@ -16,7 +16,6 @@ from appfl_sim.datasets.common import (
     infer_num_classes,
     make_load_tag,
     resolve_dataset_logger,
-    to_namespace,
 )
 
 
@@ -253,35 +252,6 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
     return BasicTensorDataset(x_tensor, labels, name=name)
 
 
-def _parse_external_spec(args) -> Tuple[str, str]:
-    raw_dataset = str(getattr(args, "dataset_name", "")).strip()
-    source = str(getattr(args, "ext_source", "")).strip().lower()
-    name = str(getattr(args, "ext_dataset_name", "")).strip()
-
-    if raw_dataset.lower().startswith("hf:"):
-        source = "hf"
-        name = raw_dataset.split(":", 1)[1].strip()
-    elif raw_dataset.lower().startswith("timm:"):
-        source = "timm"
-        name = raw_dataset.split(":", 1)[1].strip()
-
-    if not source:
-        source = "hf"
-
-    if not name:
-        if raw_dataset and ":" not in raw_dataset:
-            name = raw_dataset
-        else:
-            raise ValueError(
-                "Unable to infer external dataset name. Set dataset.configs.dataset_name or use dataset.name='hf:<name>'/'timm:<name>'."
-            )
-
-    if source not in {"hf", "timm"}:
-        raise ValueError("dataset.configs.source must be one of: hf, timm")
-
-    return source, name
-
-
 def _fetch_hf_dataset(args, dataset_name: str):
     active_logger = resolve_dataset_logger(args, logger)
     tag = make_load_tag(dataset_name, benchmark="HF")
@@ -368,52 +338,3 @@ def _fetch_hf_dataset(args, dataset_name: str):
         "[%s] finished loading (%d clients).", tag, int(dataset_meta.num_clients)
     )
     return client_datasets, server_dataset, dataset_meta
-
-
-def _normalize_timm_dataset_name(name: str) -> str:
-    key = name.strip().lower().split("/")[-1]
-    mapping = {
-        "mnist": "MNIST",
-        "fashionmnist": "FashionMNIST",
-        "fmnist": "FashionMNIST",
-        "cifar10": "CIFAR10",
-        "cifar-10": "CIFAR10",
-        "cifar100": "CIFAR100",
-        "cifar-100": "CIFAR100",
-        "svhn": "SVHN",
-    }
-    if key in mapping:
-        return mapping[key]
-    return name
-
-
-def _fetch_timm_dataset(args, dataset_name: str):
-    # Use timm dataset naming when possible, but route through torchvision parser
-    # for lightweight simulation.
-    from appfl_sim.datasets.torchvisionparser import fetch_torchvision_dataset
-
-    active_logger = resolve_dataset_logger(args, logger)
-    tag = make_load_tag(dataset_name, benchmark="TIMM")
-    active_logger.info("[%s] delegating to torchvision-compatible parser.", tag)
-    tv_name = _normalize_timm_dataset_name(dataset_name)
-    args.dataset_name = tv_name
-    return fetch_torchvision_dataset(args)
-
-
-def fetch_external_dataset(args):
-    """External dataset parser.
-
-    Supported sources:
-    - `hf`: HuggingFace datasets (`dataset.name='hf:<dataset_name>'`)
-    - `timm`: timm-style dataset names mapped to torchvision when applicable (`dataset.name='timm:<name>'`)
-    """
-    args = to_namespace(args)
-    active_logger = resolve_dataset_logger(args, logger)
-    source, dataset_name = _parse_external_spec(args)
-    args.ext_source = source
-    args.ext_dataset_name = dataset_name
-    active_logger.info("[%s] starting external dataset parser.", make_load_tag(dataset_name, benchmark=source))
-
-    if source == "hf":
-        return _fetch_hf_dataset(args, dataset_name)
-    return _fetch_timm_dataset(args, dataset_name)

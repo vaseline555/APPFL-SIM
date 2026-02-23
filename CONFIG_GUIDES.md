@@ -18,7 +18,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## Dataset (`dataset`)
 - `path` (default: `./data`): dataset root path. (prev. `dataset_dir`)
 - `name` (default: `MNIST`): dataset name. (prev. `dataset`)
-- `backend` (default: `torchvision`): loader mode (`torchvision`, `torchtext`, `torchaudio`, `medmnist`, `leaf`, `flamby`, `tff`, `hf`, `external`, `custom`). (prev. `dataset_loader`)
+- `backend` (default: `torchvision`): loader mode (`torchvision`, `torchtext`, `torchaudio`, `medmnist`, `leaf`, `flamby`, `tff`, `hf`, `custom`). (prev. `dataset_loader`)
 - `download` (default: `true`): download datasets if missing.
 - `load_dataset` return contract: `(client_datasets, server_dataset, dataset_meta)`.
 - `configs` (default: `{}`): dataset-agnostic keyword arguments.
@@ -38,7 +38,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## Model (`model`)
 - `path` (default: `./models`): model root path.
 - `name` (default: `SimpleCNN`): model name. (prev. `model`)
-- `backend` (default: `auto`): model source (`auto`, `local`, `timm`, `hf`, `torchvision`, `torchtext`, `torchaudio`).
+- `backend` (default: `auto`): model source (`auto`, `local`, `hf`, `torchvision`, `torchtext`, `torchaudio`).
 - `configs` (default: `{}`): backend-agnostic model keyword arguments.
   - `in_channels` (default: inferred from input shape): explicit input channels override.
   - `hidden_size` (default: `64`): hidden dimension for models.

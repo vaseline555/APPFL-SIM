@@ -29,7 +29,7 @@ def fetch_hf_dataset(args):
     args.ext_source = "hf"
     args.ext_dataset_name = dataset_name
 
-    # Reuse the HF loading implementation in external parser.
+    # Reuse HF loading helper implementation.
     from appfl_sim.datasets.externalparser import _fetch_hf_dataset
 
     return _fetch_hf_dataset(args, dataset_name)

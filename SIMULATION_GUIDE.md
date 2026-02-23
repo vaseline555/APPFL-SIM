@@ -44,7 +44,7 @@ Notes:
 - Logging examples live in `appfl_sim/config/examples/logging/`.
 - Metrics examples live in `appfl_sim/config/examples/metrics/`.
 - Algorithm placeholders live in `appfl_sim/config/algorithms/`.
-- Model backend can be set with `model.source=appfl|timm|hf|auto`.
+- Model backend can be set with `model.source=appfl|hf|auto`.
 - For multi-node PoC:
   - `mpi_dataset_download_mode=rank0` for shared FS, or `local_rank0` for node-local FS.
   - keep `mpi_use_local_rank_device=true` to map GPUs by local rank.
@@ -68,20 +68,13 @@ Evaluation notes:
 - Local pre/post evaluation is controlled by `eval.do_pre_evaluation` and `eval.do_post_evaluation`.
 - Federated and global evaluations run at `eval.every` rounds and the final round.
 
-## 4) HF / timm examples
+## 4) HF example
 
 HF (runs without downloading pretrained weights):
 
 ```bash
 PYTHONPATH=. .venv/bin/python -m appfl_sim.runner \
   --config appfl_sim/config/examples/external_datasets/hf/template.yaml
-```
-
-timm:
-
-```bash
-PYTHONPATH=. .venv/bin/python -m appfl_sim.runner \
-  --config appfl_sim/config/examples/external_datasets/timm/template.yaml
 ```
 
 ## 5) Logging backend

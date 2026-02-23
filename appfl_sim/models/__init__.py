@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib
 
 
-# Keep only custom/local models that are not delegated to timm/huggingface.
+# Keep only custom/local models that are not delegated to external model hubs.
 MODEL_REGISTRY = {
     "CelebACNN": ("celebacnn", "CelebACNN"),
     "DANet": ("danet", "DANet"),
