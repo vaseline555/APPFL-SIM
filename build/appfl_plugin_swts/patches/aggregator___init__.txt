@@ -1,3 +1,0 @@
-# Add to src/appfl/algorithm/aggregator/__init__.py
-from .swts_aggregator import SwtsAggregator
-__all__.append("SwtsAggregator")

@@ -1,3 +1,0 @@
-# Add to src/appfl/algorithm/scheduler/__init__.py
-from .swts_scheduler import SwtsScheduler
-__all__.append("SwtsScheduler")
