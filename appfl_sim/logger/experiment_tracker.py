@@ -111,7 +111,7 @@ class ExperimentTracker:
                     "Install with: pip install tensorboard"
                 ) from e
 
-            run_dir = Path(cfg.log_dir) / cfg.project_name
+            run_dir = Path(cfg.log_dir) / cfg.exp_name / cfg.run_timestamp
             run_dir.mkdir(parents=True, exist_ok=True)
             self._writer = SummaryWriter(log_dir=str(run_dir))
             return

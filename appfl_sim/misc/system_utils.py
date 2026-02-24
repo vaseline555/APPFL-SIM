@@ -126,7 +126,6 @@ def clone_state_dict_optimized(state_dict) -> Dict[str, torch.Tensor]:
         for name, tensor in state_dict.items():
             if tensor is not None:
                 result[name] = tensor.clone().detach()
-    gc.collect()
     return result
 
 
@@ -152,7 +151,6 @@ def extract_model_state_optimized(
                     tensor = tensor.cpu()
                 state[name] = tensor
 
-    gc.collect()
     return state
 
 
@@ -186,7 +184,7 @@ def safe_inplace_operation(
     return tensor
 
 
-def _maybe_force_server_cpu(
+def _force_server_cpu_when_global_eval_disabled(
     config: DictConfig,
     enable_global_eval: bool,
     logger: Optional[ServerAgentFileLogger] = None,
@@ -262,12 +260,17 @@ def _iter_id_chunks(ids: Sequence[int], chunk_size: int):
         yield ordered[start : start + chunk_size]
 
 
-def _release_clients(clients, clear_cuda_cache: bool = False) -> None:
+def _release_clients(
+    clients,
+    clear_cuda_cache: bool = False,
+    collect_garbage: bool = False,
+) -> None:
     if clients is None:
         return
     if isinstance(clients, list):
         clients.clear()
     del clients
-    gc.collect()
+    if collect_garbage:
+        gc.collect()
     if clear_cuda_cache and torch.cuda.is_available():
         torch.cuda.empty_cache()

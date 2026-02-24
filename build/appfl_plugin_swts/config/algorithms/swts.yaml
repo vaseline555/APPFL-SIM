@@ -1,0 +1,12 @@
+# APPFL algorithm template for swts
+client_configs:
+  train_configs:
+    trainer: SwtsTrainer
+
+server_configs:
+  num_clients: 3
+  aggregator: SwtsAggregator
+  scheduler: SwtsScheduler
+  aggregator_kwargs: {}
+  scheduler_kwargs:
+    num_clients: 3

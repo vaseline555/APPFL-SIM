@@ -30,6 +30,8 @@ model:
   name: distilbert-base-uncased
   backend: hf
   configs:
+    cache_dir: ./models
+    hf_local_files_only: false
     hidden_size: 64
     dropout: 0.0
     num_layers: 2

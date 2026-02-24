@@ -24,7 +24,7 @@ class ModelSpec:
     hf_local_files_only: bool
     hf_trust_remote_code: bool
     hf_gradient_checkpointing: bool
-    hf_cache_dir: str
+    cache_dir: str
     hf_kwargs: Dict[str, Any]
     hf_config_overrides: Dict[str, Any]
 
@@ -172,7 +172,12 @@ def _parse_model_spec(
         hf_local_files_only=_safe_bool(model_configs.get("hf_local_files_only", False), False),
         hf_trust_remote_code=_safe_bool(model_configs.get("hf_trust_remote_code", False), False),
         hf_gradient_checkpointing=_safe_bool(model_configs.get("hf_gradient_checkpointing", False), False),
-        hf_cache_dir=str(model_configs.get("hf_cache_dir", model_path)),
+        cache_dir=str(
+            model_configs.get(
+                "cache_dir",
+                model_configs.get("hf_cache_dir", model_path),
+            )
+        ),
         hf_kwargs=_as_dict(model_configs.get("hf_kwargs", {})),
         hf_config_overrides=_as_dict(model_configs.get("hf_config_overrides", {})),
     )
@@ -226,6 +231,7 @@ def _filtered_model_kwargs(spec: ModelSpec) -> Dict[str, Any]:
         "hf_gradient_checkpointing",
         "hf_kwargs",
         "hf_config_overrides",
+        "cache_dir",
         "hf_cache_dir",
     ):
         kwargs.pop(reserved_key, None)
@@ -297,7 +303,7 @@ def _build_hf_scratch_config(model_id: str, spec: ModelSpec, task: str):
     try:
         return AutoConfig.from_pretrained(
             model_id,
-            cache_dir=str(spec.hf_cache_dir),
+            cache_dir=str(spec.cache_dir),
             local_files_only=bool(spec.hf_local_files_only),
             trust_remote_code=bool(spec.hf_trust_remote_code),
             **overrides,
@@ -354,7 +360,7 @@ def _load_hf_model(spec: ModelSpec):
         model = model_cls.from_pretrained(
             model_id,
             num_labels=int(spec.num_classes),
-            cache_dir=str(spec.hf_cache_dir),
+            cache_dir=str(spec.cache_dir),
             local_files_only=local_files_only,
             trust_remote_code=trust_remote_code,
             **common_kwargs,

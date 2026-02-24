@@ -5,6 +5,12 @@ This guide explains how to use:
 
 It helps you move your algorithm module(s) from `appfl_sim` into an APPFL fork in a plug-and-play style.
 
+Naming rule:
+- Exported class names are validated against `algorithm`:
+  - `<PascalCase(algorithm)>Aggregator`
+  - `<PascalCase(algorithm)>Scheduler`
+  - `<PascalCase(algorithm)>Trainer`
+
 ---
 
 ## 1) What this tool does
@@ -71,7 +77,7 @@ When it runs successfully, you should see JSON like:
   "copied": [
     {
       "kind": "aggregator",
-      "class": "DemoFedAvgAggregator",
+      "class": "DemoAlgoAggregator",
       "dst": ".../src/appfl/algorithm/aggregator/demo_fedavg_aggregator.py"
     }
   ],
@@ -126,7 +132,7 @@ If you use Artifact mode, move files as follows:
 ## 5) Real trial status (validated)
 
 Validation in this repository:
-- Exported `FedAvgAggregator + VanillaTrainer + SyncScheduler` artifact.
+- Exported `SwtsAggregator + SwtsTrainer + SwtsScheduler` artifact.
 - Ran compatibility audit against `/Users/vaseline555/Desktop/workspace/APPFL_SIM/APPFL-main`.
 - `unresolved_appfl_imports` came back empty.
 - When trainer used metrics manager imports, exporter generated `src/appfl/metrics/*` support files automatically.

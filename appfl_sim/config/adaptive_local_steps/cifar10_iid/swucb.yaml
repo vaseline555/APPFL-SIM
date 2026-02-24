@@ -30,9 +30,9 @@ algorithm:
   name: swucb
   mix_coefs: sample_ratio
   optimize_memory: true
-  aggregator: FedAvgAggregator
+  aggregator: SwucbAggregator
   scheduler: SwucbScheduler
-  trainer: VanillaTrainer
+  trainer: SwucbTrainer
   aggregator_kwargs:
     client_weights_mode: sample_ratio
   scheduler_kwargs:

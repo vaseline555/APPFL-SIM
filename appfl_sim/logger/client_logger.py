@@ -16,6 +16,7 @@ except Exception:  # pragma: no cover
 from typing import List, Dict, Union
 
 
+
 class _RoundAwareFormatter(logging.Formatter):
     def __init__(self, pattern: str):
         super().__init__(pattern)
@@ -68,10 +69,14 @@ class ClientAgentFileLogger:
             except Exception:
                 client_label = f"Client {logging_id}"
 
-        self.logger = logging.getLogger(
-            __name__ + "_" + logging_id if logging_id != "" else str(uuid.uuid4())
+        logger_name = __name__ + "_" + (
+            f"{file_dir}/{file_name}".replace("/", "_")
+            if file_name
+            else (logging_id if logging_id != "" else str(uuid.uuid4()))
         )
+        self.logger = logging.getLogger(logger_name)
         self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
         info_fmt = (
             _RoundAwareFormatter(
                 f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ✅{Style.RESET_ALL}[%(asctime)s]: %(message)s"

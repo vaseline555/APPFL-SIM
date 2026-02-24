@@ -3,13 +3,10 @@ import ast
 import copy
 import importlib
 import importlib.util
+import logging
 import os
-import os.path as osp
-import random
-import string
 import sys
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
@@ -17,21 +14,31 @@ from torch.utils.data import DataLoader
 from appfl_sim.misc.config_utils import (
     _build_train_cfg,
     _cfg_bool,
+    _cfg_to_dict,
     _cfg_get,
     _resolve_algorithm_components,
     _resolve_client_logging_policy,
-    _resolve_num_sampled_clients,
 )
 from appfl_sim.misc.config_utils import build_loss_from_config
-from appfl_sim.misc.data_utils import _build_client_groups
+from appfl_sim.misc.data_utils import (
+    _build_client_groups,
+    _normalize_client_tuple,
+    _resolve_num_sampled_clients,
+)
 
-def _maybe_select_round_local_steps(server, round_idx: int):
+LOGGER = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from appfl_sim.agent import ClientAgent, ServerAgent
+
+def _select_round_local_steps(server, round_idx: int):
     scheduler = getattr(server, "scheduler", None)
     if scheduler is None or not hasattr(scheduler, "pull"):
         return None
     try:
         return int(scheduler.pull(round_idx=int(round_idx)))
-    except Exception:
+    except (TypeError, ValueError, AttributeError) as exc:
+        LOGGER.debug("Scheduler.pull failed to provide integer local steps: %s", exc)
         return None
 
 def _normalize_uploaded_state(uploaded):
@@ -55,7 +62,6 @@ def _run_local_client_update(
         )
     state = _normalize_uploaded_state(client.upload())
     return train_result, state
-
 
 def _resolve_runtime_policies(config: DictConfig, runtime_cfg: Dict[str, Any]) -> Dict[str, Any]:
     num_clients = int(runtime_cfg["num_clients"])
@@ -83,11 +89,7 @@ def _resolve_runtime_policies(config: DictConfig, runtime_cfg: Dict[str, Any]) -
         "logging_policy": logging_policy,
     }
 
-
-def id_generator(size=6, chars=string.ascii_uppercase + string.digits):
-    return "".join(random.choice(chars) for _ in range(size))
-
-def get_last_class_name(file_path):
+def _get_last_class_name(file_path):
     with open(file_path) as file:
         file_content = file.read()
     tree = ast.parse(file_content)
@@ -96,7 +98,7 @@ def get_last_class_name(file_path):
         return classes[-1].name
     return None
 
-def get_last_function_name(file_path):
+def _get_last_function_name(file_path):
     with open(file_path) as file:
         file_content = file.read()
     tree = ast.parse(file_content)
@@ -105,9 +107,7 @@ def get_last_function_name(file_path):
         return functions[-1].name
     return None
 
-def create_instance_from_file(file_path, class_name=None, *args, **kwargs):
-    if class_name is None:
-        class_name = get_last_class_name(file_path)
+def _load_module_from_file(file_path: str):
     file_path = os.path.abspath(file_path)
     if not os.path.isfile(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -116,95 +116,31 @@ def create_instance_from_file(file_path, class_name=None, *args, **kwargs):
     if module_dir not in sys.path:
         sys.path.append(module_dir)
     spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load python module from: {file_path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+def _create_instance_from_file(file_path, class_name=None, *args, **kwargs):
+    if class_name is None:
+        class_name = _get_last_class_name(file_path)
+    if class_name is None:
+        raise ValueError(f"No class found in file: {file_path}")
+    module = _load_module_from_file(file_path)
     cls = getattr(module, class_name)
-    instance = cls(*args, **kwargs)
-    return instance
+    return cls(*args, **kwargs)
 
-def get_function_from_file(file_path, function_name=None):
-    try:
-        if function_name is None:
-            function_name = get_last_function_name(file_path)
-        file_path = os.path.abspath(file_path)
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
-        module_dir, module_file = os.path.split(file_path)
-        module_name, _ = os.path.splitext(module_file)
-        if module_dir not in sys.path:
-            sys.path.append(module_dir)
-        spec = importlib.util.spec_from_file_location(module_name, file_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        function = getattr(module, function_name)
-        return function
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return None
+def _run_function_from_file(file_path, function_name=None, *args, **kwargs):
+    if function_name is None:
+        function_name = _get_last_function_name(file_path)
+    if function_name is None:
+        raise ValueError(f"No function found in file: {file_path}")
+    module = _load_module_from_file(file_path)
+    function = getattr(module, function_name)
+    return function(*args, **kwargs)
 
-def run_function_from_file(file_path, function_name=None, *args, **kwargs):
-    try:
-        if function_name is None:
-            function_name = get_last_function_name(file_path)
-        file_path = os.path.abspath(file_path)
-        if not os.path.isfile(file_path):
-            raise FileNotFoundError(f"File not found: {file_path}")
-        module_dir, module_file = os.path.split(file_path)
-        module_name, _ = os.path.splitext(module_file)
-        if module_dir not in sys.path:
-            sys.path.append(module_dir)
-        spec = importlib.util.spec_from_file_location(module_name, file_path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        function = getattr(module, function_name)
-        result = function(*args, **kwargs)
-        return result
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return None
-
-def create_instance_from_file_source(source, class_name=None, *args, **kwargs):
-    _home = Path.home()
-    dirname = osp.join(_home, ".appfl", "tmp")
-    try:
-        if not osp.exists(dirname):
-            Path(dirname).mkdir(parents=True, exist_ok=True)
-    except OSError:
-        dirname = osp.join("/tmp", ".appfl", "tmp")
-        if not osp.exists(dirname):
-            Path(dirname).mkdir(parents=True, exist_ok=True)
-    file_path = osp.join(dirname, f"{id_generator()}.py")
-    with open(file_path, "w") as file:
-        file.write(source)
-    instance = create_instance_from_file(file_path, class_name, *args, **kwargs)
-    os.remove(file_path)
-    return instance
-
-def get_function_from_file_source(source, function_name=None):
-    _home = Path.home()
-    dirname = osp.join(_home, ".appfl", "tmp")
-    try:
-        if not osp.exists(dirname):
-            Path(dirname).mkdir(parents=True, exist_ok=True)
-    except OSError:
-        dirname = osp.join("/tmp", ".appfl", "tmp")
-        if not osp.exists(dirname):
-            Path(dirname).mkdir(parents=True, exist_ok=True)
-    file_path = osp.join(dirname, f"{id_generator()}.py")
-    with open(file_path, "w") as file:
-        file.write(source)
-    function = get_function_from_file(file_path, function_name)
-    os.remove(file_path)
-    return function
-
-def run_function_from_file_source(source, function_name=None, *args, **kwargs):
-    function = get_function_from_file_source(source, function_name)
-    if function is None:
-        return None
-    result = function(*args, **kwargs)
-    return result
-
-def get_appfl_aggregator(
+def _create_aggregator_instance(
     aggregator_name: str,
     model: Optional[Any],
     aggregator_config: DictConfig,
@@ -217,7 +153,7 @@ def get_appfl_aggregator(
     except AttributeError:
         raise ValueError(f"Invalid aggregator name: {aggregator_name}")
 
-def get_appfl_scheduler(
+def _create_scheduler_instance(
     scheduler_name: str,
     scheduler_config: DictConfig,
     aggregator: Optional[Any] = None,
@@ -237,20 +173,7 @@ def _rebind_client_for_on_demand_job(
     client_datasets: Sequence,
     num_workers_override: Optional[int] = None,
 ) -> None:
-    dataset_entry = client_datasets[int(client_id)]
-    if len(dataset_entry) == 1:
-        train_ds = dataset_entry[0]
-        val_ds = None
-        test_ds = None
-    elif len(dataset_entry) == 2:
-        train_ds, test_ds = dataset_entry
-        val_ds = None
-    elif len(dataset_entry) == 3:
-        train_ds, val_ds, test_ds = dataset_entry
-    else:
-        raise ValueError(
-            "Each client dataset entry must be tuple(train), tuple(train,test), or tuple(train,val,test)."
-        )
+    train_ds, val_ds, test_ds = _normalize_client_tuple(client_datasets[int(client_id)])
 
     client.id = int(client_id)
     client.client_agent_config.client_id = str(int(client_id))
@@ -329,6 +252,7 @@ def _build_on_demand_worker_pool(
     client_logging_enabled: bool,
     trainer_name: str,
     pool_size: int,
+    trainer_kwargs: Optional[Dict[str, Any]] = None,
     num_workers_override: Optional[int] = None,
 ) -> List[ClientAgent]:
     if int(pool_size) <= 0:
@@ -348,6 +272,7 @@ def _build_on_demand_worker_pool(
         run_log_dir=run_log_dir,
         client_logging_enabled=client_logging_enabled,
         trainer_name=trainer_name,
+        trainer_kwargs=trainer_kwargs,
         share_model=True,
         num_workers_override=num_workers_override,
     )
@@ -360,7 +285,8 @@ def _build_clients(
     device: str,
     run_log_dir: str,
     client_logging_enabled: bool = True,
-    trainer_name: str = "VanillaTrainer",
+    trainer_name: str = "FedavgTrainer",
+    trainer_kwargs: Optional[Dict[str, Any]] = None,
     share_model: bool = False,
     num_workers_override: Optional[int] = None,
 ):
@@ -372,23 +298,14 @@ def _build_clients(
         run_log_dir=run_log_dir,
         num_workers_override=num_workers_override,
     )
+    if trainer_kwargs is None:
+        trainer_kwargs = _cfg_get(config, "algorithm.trainer_kwargs", {})
+    if trainer_kwargs:
+        train_cfg.update(_cfg_to_dict(trainer_kwargs))
     train_cfg["client_logging_enabled"] = bool(client_logging_enabled)
     clients = []
     for cid in local_client_ids:
-        dataset_entry = client_datasets[int(cid)]
-        if len(dataset_entry) == 1:
-            train_ds = dataset_entry[0]
-            val_ds = None
-            test_ds = None
-        elif len(dataset_entry) == 2:
-            train_ds, test_ds = dataset_entry
-            val_ds = None
-        elif len(dataset_entry) == 3:
-            train_ds, val_ds, test_ds = dataset_entry
-        else:
-            raise ValueError(
-                "Each client dataset entry must be tuple(train), tuple(train,test), or tuple(train,val,test)."
-            )
+        train_ds, val_ds, test_ds = _normalize_client_tuple(client_datasets[int(cid)])
         client_cfg = OmegaConf.create(
             {
                 "train_configs": {
@@ -413,34 +330,6 @@ def _build_clients(
             client
         )
     return clients
-
-def _build_single_client(
-    config: DictConfig,
-    model,
-    client_datasets: Sequence,
-    client_id: int,
-    device: str,
-    run_log_dir: str,
-    client_logging_enabled: bool = True,
-    trainer_name: str = "VanillaTrainer",
-    share_model: bool = False,
-    num_workers_override: Optional[int] = None,
-):
-    clients = _build_clients(
-        config=config,
-        model=model,
-        client_datasets=client_datasets,
-        local_client_ids=np.asarray([int(client_id)]).astype(int),
-        device=device,
-        run_log_dir=run_log_dir,
-        client_logging_enabled=bool(client_logging_enabled),
-        trainer_name=str(trainer_name),
-        share_model=bool(share_model),
-        num_workers_override=num_workers_override,
-    )
-    if not clients:
-        raise RuntimeError(f"Failed to construct client for id={client_id}")
-    return clients[0]
 
 def _build_server(
     config: DictConfig,

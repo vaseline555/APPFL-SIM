@@ -47,27 +47,6 @@ def _parse_holdout_dataset_ratio(config: DictConfig) -> Optional[List[float]]:
         )
     return ratios
 
-def _validate_bandit_dataset_ratio(config: DictConfig) -> None:
-    algorithm = str(_cfg_get(config, "algorithm.name", "fedavg")).strip().lower()
-    scheduler_name = str(_cfg_get(config, "algorithm.scheduler", "")).strip().lower()
-    is_bandit = algorithm in {"swucb", "swts"} or scheduler_name in {
-        "swucbscheduler",
-        "swtsscheduler",
-    }
-    if not is_bandit:
-        return
-    ratios = _parse_holdout_dataset_ratio(config)
-    if ratios is None:
-        raise ValueError(
-            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` is required "
-            "and must include validation split, e.g. [80,10,10]."
-        )
-    if len(ratios) < 3:
-        raise ValueError(
-            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` must have "
-            "three entries (train/val/test), e.g. [80,10,10]."
-        )
-
 def _safe_split_lengths(n: int, ratios: List[float]) -> List[int]:
     lengths = [int(float(n) * r) for r in ratios]
     remain = int(n) - int(sum(lengths))
@@ -86,6 +65,26 @@ def _safe_split_lengths(n: int, ratios: List[float]) -> List[int]:
 
 
 def _dataset_targets(dataset) -> Optional[np.ndarray]:
+    def _as_label_array(value) -> Optional[np.ndarray]:
+        if value is None:
+            return None
+        if torch.is_tensor(value):
+            arr = value.detach().cpu().numpy()
+        else:
+            arr = np.asarray(value)
+        if arr.size == 0:
+            return np.asarray([], dtype=np.int64)
+        return arr.reshape(-1).astype(np.int64, copy=False)
+
+    def _subset_indices_array(indices, subset_len: int) -> Optional[np.ndarray]:
+        if torch.is_tensor(indices):
+            idx = indices.detach().cpu().numpy()
+        else:
+            idx = np.asarray(indices)
+        if idx.size != subset_len:
+            return None
+        return idx.reshape(-1).astype(np.int64, copy=False)
+
     try:
         n = int(len(dataset))
     except Exception:
@@ -93,14 +92,33 @@ def _dataset_targets(dataset) -> Optional[np.ndarray]:
     if n <= 0:
         return np.asarray([], dtype=np.int64)
 
-    targets = getattr(dataset, "targets", None)
-    if targets is not None:
-        if torch.is_tensor(targets):
-            arr = targets.detach().cpu().numpy()
-        else:
-            arr = np.asarray(targets)
-        if arr.size == n:
-            return arr.reshape(-1).astype(np.int64, copy=False)
+    for attr_name in ("targets", "labels", "y"):
+        arr = _as_label_array(getattr(dataset, attr_name, None))
+        if arr is not None and arr.size == n:
+            return arr
+
+    if isinstance(dataset, Subset):
+        base_labels = _dataset_targets(dataset.dataset)
+        if base_labels is not None:
+            idx = _subset_indices_array(dataset.indices, n)
+            if idx is not None:
+                try:
+                    return base_labels[idx]
+                except Exception:
+                    pass
+
+    if isinstance(dataset, ConcatDataset):
+        parts: List[np.ndarray] = []
+        total = 0
+        for child in dataset.datasets:
+            child_labels = _dataset_targets(child)
+            if child_labels is None:
+                parts = []
+                break
+            parts.append(child_labels)
+            total += int(child_labels.size)
+        if parts and total == n:
+            return np.concatenate(parts).astype(np.int64, copy=False)
 
     out = np.empty(n, dtype=np.int64)
     for i in range(n):
@@ -180,7 +198,9 @@ def _normalize_client_tuple(entry) -> Tuple[Optional[object], Optional[object], 
     if len(entry) == 3:
         train_ds, val_ds, test_ds = entry
         return train_ds, val_ds, test_ds
-    raise ValueError("Each client dataset entry must be (train,test) or (train,val,test).")
+    raise ValueError(
+        "Each client dataset entry must be tuple(train), tuple(train,test), or tuple(train,val,test)."
+    )
 
 def _apply_holdout_dataset_ratio(
     client_datasets,
@@ -239,11 +259,14 @@ def _apply_holdout_dataset_ratio(
     return out
 
 def _dataset_has_eval_split(dataset) -> bool:
+    """Return whether a dataset is present and plausibly non-empty for evaluation."""
     if dataset is None:
         return False
+    # Most map-style datasets implement __len__; trust it when available.
     try:
-        return len(dataset) > 0
+        return int(len(dataset)) > 0
     except Exception:
+        # Iterable/streaming datasets may not expose length; if object exists, allow eval path.
         return True
 
 def _validate_loader_output(client_datasets, runtime_cfg: Dict) -> None:
@@ -289,53 +312,56 @@ def _sample_train_clients(train_client_ids: List[int], num_sampled_clients: int)
     n = min(n, len(train_client_ids))
     return sorted(random.sample(train_client_ids, n))
 
-def _sample_eval_clients(
-    config: DictConfig,
-    client_ids: List[int],
-    round_idx: int,
-) -> List[int]:
-    ids = sorted(int(cid) for cid in client_ids)
-    total = len(ids)
-    if total <= 1:
-        return ids
+def _resolve_num_sampled_clients(config: DictConfig, num_clients: int) -> int:
+    if int(num_clients) <= 0:
+        return 0
 
-    ratio = float(_cfg_get(config, "eval.configs.client_ratio", 1.0))
-    ratio = min(1.0, max(0.0, ratio))
-    seed = int(_cfg_get(config, "experiment.seed", 42))
+    raw = _cfg_get(config, "train.num_sampled_clients", None)
+    if raw is not None:
+        try:
+            n = int(raw)
+        except Exception:
+            n = 0
+        if n > 0:
+            return max(1, min(int(num_clients), n))
 
-    target = int(round(total * ratio))
-    if ratio > 0.0 and target <= 0:
-        target = 1
-    if target <= 0:
-        target = total
-    target = max(1, min(total, target))
-
-    if target >= total:
-        return ids
-    rng = random.Random(seed + 17 * int(round_idx))
-    return sorted(rng.sample(ids, target))
+    return int(num_clients)
 
 def _resolve_client_eval_dataset(
     client_datasets: Sequence,
     client_id: int,
     eval_split: str,
 ):
-    item = client_datasets[int(client_id)]
-    if len(item) == 1:
-        train_ds = item[0]
-        val_ds = None
-        test_ds = None
-    elif len(item) == 2:
-        train_ds, test_ds = item
-        val_ds = None
-    elif len(item) == 3:
-        train_ds, val_ds, test_ds = item
-    else:
-        raise ValueError(
-            "Each client dataset entry must be tuple(train), tuple(train,test), or tuple(train,val,test)."
-        )
+    train_ds, val_ds, test_ds = _normalize_client_tuple(client_datasets[int(client_id)])
     del train_ds
     chosen = str(eval_split).strip().lower()
     if chosen in {"val", "validation"}:
         return val_ds if val_ds is not None else test_ds
     return test_ds if test_ds is not None else val_ds
+
+## Algorithm-specific methods
+def _validate_bandit_dataset_ratio(config: DictConfig) -> None:
+    algorithm = str(_cfg_get(config, "algorithm.name", "fedavg")).strip().lower()
+    scheduler_name = str(_cfg_get(config, "algorithm.scheduler", "")).strip().lower()
+    is_bandit = algorithm in {"swucb", "swts"} or scheduler_name in {
+        "swucbscheduler",
+        "swtsscheduler",
+    }
+    if not is_bandit:
+        return
+    ratios = _parse_holdout_dataset_ratio(config)
+    if ratios is None:
+        raise ValueError(
+            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` is required "
+            "and must include validation split, e.g. [80,10,10]."
+        )
+    if len(ratios) < 3:
+        raise ValueError(
+            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` must have "
+            "three entries (train/val/test), e.g. [80,10,10]."
+        )
+
+def _validate_algorithm_data_requirements(config: DictConfig) -> None:
+    # Keep runner decoupled from algorithm-specific checks.
+    # Extend this dispatcher as new algorithms introduce data/runtime constraints.
+    _validate_bandit_dataset_ratio(config)

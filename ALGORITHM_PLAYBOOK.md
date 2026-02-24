@@ -62,9 +62,11 @@ Most new FL methods need these pieces:
 
 Important current note:
 - You do **not** typically need to edit `runner.py` for new algorithms.
-- Add your classes under `appfl_sim/algorithm/...`, then set config keys:
-  - `algorithm=<algo_label>` (metadata + default class-name inference)
-  - optional explicit overrides: `aggregator`, `scheduler`, `trainer`
+- Add your classes under `appfl_sim/algorithm/...` with strict naming:
+  - `<PascalCase(name)>Aggregator`
+  - `<PascalCase(name)>Scheduler`
+  - `<PascalCase(name)>Trainer`
+- Then set `algorithm.name=<algo_label>` in config.
 
 ---
 
@@ -85,13 +87,15 @@ Create:
 Minimum idea:
 
 ```yaml
-algorithm: <algo>
-aggregator: <YourAggregatorClass>
-scheduler: SyncScheduler
-trainer: VanillaTrainer
-num_clients: 3
-num_rounds: 2
-num_sampled_clients: 3
+algorithm:
+  name: <algo>
+  aggregator: <PascalCase(algo)>Aggregator
+  scheduler: <PascalCase(algo)>Scheduler
+  trainer: <PascalCase(algo)>Trainer
+train:
+  num_clients: 3
+  num_rounds: 2
+  num_sampled_clients: 3
 ```
 
 ### Step C: run tiny experiment

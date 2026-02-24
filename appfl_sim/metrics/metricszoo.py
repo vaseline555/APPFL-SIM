@@ -1,6 +1,5 @@
 import torch
 import numpy as np
-import warnings
 
 from sklearn.metrics import (
     accuracy_score,
@@ -21,8 +20,6 @@ from sklearn.metrics import (
 
 from .basemetric import BaseMetric
 
-warnings.filterwarnings("ignore")
-
 
 def accuracy_from_logits(
     logits: torch.Tensor,
@@ -34,6 +31,18 @@ def accuracy_from_logits(
     if as_count:
         return int(correct)
     return float(correct / max(targets.numel(), 1))
+
+
+def _is_multiclass_logits(scores: torch.Tensor) -> bool:
+    return scores.ndim > 1 and int(scores.size(-1)) > 1
+
+
+def _flatten_targets(answers: torch.Tensor) -> np.ndarray:
+    return answers.reshape(-1).numpy()
+
+
+def _binary_probs_from_logits(scores: torch.Tensor) -> np.ndarray:
+    return scores.sigmoid().reshape(-1).numpy()
 
 
 class Acc1(BaseMetric):
@@ -49,12 +58,12 @@ class Acc1(BaseMetric):
 
     def summarize(self):
         scores = torch.cat(self.scores)
-        answers = torch.cat(self.answers).numpy()
+        answers = _flatten_targets(torch.cat(self.answers))
 
-        if scores.size(-1) > 1: # multi-class
+        if _is_multiclass_logits(scores):  # multi-class
             labels = scores.argmax(-1).numpy()
-        else: 
-            scores = scores.sigmoid().numpy()
+        else:
+            scores = _binary_probs_from_logits(scores)
             if self._use_youdenj: # binary - use Youden's J to determine a label
                 fpr, tpr, thresholds = roc_curve(answers, scores)
                 cutoff = thresholds[np.argmax(tpr - fpr)]
@@ -92,10 +101,20 @@ class Auroc(BaseMetric):
         self.answers.append(t)
 
     def summarize(self):
-        scores = torch.cat(self.scores).sigmoid().numpy()
-        answers = torch.cat(self.answers).numpy()
-        num_classes = scores.shape[-1]
-        return roc_auc_score(answers, scores, average='weighted', multi_class='ovr', labels=np.arange(num_classes))
+        scores = torch.cat(self.scores)
+        answers = _flatten_targets(torch.cat(self.answers))
+        if _is_multiclass_logits(scores):
+            probs = scores.softmax(-1).numpy()
+            num_classes = probs.shape[-1]
+            return roc_auc_score(
+                answers,
+                probs,
+                average="weighted",
+                multi_class="ovr",
+                labels=np.arange(num_classes),
+            )
+        probs = _binary_probs_from_logits(scores)
+        return roc_auc_score(answers, probs)
 
 class Auprc(BaseMetric): # only for binary classification
     def __init__(self):
@@ -108,8 +127,8 @@ class Auprc(BaseMetric): # only for binary classification
         self.answers.append(t)
 
     def summarize(self):
-        scores = torch.cat(self.scores).sigmoid().numpy()
-        answers = torch.cat(self.answers).numpy()
+        scores = _binary_probs_from_logits(torch.cat(self.scores))
+        answers = _flatten_targets(torch.cat(self.answers))
         return average_precision_score(answers, scores, average='weighted')
 
 class Youdenj(BaseMetric):  # only for binary classification
@@ -123,8 +142,8 @@ class Youdenj(BaseMetric):  # only for binary classification
         self.answers.append(t)
 
     def summarize(self):
-        scores = torch.cat(self.scores).sigmoid().numpy()
-        answers = torch.cat(self.answers).numpy()
+        scores = _binary_probs_from_logits(torch.cat(self.scores))
+        answers = _flatten_targets(torch.cat(self.answers))
         fpr, tpr, thresholds = roc_curve(answers, scores)
         return float(thresholds[np.argmax(tpr - fpr)])
 
@@ -141,12 +160,12 @@ class F1(BaseMetric):
 
     def summarize(self):
         scores = torch.cat(self.scores)
-        answers = torch.cat(self.answers).numpy()
+        answers = _flatten_targets(torch.cat(self.answers))
 
-        if scores.size(-1) > 1: # multi-class
+        if _is_multiclass_logits(scores):  # multi-class
             labels = scores.argmax(-1).numpy()
-        else: 
-            scores = scores.sigmoid().numpy()
+        else:
+            scores = _binary_probs_from_logits(scores)
             if self._use_youdenj: # binary - use Youden's J to determine a label
                 fpr, tpr, thresholds = roc_curve(answers, scores)
                 cutoff = thresholds[np.argmax(tpr - fpr)]
@@ -168,12 +187,12 @@ class Precision(BaseMetric):
 
     def summarize(self):
         scores = torch.cat(self.scores)
-        answers = torch.cat(self.answers).numpy()
+        answers = _flatten_targets(torch.cat(self.answers))
 
-        if scores.size(-1) > 1: # multi-class
+        if _is_multiclass_logits(scores):  # multi-class
             labels = scores.argmax(-1).numpy()
-        else: 
-            scores = scores.sigmoid().numpy()
+        else:
+            scores = _binary_probs_from_logits(scores)
             if self._use_youdenj: # binary - use Youden's J to determine a label
                 fpr, tpr, thresholds = roc_curve(answers, scores)
                 cutoff = thresholds[np.argmax(tpr - fpr)]
@@ -195,12 +214,12 @@ class Recall(BaseMetric):
 
     def summarize(self):
         scores = torch.cat(self.scores)
-        answers = torch.cat(self.answers).numpy()
+        answers = _flatten_targets(torch.cat(self.answers))
 
-        if scores.size(-1) > 1: # multi-class
+        if _is_multiclass_logits(scores):  # multi-class
             labels = scores.argmax(-1).numpy()
-        else: 
-            scores = scores.sigmoid().numpy()
+        else:
+            scores = _binary_probs_from_logits(scores)
             if self._use_youdenj: # binary - use Youden's J to determine a label
                 fpr, tpr, thresholds = roc_curve(answers, scores)
                 cutoff = thresholds[np.argmax(tpr - fpr)]
@@ -360,12 +379,12 @@ class Balacc(BaseMetric):
 
     def summarize(self):
         scores = torch.cat(self.scores)
-        answers = torch.cat(self.answers).numpy()
+        answers = _flatten_targets(torch.cat(self.answers))
 
-        if scores.size(-1) > 1: # multi-class
+        if _is_multiclass_logits(scores):  # multi-class
             labels = scores.argmax(dim=1).numpy()
-        else: 
-            scores = scores.sigmoid().numpy()
+        else:
+            scores = _binary_probs_from_logits(scores)
             if self._use_youdenj: # binary - use Youden's J to determine a label
                 fpr, tpr, thresholds = roc_curve(answers, scores)
                 cutoff = thresholds[np.argmax(tpr - fpr)]

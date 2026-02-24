@@ -7,9 +7,10 @@ from appfl_sim.algorithm.scheduler import BaseScheduler
 from appfl_sim.algorithm.aggregator import BaseAggregator
 from appfl_sim.metrics import MetricsManager, parse_metric_names
 from appfl_sim.misc.runtime_utils import (
-    run_function_from_file,
-    get_appfl_aggregator,
-    get_appfl_scheduler,
+    _create_instance_from_file,
+    _run_function_from_file,
+    _create_aggregator_instance,
+    _create_scheduler_instance,
 )
 from appfl_sim.misc.config_utils import build_loss_from_train_cfg
 from concurrent.futures import Future
@@ -410,14 +411,13 @@ class ServerAgent:
             self.model = None
             return
         if "model_name" in model_configs:
-            from appfl_sim.misc.runtime_utils import create_instance_from_file
-            self.model = create_instance_from_file(
+            self.model = _create_instance_from_file(
                 model_configs.model_path,
                 model_configs.model_name,
                 **model_configs.get("model_kwargs", {}),
             )
         else:
-            self.model = run_function_from_file(
+            self.model = _run_function_from_file(
                 model_configs.model_path,
                 None,
                 **model_configs.get("model_kwargs", {}),
@@ -433,14 +433,14 @@ class ServerAgent:
     def _load_scheduler(self) -> None:
         """Obtain the scheduler."""
         server_cfg = self.server_agent_config.server_configs
-        self.aggregator: BaseAggregator = get_appfl_aggregator(
+        self.aggregator: BaseAggregator = _create_aggregator_instance(
             aggregator_name=server_cfg.aggregator,
             model=self.model,
             aggregator_config=OmegaConf.create(server_cfg.get("aggregator_kwargs", {})),
             logger=self.logger,
         )
 
-        self.scheduler: BaseScheduler = get_appfl_scheduler(
+        self.scheduler: BaseScheduler = _create_scheduler_instance(
             scheduler_name=server_cfg.scheduler,
             scheduler_config=OmegaConf.create(server_cfg.get("scheduler_kwargs", {})),
             aggregator=self.aggregator,
@@ -470,7 +470,7 @@ class ServerAgent:
             )
             return
         if "val_data_configs" in self.server_agent_config.server_configs:
-            self._val_dataset = run_function_from_file(
+            self._val_dataset = _run_function_from_file(
                 self.server_agent_config.server_configs.val_data_configs.dataset_path,
                 self.server_agent_config.server_configs.val_data_configs.dataset_name,
                 **self.server_agent_config.server_configs.val_data_configs.get(
@@ -546,7 +546,7 @@ class ServerAgent:
             {
                 "client_configs": {
                     "train_configs": {
-                        "trainer": "VanillaTrainer",
+                        "trainer": "FedavgTrainer",
                         "device": "cpu",
                         "mode": "epoch",
                         "num_local_epochs": 1,
@@ -584,9 +584,9 @@ class ServerAgent:
                     "eval_batch_size": 128,
                     "eval_show_progress": True,
                     "eval_metrics": ["acc1"],
-                    "aggregator": "FedAvgAggregator",
+                    "aggregator": "FedavgAggregator",
                     "aggregator_kwargs": {},
-                    "scheduler": "SyncScheduler",
+                    "scheduler": "FedavgScheduler",
                     "scheduler_kwargs": {},
                 },
             }

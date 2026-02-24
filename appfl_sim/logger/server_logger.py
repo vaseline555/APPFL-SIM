@@ -46,6 +46,7 @@ class ServerAgentFileLogger:
         )
         self.logger = logging.getLogger(logger_name)
         self.logger.setLevel(logging.DEBUG)
+        self.logger.propagate = False
 
         info_fmt = _RoundAwareFormatter(
             f"{Fore.BLUE}{Style.BRIGHT}appfl-sim: ✅{Style.RESET_ALL}[%(asctime)s | Server%(round_part)s]: %(message)s"

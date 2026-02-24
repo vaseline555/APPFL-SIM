@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 from typing import Dict, List, Optional
 import numpy as np
 import torch
@@ -6,11 +7,13 @@ from omegaconf import DictConfig
 from appfl_sim.metrics import MetricsManager, parse_metric_names
 from appfl_sim.misc.config_utils import _cfg_bool
 from appfl_sim.misc.config_utils import build_loss_from_config
-from appfl_sim.misc.data_utils import _resolve_client_eval_dataset, _sample_eval_clients
+from appfl_sim.misc.data_utils import _resolve_client_eval_dataset
 from appfl_sim.misc.metrics_utils import _weighted_mean
 from appfl_sim.misc.system_utils import _client_processing_chunk_size, _iter_id_chunks
 from appfl_sim.misc.logging_utils import _new_progress
 from appfl_sim.misc.config_utils import _cfg_get
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
@@ -20,9 +23,10 @@ def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
         return round_idx == int(num_rounds)
     return round_idx % every_i == 0 or round_idx == int(num_rounds)
 
-def _weighted_global_gen_error(
+def _weighted_global_stat(
     stats: dict,
     sample_sizes: dict,
+    stat_key: str,
 ) -> float | None:
     if not stats:
         return None
@@ -31,32 +35,7 @@ def _weighted_global_gen_error(
     for cid, client_stats in stats.items():
         if not isinstance(client_stats, dict):
             continue
-        if "local_gen_error" not in client_stats:
-            continue
-        value = client_stats.get("local_gen_error")
-        if not isinstance(value, (int, float)):
-            continue
-        weight = float(sample_sizes.get(cid, 0))
-        if weight <= 0.0:
-            weight = 1.0
-        accum += weight * float(value)
-        total += weight
-    if total <= 0.0:
-        return None
-    return float(accum / total)
-
-def _weighted_global_pre_val_error(
-    stats: dict,
-    sample_sizes: dict,
-) -> float | None:
-    if not stats:
-        return None
-    total = 0.0
-    accum = 0.0
-    for cid, client_stats in stats.items():
-        if not isinstance(client_stats, dict):
-            continue
-        value = client_stats.get("pre_val_loss", None)
+        value = client_stats.get(stat_key, None)
         if not isinstance(value, (int, float)):
             continue
         weight = float(sample_sizes.get(cid, 0))
@@ -69,13 +48,14 @@ def _weighted_global_pre_val_error(
     return float(accum / total)
 
 
-def _maybe_adapt_round_pre_val_error(server, pre_val_error: float):
+def _adapt_bandit_policy(server, pre_val_error: float):
     scheduler = getattr(server, "scheduler", None)
     if scheduler is None or not hasattr(scheduler, "adapt"):
         return None
     try:
         return scheduler.adapt(pre_val_error=float(pre_val_error))
-    except Exception:
+    except (TypeError, ValueError, AttributeError) as exc:
+        LOGGER.debug("Scheduler.adapt failed for pre_val_error=%s: %s", pre_val_error, exc)
         return None
 
 def _resolve_model_output(output):
@@ -140,12 +120,10 @@ def _build_federated_eval_plan(
     config: DictConfig,
     round_idx: int,
     num_rounds: int,
-    selected_train_ids: List[int],
     train_client_ids: List[int],
     holdout_client_ids: List[int],
 ) -> Dict[str, List[int] | str | bool]:
     scheme = str(_cfg_get(config, "eval.configs.scheme", "dataset")).strip().lower()
-    del selected_train_ids
     checkpoint = _should_eval_round(
         round_idx,
         int(_cfg_get(config, "eval.every", 1)),
@@ -161,75 +139,23 @@ def _build_federated_eval_plan(
         }
 
     if scheme == "client":
-        in_ids = _sample_eval_clients(config, sorted(train_client_ids), round_idx)
-        out_ids = _sample_eval_clients(config, sorted(holdout_client_ids), round_idx)
+        out_ids = sorted(int(cid) for cid in holdout_client_ids)
         return {
             "scheme": "client",
             "checkpoint": checkpoint,
-            "in_ids": in_ids,
+            "in_ids": [],
             "out_ids": out_ids,
         }
 
     # Default: dataset-based evaluation.
-    # Evaluate all train clients only at checkpoint rounds.
-    in_ids = _sample_eval_clients(config, sorted(train_client_ids), round_idx)
+    # Evaluate all train clients at checkpoint rounds.
+    in_ids = sorted(int(cid) for cid in train_client_ids)
     return {
         "scheme": "dataset",
         "checkpoint": checkpoint,
         "in_ids": in_ids,
         "out_ids": [],
     }
-
-def _run_federated_eval_distributed(
-    config: DictConfig,
-    communicator,
-    model_state,
-    model,
-    device: str,
-    round_idx: int,
-    eval_ids: List[int],
-    eval_tag: str = "federated",
-    eval_split: str = "test",
-) -> Optional[Dict[str, float]]:
-    if not eval_ids:
-        return None
-    eval_stats = {}
-    chunk_size = _client_processing_chunk_size(
-        config=config,
-        model=model,
-        device=device,
-        total_clients=len(eval_ids),
-        phase="eval",
-    )
-    progress = _new_progress(
-        total=len(eval_ids),
-        desc=f"Server (Round {int(round_idx):04d}) | Evaluation ({str(eval_tag).replace('-', ' ').title()}.)",
-        enabled=_cfg_bool(config, "eval.show_eval_progress", True),
-    )
-    try:
-        first_chunk = True
-        for chunk_ids in _iter_id_chunks(sorted(eval_ids), chunk_size):
-            communicator.broadcast_global_model(
-                model=model_state if first_chunk else None,
-                args={
-                    "done": False,
-                    "mode": "eval",
-                    "round": int(round_idx),
-                    "eval_ids": list(chunk_ids),
-                    "eval_split": str(eval_split),
-                },
-            )
-            first_chunk = False
-            eval_payloads = communicator.recv_all_local_models_from_clients()
-            for cid, payload in eval_payloads.items():
-                if isinstance(payload, dict) and "eval_stats" in payload:
-                    eval_stats[int(cid)] = payload["eval_stats"]
-            if progress is not None:
-                progress.update(len(chunk_ids))
-    finally:
-        if progress is not None:
-            progress.close()
-    return _aggregate_eval_stats(eval_stats)
 
 def _aggregate_eval_stats(stats: Dict[int, Dict]) -> Optional[Dict[str, float]]:
     if not stats:
@@ -290,8 +216,6 @@ def _run_federated_eval_serial(
     config: DictConfig,
     model,
     client_datasets,
-    run_log_dir: str,
-    client_logging_enabled: bool,
     device: str,
     global_state,
     eval_client_ids: List[int],

@@ -11,7 +11,7 @@ from appfl_sim.misc.system_utils import (
 )
 
 
-class FedAvgAggregator(BaseAggregator):
+class FedavgAggregator(BaseAggregator):
     """
     :param `model`: An optional instance of the model to be trained in the federated learning setup.
         This can be useful for aggregating parameters that does requires gradient, such as the batch

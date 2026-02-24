@@ -1,9 +1,11 @@
 from .base_aggregator import BaseAggregator
-from .fedavg_aggregator import FedAvgAggregator
-from .fednova_aggregator import FedNovaAggregator
+from .fedavg_aggregator import FedavgAggregator
+from .swts_aggregator import SwtsAggregator
+from .swucb_aggregator import SwucbAggregator
 
 __all__ = [
     "BaseAggregator",
-    "FedAvgAggregator",
-    "FedNovaAggregator",
+    "FedavgAggregator",
+    "SwtsAggregator",
+    "SwucbAggregator",
 ]

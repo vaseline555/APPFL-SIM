@@ -27,6 +27,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dev = [
+  "pytest>=8.0"
+]
 all = [
   "Pillow>=10.0",
   "tensorboard>=2.16",

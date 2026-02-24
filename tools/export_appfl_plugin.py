@@ -36,6 +36,27 @@ def _ensure_class_exists(py_file: Path, class_name: str) -> None:
         )
 
 
+def _to_pascal_case(name: str) -> str:
+    parts = [p for p in re.split(r"[^0-9a-zA-Z]+", str(name)) if p]
+    return "".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _validate_component_naming(algorithm: str, components: list[Component]) -> None:
+    prefix = _to_pascal_case(algorithm)
+    expected = {
+        "aggregator": f"{prefix}Aggregator",
+        "scheduler": f"{prefix}Scheduler",
+        "trainer": f"{prefix}Trainer",
+    }
+    for comp in components:
+        required = expected.get(comp.kind, "")
+        if comp.class_name != required:
+            raise ValueError(
+                f"{comp.kind} class naming mismatch: got '{comp.class_name}', expected '{required}' "
+                f"for algorithm='{algorithm}'."
+            )
+
+
 def _copy_component(component: Component, target_algorithm_dir: Path) -> tuple[Path, str]:
     dst_dir = target_algorithm_dir / component.kind
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -277,6 +298,7 @@ def main() -> None:
         _ensure_class_exists(scheduler.source, scheduler.class_name)
 
     components = [aggregator] + ([trainer] if trainer else []) + ([scheduler] if scheduler else [])
+    _validate_component_naming(algorithm, components)
 
     if str(args.appfl_root).strip():
         appfl_root = Path(args.appfl_root).resolve()

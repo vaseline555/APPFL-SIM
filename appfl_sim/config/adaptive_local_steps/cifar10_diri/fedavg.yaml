@@ -32,9 +32,9 @@ algorithm:
   name: fedavg
   mix_coefs: sample_ratio
   optimize_memory: true
-  aggregator: FedAvgAggregator
-  scheduler: SyncScheduler
-  trainer: VanillaTrainer
+  aggregator: FedavgAggregator
+  scheduler: FedavgScheduler
+  trainer: FedavgTrainer
   aggregator_kwargs:
     client_weights_mode: sample_ratio
   scheduler_kwargs: {}

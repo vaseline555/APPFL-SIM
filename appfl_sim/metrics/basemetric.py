@@ -1,12 +1,7 @@
-from abc import *
+from abc import ABC, abstractmethod
 
 
-
-class BaseMetric(metaclass=ABCMeta):
-    @abstractmethod
-    def __init__(self):
-        raise NotImplementedError
-
+class BaseMetric(ABC):
     @abstractmethod
     def collect(self, pred, true):
         raise NotImplementedError

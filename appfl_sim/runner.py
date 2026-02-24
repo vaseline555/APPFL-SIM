@@ -14,6 +14,10 @@ from appfl_sim.agent import ClientAgent
 from appfl_sim.logger import create_experiment_tracker
 from appfl_sim.loaders import load_dataset, load_model
 from appfl_sim.misc.system_utils import (
+    _client_processing_chunk_size,
+    _force_server_cpu_when_global_eval_disabled,
+    _iter_id_chunks,
+    _release_clients,
     get_local_rank,
     resolve_rank_device,
     set_seed_everything,
@@ -34,17 +38,16 @@ from appfl_sim.misc.data_utils import (
     _apply_holdout_dataset_ratio,
     _dataset_has_eval_split,
     _sample_train_clients,
-    _validate_bandit_dataset_ratio,
+    _validate_algorithm_data_requirements,
     _validate_loader_output,
 )
 from appfl_sim.misc.learning_utils import (
     _aggregate_eval_stats,
+    _adapt_bandit_policy,
     _build_federated_eval_plan,
-    _maybe_adapt_round_pre_val_error,
     _run_federated_eval_serial,
     _should_eval_round,
-    _weighted_global_gen_error,
-    _weighted_global_pre_val_error,
+    _weighted_global_stat,
 )
 from appfl_sim.misc.logging_utils import (
     _emit_client_state_policy_message,
@@ -61,7 +64,7 @@ from appfl_sim.misc.runtime_utils import (
     _build_clients,
     _build_on_demand_worker_pool,
     _build_server,
-    _maybe_select_round_local_steps,
+    _select_round_local_steps,
     _rebind_client_for_on_demand_job,
     _resolve_runtime_policies,
     _run_local_client_update,
@@ -72,18 +75,55 @@ from appfl_sim.misc.dist_utils import (
     _run_federated_eval_distributed,
     launch_or_run_distributed,
 )
-from appfl_sim.misc.system_utils import (
-    _client_processing_chunk_size,
-    _iter_id_chunks,
-    _maybe_force_server_cpu,
-    _release_clients,
-)
+
+
+def _assert_stateful_dataloaders_unchanged(
+    persistent_clients: Optional[List[ClientAgent]],
+    stateful_dataloader_ids: Optional[dict[int, tuple[int, int, int]]],
+) -> None:
+    if stateful_dataloader_ids is None or persistent_clients is None:
+        return
+    for client in persistent_clients:
+        current_ids = (
+            id(client.trainer.train_dataloader),
+            id(client.trainer.val_dataloader)
+            if client.trainer.val_dataloader is not None
+            else -1,
+            id(client.trainer.test_dataloader)
+            if client.trainer.test_dataloader is not None
+            else -1,
+        )
+        if current_ids != stateful_dataloader_ids[int(client.id)]:
+            raise RuntimeError(
+                "Stateful mode requires persistent per-client dataloaders across rounds."
+            )
+
+
+def _adapt_and_track_gen_reward(
+    *,
+    server,
+    round_pre_val_error: Optional[float],
+    prev_pre_val_error: Optional[float],
+    track_gen_rewards: bool,
+    cumulative_gen_reward: float,
+) -> tuple[Optional[float], Optional[float], float]:
+    round_gen_reward: Optional[float] = None
+    next_prev = prev_pre_val_error
+    next_cumulative = float(cumulative_gen_reward)
+    if round_pre_val_error is None:
+        return round_gen_reward, next_prev, next_cumulative
+    _adapt_bandit_policy(server, pre_val_error=round_pre_val_error)
+    if track_gen_rewards and prev_pre_val_error is not None:
+        round_gen_reward = float(prev_pre_val_error - round_pre_val_error)
+        next_cumulative += float(round_gen_reward)
+    next_prev = float(round_pre_val_error)
+    return round_gen_reward, next_prev, next_cumulative
 
 
 def run_serial(config) -> None:
     if not isinstance(config, DictConfig):
         config = OmegaConf.create(_cfg_to_dict(config))
-    _validate_bandit_dataset_ratio(config)
+    _validate_algorithm_data_requirements(config)
 
     set_seed_everything(int(_cfg_get(config, "experiment.seed", 42)))
     t0 = time.time()
@@ -117,7 +157,7 @@ def run_serial(config) -> None:
     _emit_client_state_policy_message(state_policy, logger=server_logger)
     server_logger.info(
         "Algorithm wiring: "
-        f"algorithm={algorithm_components['algorithm']} "
+        f"algorithm={algorithm_components['algorithm_name']} "
         f"aggregator={algorithm_components['aggregator_name']} "
         f"scheduler={algorithm_components['scheduler_name']} "
         f"trainer={algorithm_components['trainer_name']}"
@@ -127,7 +167,9 @@ def run_serial(config) -> None:
     enable_global_eval = _cfg_bool(config, "eval.enable_global_eval", True) and _dataset_has_eval_split(
         server_dataset
     )
-    _maybe_force_server_cpu(config, enable_global_eval, logger=server_logger)
+    _force_server_cpu_when_global_eval_disabled(
+        config, enable_global_eval, logger=server_logger
+    )
     enable_federated_eval = _cfg_bool(config, "eval.enable_federated_eval", True)
     track_gen_rewards = _cfg_bool(config, "logging.configs.track_gen_rewards", False)
     num_rounds = int(_cfg_get(config, "train.num_rounds", 20))
@@ -159,13 +201,13 @@ def run_serial(config) -> None:
         total_clients=num_clients,
         phase="train",
     )
-    eager_clients = None
+    persistent_clients = None
     worker_pool: Optional[List[ClientAgent]] = None
     stateful_mode = bool(state_policy["stateful"])
     on_demand_model = None if stateful_mode else copy.deepcopy(model)
 
     if stateful_mode:
-        eager_clients = _build_clients(
+        persistent_clients = _build_clients(
             config=config,
             model=model,
             client_datasets=client_datasets,
@@ -193,19 +235,19 @@ def run_serial(config) -> None:
                 num_workers_override=on_demand_workers["train"],
             )
     if stateful_mode:
-        if eager_clients is None or worker_pool is not None:
+        if persistent_clients is None or worker_pool is not None:
             raise RuntimeError(
-                "Invalid client lifecycle: experiment.stateful=true requires persistent eager clients."
+                "Invalid client lifecycle: experiment.stateful=true requires persistent clients."
             )
     stateful_dataloader_ids = None
-    if stateful_mode and eager_clients is not None:
+    if stateful_mode and persistent_clients is not None:
         stateful_dataloader_ids = {
             int(client.id): (
                 id(client.trainer.train_dataloader),
                 id(client.trainer.val_dataloader) if client.trainer.val_dataloader is not None else -1,
                 id(client.trainer.test_dataloader) if client.trainer.test_dataloader is not None else -1,
             )
-            for client in eager_clients
+            for client in persistent_clients
         }
 
     server_logger.info(
@@ -233,26 +275,19 @@ def run_serial(config) -> None:
                 train_client_ids=train_client_ids,
                 num_sampled_clients=int(num_sampled_clients),
             )
-            round_local_steps = _maybe_select_round_local_steps(server, round_idx)
+            round_local_steps = _select_round_local_steps(server, round_idx)
             global_state = server.model.state_dict()
 
             updates = {}
             sample_sizes = {}
             stats = {}
-            if stateful_dataloader_ids is not None:
-                for client in eager_clients:
-                    current_ids = (
-                        id(client.trainer.train_dataloader),
-                        id(client.trainer.val_dataloader) if client.trainer.val_dataloader is not None else -1,
-                        id(client.trainer.test_dataloader) if client.trainer.test_dataloader is not None else -1,
-                    )
-                    if current_ids != stateful_dataloader_ids[int(client.id)]:
-                        raise RuntimeError(
-                            "Stateful mode requires persistent per-client dataloaders across rounds."
-                        )
-            if eager_clients is not None:
+            _assert_stateful_dataloaders_unchanged(
+                persistent_clients=persistent_clients,
+                stateful_dataloader_ids=stateful_dataloader_ids,
+            )
+            if persistent_clients is not None:
                 selected = set(selected_ids)
-                for client in eager_clients:
+                for client in persistent_clients:
                     if client.id not in selected:
                         continue
                     train_result, state = _run_local_client_update(
@@ -301,22 +336,30 @@ def run_serial(config) -> None:
                     if not worker_pool:
                         _release_clients(chunk_clients)
 
-            weights = server.aggregate(
+            server.aggregate(
                 updates,
                 sample_sizes,
                 client_train_stats=stats,
             )
-            round_gen_error = _weighted_global_gen_error(stats, sample_sizes)
-            round_pre_val_error = _weighted_global_pre_val_error(stats, sample_sizes)
-            round_gen_reward = None
-            if round_pre_val_error is not None:
-                _maybe_adapt_round_pre_val_error(
-                    server, pre_val_error=round_pre_val_error
+            round_gen_error = _weighted_global_stat(
+                stats=stats,
+                sample_sizes=sample_sizes,
+                stat_key="local_gen_error",
+            )
+            round_pre_val_error = _weighted_global_stat(
+                stats=stats,
+                sample_sizes=sample_sizes,
+                stat_key="pre_val_loss",
+            )
+            round_gen_reward, prev_pre_val_error, cumulative_gen_reward = (
+                _adapt_and_track_gen_reward(
+                    server=server,
+                    round_pre_val_error=round_pre_val_error,
+                    prev_pre_val_error=prev_pre_val_error,
+                    track_gen_rewards=bool(track_gen_rewards),
+                    cumulative_gen_reward=float(cumulative_gen_reward),
                 )
-                if track_gen_rewards and prev_pre_val_error is not None:
-                    round_gen_reward = float(prev_pre_val_error - round_pre_val_error)
-                    cumulative_gen_reward += float(round_gen_reward)
-                prev_pre_val_error = float(round_pre_val_error)
+            )
             global_eval_metrics = None
             if enable_global_eval and _should_eval_round(
                 round_idx,
@@ -326,43 +369,32 @@ def run_serial(config) -> None:
                 global_eval_metrics = server.evaluate(round_idx=round_idx)
 
             federated_eval_metrics = None
-            federated_eval_in_metrics = None
             federated_eval_out_metrics = None
             if enable_federated_eval:
                 plan = _build_federated_eval_plan(
                     config=config,
                     round_idx=round_idx,
                     num_rounds=num_rounds,
-                    selected_train_ids=selected_ids,
                     train_client_ids=train_client_ids,
                     holdout_client_ids=holdout_client_ids,
                 )
-                if eager_clients is not None:
+                if persistent_clients is not None:
                     state = server.model.state_dict()
                     if plan["scheme"] == "client":
-                        eval_in_set = set(plan["in_ids"])
                         eval_out_set = set(plan["out_ids"])
-                        eval_in_stats = {}
                         eval_out_stats = {}
-                        for client in eager_clients:
-                            if client.id in eval_in_set:
-                                client.download(state)
-                                eval_in_stats[int(client.id)] = client.evaluate(
-                                    split="test",
-                                    offload_after=False,
-                                )
-                            elif client.id in eval_out_set:
+                        for client in persistent_clients:
+                            if client.id in eval_out_set:
                                 client.download(state)
                                 eval_out_stats[int(client.id)] = client.evaluate(
                                     split="test",
                                     offload_after=False,
                                 )
-                        federated_eval_in_metrics = _aggregate_eval_stats(eval_in_stats)
                         federated_eval_out_metrics = _aggregate_eval_stats(eval_out_stats)
                     else:
                         eval_set = set(plan["in_ids"])
                         eval_stats = {}
-                        for client in eager_clients:
+                        for client in persistent_clients:
                             if client.id not in eval_set:
                                 continue
                             client.download(state)
@@ -373,30 +405,10 @@ def run_serial(config) -> None:
                         federated_eval_metrics = _aggregate_eval_stats(eval_stats)
                 else:
                     if plan["scheme"] == "client":
-                        federated_eval_in_metrics = _run_federated_eval_serial(
-                            config=config,
-                            model=on_demand_model if on_demand_model is not None else model,
-                            client_datasets=client_datasets,
-                            run_log_dir=run_log_dir,
-                            client_logging_enabled=bool(
-                                logging_policy["client_logging_enabled"]
-                            ),
-                            device=client_device,
-                            global_state=server.model.state_dict(),
-                            eval_client_ids=list(plan["in_ids"]),
-                            round_idx=round_idx,
-                            eval_tag="fed-in",
-                            eval_split="test",
-                            eval_num_workers_override=on_demand_workers["eval"],
-                        )
                         federated_eval_out_metrics = _run_federated_eval_serial(
                             config=config,
                             model=on_demand_model if on_demand_model is not None else model,
                             client_datasets=client_datasets,
-                            run_log_dir=run_log_dir,
-                            client_logging_enabled=bool(
-                                logging_policy["client_logging_enabled"]
-                            ),
                             device=client_device,
                             global_state=server.model.state_dict(),
                             eval_client_ids=list(plan["out_ids"]),
@@ -410,10 +422,6 @@ def run_serial(config) -> None:
                             config=config,
                             model=on_demand_model if on_demand_model is not None else model,
                             client_datasets=client_datasets,
-                            run_log_dir=run_log_dir,
-                            client_logging_enabled=bool(
-                                logging_policy["client_logging_enabled"]
-                            ),
                             device=client_device,
                             global_state=server.model.state_dict(),
                             eval_client_ids=list(plan["in_ids"]),
@@ -429,13 +437,11 @@ def run_serial(config) -> None:
                 len(selected_ids),
                 len(train_client_ids),
                 stats,
-                weights,
                 round_local_steps=round_local_steps,
                 round_wall_time_sec=(time.time() - round_t0),
                 global_gen_error=round_gen_error,
                 global_eval_metrics=global_eval_metrics,
                 federated_eval_metrics=federated_eval_metrics,
-                federated_eval_in_metrics=federated_eval_in_metrics,
                 federated_eval_out_metrics=federated_eval_out_metrics,
                 track_gen_rewards=bool(track_gen_rewards),
                 round_gen_reward=round_gen_reward,
@@ -449,8 +455,8 @@ def run_serial(config) -> None:
         interrupted = True
         server_logger.info("Interrupted by user; shutting down serial backend.")
     finally:
-        if eager_clients is not None:
-            _release_clients(eager_clients)
+        if persistent_clients is not None:
+            _release_clients(persistent_clients)
         if worker_pool is not None:
             _release_clients(worker_pool)
         if tracker is not None:
@@ -468,9 +474,9 @@ def run_distributed(config, backend: str) -> None:
 
     if not isinstance(config, DictConfig):
         config = OmegaConf.create(_cfg_to_dict(config))
-    _validate_bandit_dataset_ratio(config)
+    _validate_algorithm_data_requirements(config)
     if backend not in {"nccl", "gloo"}:
-        raise ValueError("backend must be one of: serial, nccl, gloo")
+        raise ValueError("backend must be one of: nccl, gloo")
     if not dist.is_initialized():
         raise RuntimeError("torch.distributed process group is not initialized.")
 
@@ -549,14 +555,14 @@ def run_distributed(config, backend: str) -> None:
         total_clients=max(1, len(local_client_ids)),
         phase="train",
     )
-    eager_clients = None
+    persistent_clients = None
     worker_pool: Optional[List[ClientAgent]] = None
     stateful_mode = bool(state_policy["stateful"])
     on_demand_model = None if stateful_mode else copy.deepcopy(model)
     local_client_logging_enabled = bool(logging_policy["client_logging_enabled"])
 
     if stateful_mode:
-        eager_clients = _build_clients(
+        persistent_clients = _build_clients(
             config=config,
             model=model,
             client_datasets=client_datasets,
@@ -584,19 +590,19 @@ def run_distributed(config, backend: str) -> None:
                 num_workers_override=on_demand_workers["train"],
             )
     if stateful_mode:
-        if eager_clients is None or worker_pool is not None:
+        if persistent_clients is None or worker_pool is not None:
             raise RuntimeError(
-                "Invalid client lifecycle: experiment.stateful=true requires persistent eager clients."
+                "Invalid client lifecycle: experiment.stateful=true requires persistent clients."
             )
     stateful_dataloader_ids = None
-    if stateful_mode and eager_clients is not None:
+    if stateful_mode and persistent_clients is not None:
         stateful_dataloader_ids = {
             int(client.id): (
                 id(client.trainer.train_dataloader),
                 id(client.trainer.val_dataloader) if client.trainer.val_dataloader is not None else -1,
                 id(client.trainer.test_dataloader) if client.trainer.test_dataloader is not None else -1,
             )
-            for client in eager_clients
+            for client in persistent_clients
         }
 
     tracker = None
@@ -605,7 +611,9 @@ def run_distributed(config, backend: str) -> None:
     prev_pre_val_error: Optional[float] = None
     cumulative_gen_reward: float = 0.0
     if rank == 0:
-        _maybe_force_server_cpu(config, enable_global_eval, logger=server_logger)
+        _force_server_cpu_when_global_eval_disabled(
+            config, enable_global_eval, logger=server_logger
+        )
         _warn_if_workers_pinned_to_single_device(
             config=config,
             world_size=world_size,
@@ -617,7 +625,7 @@ def run_distributed(config, backend: str) -> None:
         _emit_client_state_policy_message(state_policy, logger=server_logger)
         server_logger.info(
             "Algorithm wiring: "
-            f"algorithm={algorithm_components['algorithm']} "
+            f"algorithm={algorithm_components['algorithm_name']} "
             f"aggregator={algorithm_components['aggregator_name']} "
             f"scheduler={algorithm_components['scheduler_name']} "
             f"trainer={algorithm_components['trainer_name']}"
@@ -665,7 +673,7 @@ def run_distributed(config, backend: str) -> None:
                     train_client_ids=train_client_ids,
                     num_sampled_clients=int(num_sampled_clients),
                 )
-                local_steps = _maybe_select_round_local_steps(server, round_idx)
+                local_steps = _select_round_local_steps(server, round_idx)
                 payload = {"selected_ids": selected_ids, "local_steps": local_steps}
             else:
                 payload = None
@@ -682,20 +690,13 @@ def run_distributed(config, backend: str) -> None:
     
             selected_local_ids = sorted(int(cid) for cid in selected_ids if int(cid) in local_client_set)
             local_payload = {}
-            if stateful_dataloader_ids is not None:
-                for client in eager_clients:
-                    current_ids = (
-                        id(client.trainer.train_dataloader),
-                        id(client.trainer.val_dataloader) if client.trainer.val_dataloader is not None else -1,
-                        id(client.trainer.test_dataloader) if client.trainer.test_dataloader is not None else -1,
-                    )
-                    if current_ids != stateful_dataloader_ids[int(client.id)]:
-                        raise RuntimeError(
-                            "Stateful mode requires persistent per-client dataloaders across rounds."
-                        )
-            if eager_clients is not None:
+            _assert_stateful_dataloaders_unchanged(
+                persistent_clients=persistent_clients,
+                stateful_dataloader_ids=stateful_dataloader_ids,
+            )
+            if persistent_clients is not None:
                 selected_set = set(selected_local_ids)
-                for client in eager_clients:
+                for client in persistent_clients:
                     if client.id not in selected_set:
                         continue
                     train_result, state = _run_local_client_update(
@@ -754,7 +755,6 @@ def run_distributed(config, backend: str) -> None:
             else:
                 dist.gather_object(local_payload, object_gather_list=None, dst=0)
                 gathered = None
-            weights = None
             stats = {}
             round_gen_reward = None
             round_gen_error = None
@@ -771,21 +771,30 @@ def run_distributed(config, backend: str) -> None:
                         updates[int(cid)] = state
                         sample_sizes[int(cid)] = int(payload_item.get("num_examples", 0))
                         stats[int(cid)] = payload_item.get("stats", {})
-                weights = server.aggregate(
+                server.aggregate(
                     updates,
                     sample_sizes,
                     client_train_stats=stats,
                 )
-                round_gen_error = _weighted_global_gen_error(stats, sample_sizes)
-                round_pre_val_error = _weighted_global_pre_val_error(stats, sample_sizes)
-                if round_pre_val_error is not None:
-                    _maybe_adapt_round_pre_val_error(
-                        server, pre_val_error=round_pre_val_error
+                round_gen_error = _weighted_global_stat(
+                    stats=stats,
+                    sample_sizes=sample_sizes,
+                    stat_key="local_gen_error",
+                )
+                round_pre_val_error = _weighted_global_stat(
+                    stats=stats,
+                    sample_sizes=sample_sizes,
+                    stat_key="pre_val_loss",
+                )
+                round_gen_reward, prev_pre_val_error, cumulative_gen_reward = (
+                    _adapt_and_track_gen_reward(
+                        server=server,
+                        round_pre_val_error=round_pre_val_error,
+                        prev_pre_val_error=prev_pre_val_error,
+                        track_gen_rewards=bool(track_gen_rewards),
+                        cumulative_gen_reward=float(cumulative_gen_reward),
                     )
-                    if track_gen_rewards and prev_pre_val_error is not None:
-                        round_gen_reward = float(prev_pre_val_error - round_pre_val_error)
-                        cumulative_gen_reward += float(round_gen_reward)
-                    prev_pre_val_error = float(round_pre_val_error)
+                )
     
             sync_model = server.model if rank == 0 else model
             _broadcast_model_state_inplace(sync_model, src=0)
@@ -807,7 +816,6 @@ def run_distributed(config, backend: str) -> None:
                     config=config,
                     round_idx=round_idx,
                     num_rounds=num_rounds,
-                    selected_train_ids=selected_ids,
                     train_client_ids=train_client_ids,
                     holdout_client_ids=holdout_client_ids,
                 )
@@ -815,21 +823,9 @@ def run_distributed(config, backend: str) -> None:
             plan = plan_payload[0]
     
             federated_eval_metrics = None
-            federated_eval_in_metrics = None
             federated_eval_out_metrics = None
             if enable_federated_eval and isinstance(plan, dict):
                 if plan["scheme"] == "client":
-                    federated_eval_in_metrics = _run_federated_eval_distributed(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        device=client_device,
-                        global_state=next_global_state,
-                        eval_client_ids=list(plan["in_ids"]),
-                        rank=rank,
-                        world_size=world_size,
-                        eval_split="test",
-                    )
                     federated_eval_out_metrics = _run_federated_eval_distributed(
                         config=config,
                         model=on_demand_model if on_demand_model is not None else model,
@@ -860,7 +856,6 @@ def run_distributed(config, backend: str) -> None:
                         len(selected_ids),
                         len(train_client_ids),
                         stats,
-                        weights,
                         round_local_steps=round_local_steps,
                         round_wall_time_sec=(
                             (time.time() - float(round_t0))
@@ -869,17 +864,16 @@ def run_distributed(config, backend: str) -> None:
                         ),
                         global_gen_error=round_gen_error,
                         global_eval_metrics=global_eval_metrics,
-                    federated_eval_metrics=federated_eval_metrics,
-                    federated_eval_in_metrics=federated_eval_in_metrics,
-                    federated_eval_out_metrics=federated_eval_out_metrics,
-                    track_gen_rewards=bool(track_gen_rewards),
-                    round_gen_reward=round_gen_reward,
-                    cumulative_gen_reward=float(cumulative_gen_reward)
-                    if bool(track_gen_rewards)
-                    else None,
-                    logger=server_logger,
-                    tracker=tracker,
-                )
+                        federated_eval_metrics=federated_eval_metrics,
+                        federated_eval_out_metrics=federated_eval_out_metrics,
+                        track_gen_rewards=bool(track_gen_rewards),
+                        round_gen_reward=round_gen_reward,
+                        cumulative_gen_reward=float(cumulative_gen_reward)
+                        if bool(track_gen_rewards)
+                        else None,
+                        logger=server_logger,
+                        tracker=tracker,
+                    )
     except KeyboardInterrupt:
         interrupted = True
         if rank == 0 and server_logger is not None:
@@ -887,8 +881,8 @@ def run_distributed(config, backend: str) -> None:
                 f"Interrupted by user; shutting down distributed backend ({backend})."
             )
     finally:
-        if eager_clients is not None:
-            _release_clients(eager_clients)
+        if persistent_clients is not None:
+            _release_clients(persistent_clients)
         if worker_pool is not None:
             _release_clients(worker_pool)
         if tracker is not None:

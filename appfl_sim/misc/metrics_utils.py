@@ -6,6 +6,8 @@ def _weighted_mean(stats: Dict[int, Dict], key: str) -> float:
     total = 0.0
     count = 0
     for values in stats.values():
+        if not isinstance(values, dict):
+            continue
         if key not in values or not isinstance(values.get(key), (int, float)):
             continue
         n = int(values.get("num_examples", 0))
@@ -21,6 +23,13 @@ def _attach_prefixed_metrics(
 ) -> None:
     if not isinstance(metrics, dict) or not metrics:
         return
-    output[f"{prefix}_metrics"] = {k: float(v) for k, v in metrics.items()}
-    for key, value in metrics.items():
+    numeric_metrics = {
+        str(key): float(value)
+        for key, value in metrics.items()
+        if isinstance(value, (int, float))
+    }
+    if not numeric_metrics:
+        return
+    output[f"{prefix}_metrics"] = numeric_metrics
+    for key, value in numeric_metrics.items():
         output[f"{prefix}_metric_{key}"] = float(value)

@@ -243,7 +243,6 @@ def _build_train_cfg(
     device_text = str(device).strip().lower()
     default_pin_memory = device_text.startswith("cuda")
     pin_memory = _cfg_bool(config, "train.pin_memory", default_pin_memory)
-    stateful_mode = _cfg_bool(config, "experiment.stateful", False)
     update_base_raw = str(_cfg_get(config, "train.update_base", "epoch")).strip().lower()
     if update_base_raw == "iter":
         mode = "step"
@@ -278,10 +277,8 @@ def _build_train_cfg(
         "num_workers": int(num_workers),
         "train_pin_memory": _cfg_bool(config, "train.train_pin_memory", pin_memory),
         "eval_pin_memory": _cfg_bool(config, "train.eval_pin_memory", pin_memory),
-        "dataloader_persistent_workers": (
-            True
-            if (stateful_mode and int(num_workers) > 0)
-            else _cfg_bool(config, "train.dataloader_persistent_workers", False)
+        "dataloader_persistent_workers": _cfg_bool(
+            config, "train.dataloader_persistent_workers", False
         ),
         "dataloader_prefetch_factor": int(_cfg_get(config, "train.dataloader_prefetch_factor", 2)),
         "optimizer_name": str(_cfg_get(config, "optimizer.name", "SGD")),
@@ -413,60 +410,46 @@ def _resolve_algorithm_components(config: DictConfig) -> Dict[str, Any]:
     explicit_aggregator = str(_cfg_get(config, "algorithm.aggregator", "")).strip()
     explicit_scheduler = str(_cfg_get(config, "algorithm.scheduler", "")).strip()
     explicit_trainer = str(_cfg_get(config, "algorithm.trainer", "")).strip()
-
-    if explicit_aggregator:
-        aggregator_name = explicit_aggregator
-    elif algorithm == "fedavg":
-        aggregator_name = "FedAvgAggregator"
-    elif algorithm == "fednova":
-        aggregator_name = "FedNovaAggregator"
-    else:
-        aggregator_name = f"{_to_pascal_case(algorithm)}Aggregator"
-
-    if explicit_scheduler:
-        scheduler_name = explicit_scheduler
-    elif algorithm == "fedavg":
-        scheduler_name = "SyncScheduler"
-    else:
-        scheduler_name = f"{_to_pascal_case(algorithm)}Scheduler"
-
-    if explicit_trainer:
-        trainer_name = explicit_trainer
-    elif algorithm == "fedavg":
-        trainer_name = "VanillaTrainer"
-    else:
-        trainer_name = f"{_to_pascal_case(algorithm)}Trainer"
+    aggregator_name = explicit_aggregator or f"{_to_pascal_case(algorithm)}Aggregator"
+    scheduler_name = explicit_scheduler or f"{_to_pascal_case(algorithm)}Scheduler"
+    trainer_name = explicit_trainer or f"{_to_pascal_case(algorithm)}Trainer"
 
     if not _module_has_class("appfl_sim.algorithm.aggregator", aggregator_name):
-        if algorithm == "fedavg":
-            aggregator_name = "FedAvgAggregator"
-        else:
-            raise ValueError(
-                f"Aggregator class '{aggregator_name}' not found for algorithm='{algorithm}'. "
-                "Implement it under appfl_sim/algorithm/aggregator and expose/import it."
-            )
+        raise ValueError(
+            f"Aggregator class '{aggregator_name}' not found for algorithm='{algorithm}'. "
+            "Implement it under appfl_sim/algorithm/aggregator and expose/import it."
+        )
     if not _module_has_class("appfl_sim.algorithm.scheduler", scheduler_name):
-        scheduler_name = "SyncScheduler"
+        raise ValueError(
+            f"Scheduler class '{scheduler_name}' not found for algorithm='{algorithm}'. "
+            "Implement it under appfl_sim/algorithm/scheduler and expose/import it."
+        )
     if not _module_has_class("appfl_sim.algorithm.trainer", trainer_name):
-        trainer_name = "VanillaTrainer"
+        raise ValueError(
+            f"Trainer class '{trainer_name}' not found for algorithm='{algorithm}'. "
+            "Implement it under appfl_sim/algorithm/trainer and expose/import it."
+        )
 
     agg_kwargs_raw = _cfg_get(config, "algorithm.aggregator_kwargs", {})
     sched_kwargs_raw = _cfg_get(config, "algorithm.scheduler_kwargs", {})
+    trainer_kwargs_raw = _cfg_get(config, "algorithm.trainer_kwargs", {})
     aggregator_kwargs = (
         _cfg_to_dict(agg_kwargs_raw) if agg_kwargs_raw is not None else {}
     )
     scheduler_kwargs = _cfg_to_dict(sched_kwargs_raw) if sched_kwargs_raw is not None else {}
+    trainer_kwargs = _cfg_to_dict(trainer_kwargs_raw) if trainer_kwargs_raw is not None else {}
 
-    if aggregator_name == "FedAvgAggregator":
+    if aggregator_name == "FedavgAggregator":
         aggregator_kwargs.setdefault("client_weights_mode", "sample_ratio")
 
     return {
-        "algorithm": algorithm,
+        "algorithm_name": algorithm,
         "aggregator_name": aggregator_name,
         "aggregator_kwargs": aggregator_kwargs,
         "scheduler_name": scheduler_name,
         "scheduler_kwargs": scheduler_kwargs,
         "trainer_name": trainer_name,
+        "trainer_kwargs": trainer_kwargs,
     }
 
 def _allow_reusable_on_demand_pool(
@@ -494,20 +477,6 @@ def _merge_runtime_cfg(config: DictConfig, loader_args: Any) -> Dict:
         _cfg_get(config, "train.num_clients", runtime_cfg.get("num_clients", 0))
     )
     return runtime_cfg
-
-def _resolve_num_sampled_clients(config: DictConfig, num_clients: int) -> int:
-    if int(num_clients) <= 0:
-        return 0
-
-    if _cfg_get(config, "train.num_sampled_clients", None) is not None:
-        try:
-            n = int(_cfg_get(config, "train.num_sampled_clients", 0))
-        except Exception:
-            n = 0
-        if n > 0:
-            return max(1, min(int(num_clients), n))
-
-    return int(num_clients)
 
 def _parse_cli_tokens(argv: list[str]) -> tuple[str | None, str | None, list[str]]:
     config_path = None

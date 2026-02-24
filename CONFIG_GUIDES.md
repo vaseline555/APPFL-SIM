@@ -36,10 +36,12 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
   - `min_classes` (default: `2`): minimum unique classes per client (when `split.type=pathological`).
 
 ## Model (`model`)
-- `path` (default: `./models`): model root path.
+- `path` (default: `./models`): local model root path and default cache fallback.
 - `name` (default: `SimpleCNN`): model name. (prev. `model`)
 - `backend` (default: `auto`): model source (`auto`, `local`, `hf`, `torchvision`, `torchtext`, `torchaudio`).
 - `configs` (default: `{}`): backend-agnostic model keyword arguments.
+  - `cache_dir` (default: `model.path`): cache directory used for external model artifacts (e.g., HuggingFace model/config downloads).
+  - `hf_local_files_only` (default: `false`): when `true`, forbid HuggingFace network download and read from local cache only.
   - `in_channels` (default: inferred from input shape): explicit input channels override.
   - `hidden_size` (default: `64`): hidden dimension for models.
   - `num_classes` (default: inferred from dataset): explicit class-count override.
@@ -69,7 +71,12 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `dataloader_prefetch_factor` (default: `2`): pass-through to `DataLoader` `prefetch_factor` when `num_workers > 0`.
 
 ## Algorithm (`algorithm`)
-- `name` (default: `fedavg`): algorithm label used for component inference.
+- `name` (default: `fedavg`): algorithm label used for component inference via convention:
+  `name -> <PascalCase(name)>Aggregator`, `<PascalCase(name)>Scheduler`, `<PascalCase(name)>Trainer`.
+  - Convention is strict. For `algorithm.name=fedavg`, expected classes are
+    `FedavgAggregator`, `FedavgScheduler`, and `FedavgTrainer`.
+  - New algorithms should provide all three classes with the same PascalCase prefix
+    (even when inheriting base implementations).
 - `mix_coefs` (default: `sample_ratio`): aggregation coefficients (`uniform`, `sample_ratio`, `adaptive`).
 - `optimize_memory` (default: `true`): enable memory-saving cleanup paths in trainer/scheduler/aggregator.
 - `aggregator` (default: `""`): explicit aggregator class name (optional).

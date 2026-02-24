@@ -5,7 +5,6 @@ import socket
 import time
 from typing import Callable
 
-import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from appfl_sim.misc.config_utils import _cfg_get
@@ -165,6 +164,21 @@ def _load_dataset_distributed(
     _set_download(cfg_other, False)
     return load_dataset(cfg_other)
 
+def _rank_client_span(total_clients: int, rank: int, world_size: int) -> tuple[int, int]:
+    start = (int(rank) * int(total_clients)) // int(world_size)
+    end = ((int(rank) + 1) * int(total_clients)) // int(world_size)
+    return start, end
+
+def _gather_to_rank0(payload, *, rank: int, world_size: int):
+    import torch.distributed as dist
+
+    if rank == 0:
+        gathered = [None] * int(world_size)
+        dist.gather_object(payload, object_gather_list=gathered, dst=0)
+        return gathered
+    dist.gather_object(payload, object_gather_list=None, dst=0)
+    return None
+
 def _run_federated_eval_distributed(
     config: DictConfig,
     model,
@@ -176,15 +190,9 @@ def _run_federated_eval_distributed(
     world_size: int,
     eval_split: str = "test",
 ):
-    import torch.distributed as dist
-
     if not eval_client_ids:
-        if rank == 0:
-            gathered: list[dict] = [None] * world_size
-            dist.gather_object({}, object_gather_list=gathered, dst=0)
-        else:
-            dist.gather_object({}, object_gather_list=None, dst=0)
-        return None if rank != 0 else None
+        _gather_to_rank0({}, rank=rank, world_size=world_size)
+        return None
 
     eval_model = model.to(device)
     eval_model.load_state_dict(global_state)
@@ -197,10 +205,12 @@ def _run_federated_eval_distributed(
         _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))
     )
     eval_workers = max(0, int(_cfg_get(config, "train.num_workers", 0)))
-    local_client_set = {
-        int(cid)
-        for cid in np.asarray(np.array_split(np.arange(len(client_datasets)), world_size)[rank]).astype(int)
-    }
+    start, end = _rank_client_span(
+        total_clients=len(client_datasets),
+        rank=rank,
+        world_size=world_size,
+    )
+    local_client_set = set(range(int(start), int(end)))
     local_stats = {}
     for client_id in sorted(int(cid) for cid in eval_client_ids):
         if client_id not in local_client_set:
@@ -220,12 +230,7 @@ def _run_federated_eval_distributed(
             num_workers=eval_workers,
         )
 
-    if rank == 0:
-        gathered = [None] * world_size
-        dist.gather_object(local_stats, object_gather_list=gathered, dst=0)
-    else:
-        dist.gather_object(local_stats, object_gather_list=None, dst=0)
-        gathered = None
+    gathered = _gather_to_rank0(local_stats, rank=rank, world_size=world_size)
     if rank != 0:
         return None
 

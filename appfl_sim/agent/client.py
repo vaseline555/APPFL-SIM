@@ -13,8 +13,8 @@ from omegaconf import DictConfig, OmegaConf
 from typing import Union, Dict, OrderedDict, Tuple, Optional, Any
 from appfl_sim.logger import ClientAgentFileLogger
 from appfl_sim.misc.runtime_utils import (
-    create_instance_from_file,
-    run_function_from_file,
+    _create_instance_from_file,
+    _run_function_from_file,
 )
 from appfl_sim.misc.config_utils import build_loss_from_train_cfg
 
@@ -259,7 +259,7 @@ class ClientAgent:
         if "dataset_path" not in data_cfg:
             self.train_dataset, self.val_dataset = None, None
             return
-        self.train_dataset, self.val_dataset = run_function_from_file(
+        self.train_dataset, self.val_dataset = _run_function_from_file(
             data_cfg.dataset_path,
             data_cfg.get("dataset_name", None),
             **data_cfg.get("dataset_kwargs", {}),
@@ -275,13 +275,13 @@ class ClientAgent:
         if "model_path" in model_cfg:
             kwargs = model_cfg.get("model_kwargs", {})
             if "model_name" in model_cfg:
-                self.model = create_instance_from_file(
+                self.model = _create_instance_from_file(
                     model_cfg.model_path,
                     model_cfg.model_name,
                     **kwargs,
                 )
             else:
-                self.model = run_function_from_file(
+                self.model = _run_function_from_file(
                     model_cfg.model_path, None, **kwargs
                 )
         else:
@@ -348,7 +348,7 @@ class ClientAgent:
             {
                 "optimize_memory": True,
                 "train_configs": {
-                    "trainer": "VanillaTrainer",
+                    "trainer": "FedavgTrainer",
                     "device": "cpu",
                     "mode": "epoch",
                     "num_local_epochs": 1,
