@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 from typing import Optional, Dict, Any, Tuple, Union, OrderedDict
 
 
-class BaseTrainer:
+class BaseTrainer(abc.ABC):
     """
     BaseTrainer:
         Abstract base trainer for FL clients.
@@ -51,13 +51,20 @@ class BaseTrainer:
         """Return local model parameters and optional metadata."""
         pass
 
-    @abc.abstractmethod
-    def train(self, **kwargs):
-        pass
-
     def load_parameters(
         self,
         params: Union[Dict, OrderedDict, Tuple[Union[Dict, OrderedDict], Dict], Any],
     ):
         """Load model parameters."""
+        if isinstance(params, tuple):
+            params = params[0]
         self.model.load_state_dict(params, strict=False)
+
+    @abc.abstractmethod
+    def train(self, **kwargs):
+        pass
+
+    def evaluate(self, **kwargs) -> Dict[str, Any]:
+        """Evaluate the local model on a trainer-defined split/dataset."""
+        del kwargs
+        raise NotImplementedError("Trainer does not implement evaluate().")

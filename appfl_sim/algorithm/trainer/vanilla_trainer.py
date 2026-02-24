@@ -129,7 +129,7 @@ class VanillaTrainer(BaseTrainer):
             )
 
     @staticmethod
-    def _normalize_train_configs(train_configs: DictConfig) -> None:
+    def _normalize_train_configs(train_configs: DictConfig) -> DictConfig:
         train_configs.mode = str(train_configs.get("mode", "epoch"))
         if train_configs.mode == "epoch":
             train_configs.num_local_epochs = int(train_configs.get("num_local_epochs", 1))
@@ -190,6 +190,23 @@ class VanillaTrainer(BaseTrainer):
             else None
         )
         return train_loader, val_loader, test_loader
+
+    def get_parameters(self) -> Dict:
+        if self.model_state is None:
+            if self.optimize_memory:
+                self.model_state = extract_model_state_optimized(
+                    self.model, include_buffers=True, cpu_transfer=True
+                )
+            else:
+                self.model_state = {
+                    k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()
+                }
+        return (
+            (self.model_state, self.eval_results)
+            if self.eval_results is not None
+            else self.model_state
+        )
+
 
     def _validate_train_config(self):
         """
@@ -300,6 +317,144 @@ class VanillaTrainer(BaseTrainer):
             if current < min_lr:
                 param_group["lr"] = float(min_lr)
 
+    def _record_split_eval_result(
+        self,
+        *,
+        phase: str,
+        split: str,
+        stats: Optional[Dict[str, Any]],
+        append: bool,
+    ) -> None:
+        if stats is None:
+            return
+        loss_key = f"{phase}_{split}_loss" if phase == "pre" else f"{split}_loss"
+        metric_key = (
+            f"{phase}_{split}_metric_value" if phase == "pre" else f"{split}_metric_value"
+        )
+        metrics_key = f"{phase}_{split}_metrics" if phase == "pre" else f"{split}_metrics"
+
+        loss_value = float(stats["loss"])
+        metric_value = float(self._metric_from_stats(stats))
+        metrics_value = dict(stats.get("metrics", {}))
+
+        if append:
+            if loss_key not in self.eval_results:
+                self.eval_results[loss_key] = []
+                self.eval_results[metric_key] = []
+                self.eval_results[metrics_key] = []
+            self.eval_results[loss_key].append(loss_value)
+            self.eval_results[metric_key].append(metric_value)
+            self.eval_results[metrics_key].append(metrics_value)
+            return
+
+        self.eval_results[loss_key] = loss_value
+        self.eval_results[metric_key] = metric_value
+        self.eval_results[metrics_key] = metrics_value
+
+    def _extract_split_eval_values(
+        self, src_base: str
+    ) -> Tuple[Optional[float], Optional[float], Optional[Dict[str, Any]]]:
+        raw_loss = self.eval_results.get(f"{src_base}_loss")
+        raw_metric = self.eval_results.get(f"{src_base}_metric_value")
+        raw_metrics = self.eval_results.get(f"{src_base}_metrics")
+
+        if isinstance(raw_loss, list):
+            if not raw_loss:
+                return None, None, None
+            loss_value = float(raw_loss[-1])
+            metric_value = (
+                float(raw_metric[-1])
+                if isinstance(raw_metric, list) and len(raw_metric) > 0
+                else None
+            )
+            metrics_value = (
+                raw_metrics[-1]
+                if isinstance(raw_metrics, list) and len(raw_metrics) > 0
+                else None
+            )
+            return loss_value, metric_value, metrics_value
+
+        if raw_loss is None:
+            return None, None, None
+
+        loss_value = float(raw_loss)
+        metric_value = float(raw_metric) if isinstance(raw_metric, (int, float)) else None
+        metrics_value = raw_metrics if isinstance(raw_metrics, dict) else None
+        return loss_value, metric_value, metrics_value
+
+    def _attach_split_result(
+        self,
+        result: Dict[str, Any],
+        *,
+        split: str,
+        phase: str,
+    ) -> None:
+        if phase == "pre":
+            src_base = f"pre_{split}"
+            dst_base = src_base
+        else:
+            src_base = split
+            dst_base = f"post_{split}"
+
+        loss_value, metric_value, metrics_value = self._extract_split_eval_values(src_base)
+        if loss_value is None:
+            return
+        result[f"{dst_base}_loss"] = float(loss_value)
+
+        if metric_value is not None:
+            result[f"{dst_base}_metric_value"] = float(metric_value)
+
+        if isinstance(metrics_value, dict):
+            _attach_prefixed_metrics(
+                result,
+                metrics_value,
+                prefix=dst_base,
+            )
+
+    def _append_wandb_eval_stats(
+        self,
+        payload: Dict[str, float],
+        *,
+        split: str,
+        stats: Optional[Dict[str, Any]],
+        stage: str,
+    ) -> None:
+        if stats is None:
+            return
+        payload[f"{self.wandb_logging_id}/{split}-loss ({stage})"] = float(stats["loss"])
+        for key, value in stats.get("metrics", {}).items():
+            payload[f"{self.wandb_logging_id}/{split}-{key} ({stage})"] = float(value)
+
+    def _train_batch(
+        self, optimizer: torch.optim.Optimizer, data, target
+    ) -> Tuple[float, np.ndarray, np.ndarray]:
+        """
+        Train the model for one batch of data
+        :param optimizer: torch optimizer
+        :param data: input data
+        :param target: target label
+        :return: loss, prediction, label
+        """
+        device = self.device
+        data = data.to(device)
+        target = target.to(device)
+        optimizer.zero_grad()
+        output = self.model(data)
+        loss = self.loss_fn(output, target)
+        loss.backward()
+        if bool(self.train_configs.get("clip_grad", False)):
+            if "clip_value" not in self.train_configs:
+                raise ValueError("Gradient clipping value must be specified.")
+            if "clip_norm" not in self.train_configs:
+                raise ValueError("Gradient clipping norm must be specified.")
+            torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(),
+                self.train_configs.clip_value,
+                norm_type=self.train_configs.clip_norm,
+            )
+        optimizer.step()
+        return loss.item(), output.detach().cpu().numpy(), target.detach().cpu().numpy()
+        
     def train(self, **kwargs):
         """
         Train the model for a certain number of local epochs or steps and store model state.
@@ -312,7 +467,7 @@ class VanillaTrainer(BaseTrainer):
             set_round_label(f"Round {int(self.round):04d}")
         self.eval_results = {"round": self.round + 1}
 
-        # Check metrcis
+        # Check metrics
         metric_names_for_log = []
         for metric_name in self.eval_metric_names:
             text = str(metric_name).strip().lower()
@@ -343,7 +498,7 @@ class VanillaTrainer(BaseTrainer):
         self.logger.set_title(title)
 
         # Evaluation scheme
-        do_validation = bool(self.train_configs.get("do_post_evaluation", True)) and (
+        do_post_evaluation = bool(self.train_configs.get("do_post_evaluation", True)) and (
             has_any_eval_split
         )
         do_pre_evaluation = bool(self.train_configs.get("do_pre_evaluation", True)) and (
@@ -365,54 +520,49 @@ class VanillaTrainer(BaseTrainer):
             test_stats = (
                 self._evaluate_split_metrics(split="test") if has_test_split else None
             )
-            if val_stats is not None:
-                self.eval_results["pre_val_loss"] = float(val_stats["loss"])
-                self.eval_results["pre_val_metric_value"] = float(
-                    self._metric_from_stats(val_stats)
-                )
-                self.eval_results["pre_val_metrics"] = dict(val_stats.get("metrics", {}))
-            if test_stats is not None:
-                self.eval_results["pre_test_loss"] = float(test_stats["loss"])
-                self.eval_results["pre_test_metric_value"] = float(
-                    self._metric_from_stats(test_stats)
-                )
-                self.eval_results["pre_test_metrics"] = dict(
-                    test_stats.get("metrics", {})
-                )
+            self._record_split_eval_result(
+                phase="pre",
+                split="val",
+                stats=val_stats,
+                append=False,
+            )
+            self._record_split_eval_result(
+                phase="pre",
+                split="test",
+                stats=test_stats,
+                append=False,
+            )
 
-                self.logger.log_content(
-                    _build_trainer_log_row(
-                        mode=self.train_configs.mode,
-                        has_any_eval_split=has_any_eval_split,
-                        has_val_split=has_val_split,
-                        has_test_split=has_test_split,
-                        metric_names_for_log=metric_names_for_log,
-                        epoch_idx=0 if self.train_configs.mode == "epoch" else None,
-                        pre_eval_flag="Y",
-                        elapsed="-",
-                        train_stats_obj=None,
-                        val_stats_obj=val_stats,
-                        test_stats_obj=test_stats,
-                    )
+            self.logger.log_content(
+                _build_trainer_log_row(
+                    mode=self.train_configs.mode,
+                    has_any_eval_split=has_any_eval_split,
+                    has_val_split=has_val_split,
+                    has_test_split=has_test_split,
+                    metric_names_for_log=metric_names_for_log,
+                    epoch_idx=0 if self.train_configs.mode == "epoch" else None,
+                    pre_eval_flag="Y",
+                    elapsed="-",
+                    train_stats_obj=None,
+                    val_stats_obj=val_stats,
+                    test_stats_obj=test_stats,
                 )
-                if self.enabled_wandb:
-                    payload = {}
-                    if val_stats is not None:
-                        payload[f"{self.wandb_logging_id}/val-loss (before train)"] = float(
-                            val_stats["loss"]
-                        )
-                        for key, value in val_stats.get("metrics", {}).items():
-                            payload[
-                                f"{self.wandb_logging_id}/val-{key} (before train)"
-                            ] = float(value)
-                    if test_stats is not None:
-                        payload[
-                            f"{self.wandb_logging_id}/test-loss (before train)"
-                        ] = float(test_stats["loss"])
-                        for key, value in test_stats.get("metrics", {}).items():
-                            payload[
-                                f"{self.wandb_logging_id}/test-{key} (before train)"
-                            ] = float(value)
+            )
+            if self.enabled_wandb:
+                payload = {}
+                self._append_wandb_eval_stats(
+                    payload,
+                    split="val",
+                    stats=val_stats,
+                    stage="before train",
+                )
+                self._append_wandb_eval_stats(
+                    payload,
+                    split="test",
+                    stats=test_stats,
+                    stage="before train",
+                )
+                if payload:
                     wandb.log(payload)
 
         # Define optimizer
@@ -482,47 +632,23 @@ class VanillaTrainer(BaseTrainer):
 
             val_stats = None
             test_stats = None
-            if do_validation:
+            if do_post_evaluation:
                 if has_val_split:
                     val_stats = self._evaluate_split_metrics(split="val")
-                    if is_epoch_mode:
-                        if "val_loss" not in self.eval_results:
-                            self.eval_results["val_loss"] = []
-                            self.eval_results["val_metric_value"] = []
-                            self.eval_results["val_metrics"] = []
-                        self.eval_results["val_loss"].append(float(val_stats["loss"]))
-                        self.eval_results["val_metric_value"].append(
-                            float(self._metric_from_stats(val_stats))
-                        )
-                        self.eval_results["val_metrics"].append(
-                            dict(val_stats.get("metrics", {}))
-                        )
-                    else:
-                        self.eval_results["val_loss"] = float(val_stats["loss"])
-                        self.eval_results["val_metric_value"] = float(
-                            self._metric_from_stats(val_stats)
-                        )
-                        self.eval_results["val_metrics"] = dict(val_stats.get("metrics", {}))
+                    self._record_split_eval_result(
+                        phase="post",
+                        split="val",
+                        stats=val_stats,
+                        append=is_epoch_mode,
+                    )
                 if has_test_split:
                     test_stats = self._evaluate_split_metrics(split="test")
-                    if is_epoch_mode:
-                        if "test_loss" not in self.eval_results:
-                            self.eval_results["test_loss"] = []
-                            self.eval_results["test_metric_value"] = []
-                            self.eval_results["test_metrics"] = []
-                        self.eval_results["test_loss"].append(float(test_stats["loss"]))
-                        self.eval_results["test_metric_value"].append(
-                            float(self._metric_from_stats(test_stats))
-                        )
-                        self.eval_results["test_metrics"].append(
-                            dict(test_stats.get("metrics", {}))
-                        )
-                    else:
-                        self.eval_results["test_loss"] = float(test_stats["loss"])
-                        self.eval_results["test_metric_value"] = float(
-                            self._metric_from_stats(test_stats)
-                        )
-                        self.eval_results["test_metrics"] = dict(test_stats.get("metrics", {}))
+                    self._record_split_eval_result(
+                        phase="post",
+                        split="test",
+                        stats=test_stats,
+                        append=is_epoch_mode,
+                    )
 
             elapsed = time.time() - start_time
             if self.enabled_wandb:
@@ -533,23 +659,20 @@ class VanillaTrainer(BaseTrainer):
                     payload[f"{self.wandb_logging_id}/train-{key} (during train)"] = float(
                         value
                     )
-                if val_stats is not None:
-                    payload[f"{self.wandb_logging_id}/val-loss (during train)"] = float(
-                        val_stats["loss"]
-                    )
-                    for key, value in val_stats.get("metrics", {}).items():
-                        payload[f"{self.wandb_logging_id}/val-{key} (during train)"] = float(
-                            value
-                        )
-                if test_stats is not None:
-                    payload[f"{self.wandb_logging_id}/test-loss (during train)"] = float(
-                        test_stats["loss"]
-                    )
-                    for key, value in test_stats.get("metrics", {}).items():
-                        payload[
-                            f"{self.wandb_logging_id}/test-{key} (during train)"
-                        ] = float(value)
-                wandb.log(payload)
+                self._append_wandb_eval_stats(
+                    payload,
+                    split="val",
+                    stats=val_stats,
+                    stage="during train",
+                )
+                self._append_wandb_eval_stats(
+                    payload,
+                    split="test",
+                    stats=test_stats,
+                    stage="during train",
+                )
+                if payload:
+                    wandb.log(payload)
             self.logger.log_content(
                 _build_trainer_log_row(
                     mode=self.train_configs.mode,
@@ -561,8 +684,8 @@ class VanillaTrainer(BaseTrainer):
                     pre_eval_flag="N",
                     elapsed=elapsed,
                     train_stats_obj=train_stats,
-                    val_stats_obj=val_stats if do_validation else None,
-                    test_stats_obj=test_stats if do_validation else None,
+                    val_stats_obj=val_stats if do_post_evaluation else None,
+                    test_stats_obj=test_stats if do_post_evaluation else None,
                 )
             )
 
@@ -588,139 +711,21 @@ class VanillaTrainer(BaseTrainer):
         self._offload_model_to_cpu()
 
         result = train_metrics_manager.aggregate(total_len=total_examples)
-        if "pre_val_loss" in self.eval_results:
-            result["pre_val_loss"] = float(self.eval_results["pre_val_loss"])
-            if "pre_val_metric_value" in self.eval_results:
-                result["pre_val_metric_value"] = float(
-                    self.eval_results["pre_val_metric_value"]
-                )
-            _attach_prefixed_metrics(
-                result,
-                self.eval_results.get("pre_val_metrics", {}),
-                prefix="pre_val",
-            )
+        self._attach_split_result(result, split="val", phase="pre")
         if "pre_train_loss" in self.eval_results:
             result["pre_train_loss"] = float(self.eval_results["pre_train_loss"])
             if "pre_train_metric_value" in self.eval_results:
                 result["pre_train_metric_value"] = float(
                     self.eval_results["pre_train_metric_value"]
                 )
-        if "pre_test_loss" in self.eval_results:
-            result["pre_test_loss"] = float(self.eval_results["pre_test_loss"])
-            if "pre_test_metric_value" in self.eval_results:
-                result["pre_test_metric_value"] = float(
-                    self.eval_results["pre_test_metric_value"]
-                )
-            _attach_prefixed_metrics(
-                result,
-                self.eval_results.get("pre_test_metrics", {}),
-                prefix="pre_test",
-            )
-        if "val_loss" in self.eval_results:
-            if isinstance(self.eval_results["val_loss"], list):
-                result["post_val_loss"] = float(self.eval_results["val_loss"][-1])
-                val_metric_list = self.eval_results.get("val_metric_value", [])
-                if isinstance(val_metric_list, list) and val_metric_list:
-                    result["post_val_metric_value"] = float(val_metric_list[-1])
-                val_metrics_list = self.eval_results.get("val_metrics", [])
-                if isinstance(val_metrics_list, list) and val_metrics_list:
-                    _attach_prefixed_metrics(
-                        result,
-                        val_metrics_list[-1],
-                        prefix="post_val",
-                    )
-            else:
-                result["post_val_loss"] = float(self.eval_results["val_loss"])
-                if "val_metric_value" in self.eval_results:
-                    result["post_val_metric_value"] = float(
-                        self.eval_results["val_metric_value"]
-                    )
-                _attach_prefixed_metrics(
-                    result,
-                    self.eval_results.get("val_metrics", {}),
-                    prefix="post_val",
-                )
-        if "test_loss" in self.eval_results:
-            if isinstance(self.eval_results["test_loss"], list):
-                result["post_test_loss"] = float(self.eval_results["test_loss"][-1])
-                test_metric_list = self.eval_results.get("test_metric_value", [])
-                if isinstance(test_metric_list, list) and test_metric_list:
-                    result["post_test_metric_value"] = float(test_metric_list[-1])
-                test_metrics_list = self.eval_results.get("test_metrics", [])
-                if isinstance(test_metrics_list, list) and test_metrics_list:
-                    _attach_prefixed_metrics(
-                        result,
-                        test_metrics_list[-1],
-                        prefix="post_test",
-                    )
-            else:
-                result["post_test_loss"] = float(self.eval_results["test_loss"])
-                if "test_metric_value" in self.eval_results:
-                    result["post_test_metric_value"] = float(
-                        self.eval_results["test_metric_value"]
-                    )
-                _attach_prefixed_metrics(
-                    result,
-                    self.eval_results.get("test_metrics", {}),
-                    prefix="post_test",
-                )
+        self._attach_split_result(result, split="test", phase="pre")
+        self._attach_split_result(result, split="val", phase="post")
+        self._attach_split_result(result, split="test", phase="post")
         if "pre_val_loss" in result and "pre_train_loss" in result:
             result["local_gen_error"] = float(
                 result["pre_val_loss"] - result["pre_train_loss"]
             )
         return result
-
-    def get_parameters(self) -> Dict:
-        if self.model_state is None:
-            if self.optimize_memory:
-                self.model_state = extract_model_state_optimized(
-                    self.model, include_buffers=True, cpu_transfer=True
-                )
-            else:
-                self.model_state = {
-                    k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()
-                }
-        return (
-            (self.model_state, self.eval_results)
-            if self.eval_results is not None
-            else self.model_state
-        )
-
-    @torch.no_grad()
-    def evaluate(
-        self,
-        split: str = "test",
-        val: bool = False,
-        test: bool = False,
-        offload_after: Optional[bool] = None,
-    ) -> Dict[str, Any]:
-        chosen = self._resolve_eval_split(split=split, val=val, test=test)
-        if chosen == "val" and self.val_dataloader is None:
-            return {"loss": -1.0, "num_examples": 0, "metrics": {}}
-        if chosen == "test" and self.test_dataloader is None:
-            if self.val_dataloader is None:
-                return {"loss": -1.0, "num_examples": 0, "metrics": {}}
-            chosen = "val"
-        if chosen == "val" and self.val_dataloader is None:
-            return {"loss": -1.0, "num_examples": 0, "metrics": {}}
-        offload_flag = True if offload_after is None else bool(offload_after)
-        return self._validate_metrics(
-            split=chosen,
-            offload_after=offload_flag,
-        )
-
-    def _validate(self) -> Tuple[float, float]:
-        """
-        Validate the model
-        :return: loss, primary metric value
-        """
-        stats = self._validate_metrics(split="val", offload_after=False)
-        return float(stats["loss"]), float(self._metric_from_stats(stats))
-
-    def _evaluate_train_metrics(self, offload_after: bool = False) -> Dict[str, Any]:
-        return self._evaluate_metrics_on_loader(
-            self.train_dataloader, offload_after=offload_after
-        )
 
     def _evaluate_split_metrics(
         self, split: str = "val", offload_after: bool = False
@@ -730,10 +735,7 @@ class VanillaTrainer(BaseTrainer):
             return self._evaluate_metrics_on_loader(
                 self.train_dataloader, offload_after=offload_after
             )
-        return self._validate_metrics(split=split_name, offload_after=offload_after)
-
-    def _validate_metrics(self, split: str = "val", offload_after: bool = False) -> Dict[str, Any]:
-        chosen = self._resolve_eval_split(split=split)
+        chosen = self._resolve_eval_split(split=split_name)
         dataloader = self.val_dataloader if chosen == "val" else self.test_dataloader
         if dataloader is None:
             fallback = self.test_dataloader if chosen == "val" else self.val_dataloader
@@ -774,32 +776,23 @@ class VanillaTrainer(BaseTrainer):
             self.model.train()
         return stats
 
-    def _train_batch(
-        self, optimizer: torch.optim.Optimizer, data, target
-    ) -> Tuple[float, np.ndarray, np.ndarray]:
-        """
-        Train the model for one batch of data
-        :param optimizer: torch optimizer
-        :param data: input data
-        :param target: target label
-        :return: loss, prediction, label
-        """
-        device = self.device
-        data = data.to(device)
-        target = target.to(device)
-        optimizer.zero_grad()
-        output = self.model(data)
-        loss = self.loss_fn(output, target)
-        loss.backward()
-        if bool(self.train_configs.get("clip_grad", False)):
-            if "clip_value" not in self.train_configs:
-                raise ValueError("Gradient clipping value must be specified.")
-            if "clip_norm" not in self.train_configs:
-                raise ValueError("Gradient clipping norm must be specified.")
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(),
-                self.train_configs.clip_value,
-                norm_type=self.train_configs.clip_norm,
-            )
-        optimizer.step()
-        return loss.item(), output.detach().cpu().numpy(), target.detach().cpu().numpy()
+    @torch.no_grad()
+    def evaluate(
+        self,
+        split: str = "test",
+        val: bool = False,
+        test: bool = False,
+        offload_after: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        chosen = self._resolve_eval_split(split=split, val=val, test=test)
+        if chosen == "test" and self.test_dataloader is None:
+            if self.val_dataloader is None:
+                return {"loss": -1.0, "num_examples": 0, "metrics": {}}
+            chosen = "val"
+        if chosen == "val" and self.val_dataloader is None:
+            return {"loss": -1.0, "num_examples": 0, "metrics": {}}
+        offload_flag = True if offload_after is None else bool(offload_after)
+        return self._evaluate_split_metrics(
+            split=chosen,
+            offload_after=offload_flag,
+        )
