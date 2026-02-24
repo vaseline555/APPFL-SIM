@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from appfl_sim.misc.config_utils import _cfg_get
+from appfl_sim.misc.config_utils import build_loss_from_config
 from appfl_sim.metrics import parse_metric_names
 from appfl_sim.misc.data_utils import _resolve_client_eval_dataset
 from appfl_sim.misc.learning_utils import _aggregate_eval_stats, _evaluate_dataset_direct
@@ -188,9 +189,9 @@ def _run_federated_eval_distributed(
     eval_model = model.to(device)
     eval_model.load_state_dict(global_state)
     eval_model.eval()
-    eval_loss_fn = getattr(
-        torch.nn, str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss"))
-    )().to(device)
+    eval_loss_fn = build_loss_from_config(config)
+    if hasattr(eval_loss_fn, "to"):
+        eval_loss_fn = eval_loss_fn.to(device)
     eval_metric_names = parse_metric_names(_cfg_get(config, "eval.metrics", ["acc1"]))
     eval_batch_size = int(
         _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))

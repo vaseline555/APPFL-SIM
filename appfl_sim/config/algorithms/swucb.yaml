@@ -42,9 +42,16 @@ algorithm:
     window_size: 10
     exploration_alpha: 0.1
   trainer_kwargs: {}
-optimization:
-  optimizer: SGD
-  criterion: CrossEntropyLoss
+loss:
+  name: CrossEntropyLoss
+  backend: auto
+  path: ""
+  configs: {}
+
+optimizer:
+  name: SGD
+  backend: auto
+  path: ""
   lr: 0.01
   lr_decay:
     enable: true

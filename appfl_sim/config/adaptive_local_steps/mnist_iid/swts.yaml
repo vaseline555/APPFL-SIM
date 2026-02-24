@@ -42,9 +42,16 @@ algorithm:
     prior_variance: 1.0
     seed: 42
   trainer_kwargs: {}
-optimization:
-  optimizer: SGD
-  criterion: CrossEntropyLoss
+loss:
+  name: CrossEntropyLoss
+  backend: auto
+  path: ""
+  configs: {}
+
+optimizer:
+  name: SGD
+  backend: auto
+  path: ""
   lr: 0.01
   lr_decay:
     enable: true

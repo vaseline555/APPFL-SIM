@@ -2,12 +2,10 @@ from __future__ import annotations
 import gc
 import os
 import random
-import re
 import warnings
 from typing import Any, Dict, List, Optional, Sequence, Union
 import numpy as np
 import torch
-import torch.nn as nn
 from omegaconf import DictConfig
 from appfl_sim.logger import ServerAgentFileLogger
 from appfl_sim.misc.config_utils import _cfg_get, _cfg_set
@@ -120,81 +118,6 @@ def validate_backend_device_consistency(backend: str, config: DictConfig) -> Non
             "Set `device=cuda` for faster local training if desired.",
             stacklevel=2,
         )
-
-
-def parse_device_str(devices_str: str):
-    """
-    Parse `cpu`, `cuda:0`, or `cuda:0,cuda:1` device strings.
-    """
-    devices = [d.strip().lower() for d in devices_str.split(",")]
-
-    if len(devices) == 1:
-        dev = devices[0]
-        if dev == "cpu":
-            return ({"device_type": "cpu", "device_ids": []}, "cpu")
-        if dev == "cuda":
-            return ({"device_type": "gpu-single", "device_ids": []}, "cuda")
-        if dev.startswith("cuda:"):
-            match = re.match(r"cuda:(\d+)$", dev)
-            if not match:
-                raise ValueError(
-                    f"Invalid device format: '{dev}'. Expected 'cuda:<index>' or 'cpu'"
-                )
-            index = int(match.group(1))
-            if index < 0 or index >= torch.cuda.device_count():
-                raise ValueError(
-                    f"Requested {dev}, but only {torch.cuda.device_count()} GPUs available."
-                )
-            return ({"device_type": "gpu-single", "device_ids": [index]}, dev)
-        raise ValueError(
-            f"Unsupported device string: '{dev}'. Use 'cpu' or 'cuda:<index>'."
-        )
-
-    device_ids = []
-    for d in devices:
-        if d == "cpu":
-            raise ValueError("Cannot mix 'cpu' with other devices in multi-device usage.")
-        match = re.match(r"cuda:(\d+)$", d)
-        if not match:
-            raise ValueError(f"Invalid device format: '{d}'. Expected 'cuda:<index>'.")
-        index = int(match.group(1))
-        if index < 0 or index >= torch.cuda.device_count():
-            raise ValueError(
-                f"Requested {d}, but only {torch.cuda.device_count()} GPUs available."
-            )
-        device_ids.append(index)
-
-    device_ids = sorted(set(device_ids))
-    if not device_ids:
-        raise ValueError("No valid CUDA devices parsed from string.")
-
-    first_dev = f"cuda:{device_ids[0]}"
-    return ({"device_type": "gpu-multi", "device_ids": device_ids}, first_dev)
-
-
-def apply_model_device(model, config: dict, xy_device: str):
-    """
-    Extend `model.to()` by handling optional DataParallel wrapping.
-    """
-    device_type = config["device_type"]
-
-    if device_type == "cpu":
-        model.to("cpu")
-        return model
-
-    if device_type == "gpu-single":
-        if len(config["device_ids"]) == 0:
-            model.to(xy_device)
-        else:
-            model.to(torch.device(f"cuda:{config['device_ids'][0]}"))
-        return model
-
-    if device_type == "gpu-multi":
-        model = nn.DataParallel(model, device_ids=config["device_ids"])
-        model.to(torch.device(f"cuda:{config['device_ids'][0]}"))
-        return model
-
-    raise ValueError(f"Unknown device_type: {device_type}")
 
 
 def clone_state_dict_optimized(state_dict) -> Dict[str, torch.Tensor]:

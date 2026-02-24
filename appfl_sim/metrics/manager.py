@@ -91,17 +91,6 @@ class MetricsManager:
         for module in self.metric_funcs.values():
             module.collect(pred_t, true_t)
 
-    @staticmethod
-    def _infer_accuracy(metrics: Dict[str, float]) -> float:
-        if "acc1" in metrics:
-            return float(metrics["acc1"])
-        for alias in ("seqacc", "balacc", "f1", "precision", "recall"):
-            if alias in metrics:
-                return float(metrics[alias])
-        if len(metrics) == 1:
-            return float(next(iter(metrics.values())))
-        return -1.0
-
     def aggregate(
         self,
         total_len: int | None = None,
@@ -122,12 +111,10 @@ class MetricsManager:
             if num_examples > 0
             else -1.0
         )
-        accuracy = self._infer_accuracy(running_metrics)
 
         # Keep both nested metrics and flattened metric_* keys for easy logging.
         result: Dict[str, Any] = {
             "loss": loss,
-            "accuracy": float(accuracy),
             "num_examples": num_examples,
             "metrics": running_metrics,
         }
@@ -140,7 +127,6 @@ class MetricsManager:
             if (
                 not isinstance(self._results, dict)
                 or "loss" in self._results
-                or "accuracy" in self._results
             ):
                 self._results = {}
             self._results[curr_step] = result

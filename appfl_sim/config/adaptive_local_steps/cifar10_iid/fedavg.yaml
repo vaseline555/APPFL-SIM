@@ -37,9 +37,16 @@ algorithm:
     client_weights_mode: sample_ratio
   scheduler_kwargs: {}
   trainer_kwargs: {}
-optimization:
-  optimizer: SGD
-  criterion: CrossEntropyLoss
+loss:
+  name: CrossEntropyLoss
+  backend: auto
+  path: ""
+  configs: {}
+
+optimizer:
+  name: SGD
+  backend: auto
+  path: ""
   lr: 0.01
   lr_decay:
     enable: true

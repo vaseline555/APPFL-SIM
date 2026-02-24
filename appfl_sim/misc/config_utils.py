@@ -1,9 +1,13 @@
 from __future__ import annotations
 import importlib
+import importlib.util
+import inspect
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
+
+import torch
 from omegaconf import DictConfig, OmegaConf
 
 
@@ -101,6 +105,99 @@ def _cfg_set(config: DictConfig | dict, path: str, value: Any) -> None:
         current[last] = value
 
 
+def _resolve_component_backend(kind: str, backend: str, path: str) -> str:
+    mode = str(backend or "auto").strip().lower()
+    if mode == "auto":
+        return "custom" if str(path or "").strip() else "torch"
+    if mode not in {"torch", "custom"}:
+        raise ValueError(f"{kind}.backend must be one of: auto, torch, custom")
+    return mode
+
+
+def _load_named_symbol(path: str, name: str):
+    file_path = Path(str(path)).expanduser().resolve()
+    if not file_path.is_file():
+        raise FileNotFoundError(f"Custom component file not found: {file_path}")
+    module_name = f"_appfl_sim_custom_{file_path.stem}_{abs(hash(str(file_path)))}"
+    spec = importlib.util.spec_from_file_location(module_name, str(file_path))
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot import custom component from {file_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if str(name).strip() == "":
+        exported: list[Any] = []
+        for obj in module.__dict__.values():
+            if inspect.isclass(obj) and getattr(obj, "__module__", "") == module.__name__:
+                exported.append(obj)
+        for obj in module.__dict__.values():
+            if inspect.isfunction(obj) and getattr(obj, "__module__", "") == module.__name__:
+                exported.append(obj)
+        if not exported:
+            raise ValueError(f"No class/function found in custom component file: {file_path}")
+        return exported[-1]
+    if not hasattr(module, name):
+        raise ValueError(f"Custom component `{name}` not found in {file_path}")
+    return getattr(module, name)
+
+
+def build_loss_from_config(config: DictConfig | dict):
+    name = str(_cfg_get(config, "loss.name", "CrossEntropyLoss"))
+    backend = _resolve_component_backend(
+        kind="loss",
+        backend=str(_cfg_get(config, "loss.backend", "auto")),
+        path=str(_cfg_get(config, "loss.path", "")),
+    )
+    kwargs = _cfg_to_dict(_cfg_get(config, "loss.configs", {}))
+    if backend == "torch":
+        if not hasattr(torch.nn, name):
+            raise ValueError(f"Loss {name} not found in torch.nn")
+        return getattr(torch.nn, name)(**kwargs)
+    target = _load_named_symbol(str(_cfg_get(config, "loss.path", "")), name)
+    if inspect.isclass(target):
+        return target(**kwargs)
+    if callable(target):
+        return target(**kwargs)
+    raise TypeError("Custom loss target must be a class or callable")
+
+
+def build_loss_from_train_cfg(train_cfg: DictConfig | dict):
+    payload = {
+        "loss": {
+            "name": _cfg_get(train_cfg, "loss_name", "CrossEntropyLoss"),
+            "backend": _cfg_get(train_cfg, "loss_backend", "auto"),
+            "path": _cfg_get(train_cfg, "loss_path", ""),
+            "configs": _cfg_get(train_cfg, "loss_configs", {}),
+        }
+    }
+    return build_loss_from_config(payload)
+
+
+def build_optimizer_from_train_cfg(train_cfg: DictConfig | dict, params: Iterable):
+    name = str(_cfg_get(train_cfg, "optimizer_name", "SGD"))
+    path = str(_cfg_get(train_cfg, "optimizer_path", ""))
+    backend = _resolve_component_backend(
+        kind="optimizer",
+        backend=str(_cfg_get(train_cfg, "optimizer_backend", "auto")),
+        path=path,
+    )
+    kwargs = _cfg_to_dict(_cfg_get(train_cfg, "optimizer_configs", {}))
+    kwargs.setdefault("lr", float(_cfg_get(train_cfg, "lr", 0.01)))
+    if "weight_decay" not in kwargs:
+        kwargs["weight_decay"] = float(_cfg_get(train_cfg, "weight_decay", 0.0))
+
+    if backend == "torch":
+        if not hasattr(torch.optim, name):
+            raise ValueError(f"Optimizer {name} not found in torch.optim")
+        return getattr(torch.optim, name)(params, **kwargs)
+
+    target = _load_named_symbol(path, name)
+    if inspect.isclass(target):
+        return target(params, **kwargs)
+    if callable(target):
+        return target(params, **kwargs)
+    raise TypeError("Custom optimizer target must be a class or callable")
+
+
 def _ensure_model_cfg(cfg: DictConfig) -> None:
     if _cfg_get(cfg, "model.configs", None) is None:
         _cfg_set(cfg, "model.configs", OmegaConf.create({}))
@@ -112,8 +209,10 @@ def _ensure_model_cfg(cfg: DictConfig) -> None:
         _cfg_set(cfg, "eval.configs", OmegaConf.create({}))
     if _cfg_get(cfg, "logging.configs", None) is None:
         _cfg_set(cfg, "logging.configs", OmegaConf.create({}))
-    if _cfg_get(cfg, "optimization.configs", None) is None:
-        _cfg_set(cfg, "optimization.configs", OmegaConf.create({}))
+    if _cfg_get(cfg, "loss.configs", None) is None:
+        _cfg_set(cfg, "loss.configs", OmegaConf.create({}))
+    if _cfg_get(cfg, "optimizer.configs", None) is None:
+        _cfg_set(cfg, "optimizer.configs", OmegaConf.create({}))
     if _cfg_get(cfg, "privacy.kwargs", None) is None:
         _cfg_set(cfg, "privacy.kwargs", OmegaConf.create({}))
 
@@ -154,6 +253,20 @@ def _build_train_cfg(
         mode = "epoch"
         local_epochs = int(_cfg_get(config, "train.local_epochs", 1))
         local_epochs = max(1, local_epochs)
+    optimizer_configs = _cfg_get(config, "optimizer.configs", {})
+    if isinstance(optimizer_configs, DictConfig):
+        optimizer_configs = dict(OmegaConf.to_container(optimizer_configs, resolve=True))
+    elif isinstance(optimizer_configs, dict):
+        optimizer_configs = dict(optimizer_configs)
+    else:
+        optimizer_configs = {}
+    loss_configs = _cfg_get(config, "loss.configs", {})
+    if isinstance(loss_configs, DictConfig):
+        loss_configs = dict(OmegaConf.to_container(loss_configs, resolve=True))
+    elif isinstance(loss_configs, dict):
+        loss_configs = dict(loss_configs)
+    else:
+        loss_configs = {}
     train_cfg = {
         "device": device,
         "mode": mode,
@@ -171,17 +284,25 @@ def _build_train_cfg(
             else _cfg_bool(config, "train.dataloader_persistent_workers", False)
         ),
         "dataloader_prefetch_factor": int(_cfg_get(config, "train.dataloader_prefetch_factor", 2)),
-        "optim": str(_cfg_get(config, "optimization.optimizer", "SGD")),
-        "lr": float(_cfg_get(config, "optimization.lr", 0.01)),
-        "weight_decay": float(_cfg_get(config, "optimization.configs.weight_decay", 0.0)),
-        "lr_decay_enable": _cfg_bool(config, "optimization.lr_decay.enable", False),
-        "lr_decay_type": str(_cfg_get(config, "optimization.lr_decay.type", "none")),
-        "lr_decay_gamma": float(_cfg_get(config, "optimization.lr_decay.gamma", 0.99)),
-        "lr_decay_t_max": int(_cfg_get(config, "optimization.lr_decay.t_max", 0)),
-        "lr_decay_eta_min": float(_cfg_get(config, "optimization.lr_decay.eta_min", 0.0)),
-        "lr_decay_min_lr": float(_cfg_get(config, "optimization.lr_decay.min_lr", 0.0)),
+        "optimizer_name": str(_cfg_get(config, "optimizer.name", "SGD")),
+        "optimizer_backend": str(_cfg_get(config, "optimizer.backend", "auto")),
+        "optimizer_path": str(_cfg_get(config, "optimizer.path", "")),
+        "optimizer_configs": optimizer_configs,
+        "lr": float(_cfg_get(config, "optimizer.lr", 0.01)),
+        "weight_decay": float(_cfg_get(config, "optimizer.configs.weight_decay", 0.0)),
+        "lr_decay_enable": _cfg_bool(config, "optimizer.lr_decay.enable", False),
+        "lr_decay_type": str(_cfg_get(config, "optimizer.lr_decay.type", "none")),
+        "lr_decay_gamma": float(_cfg_get(config, "optimizer.lr_decay.gamma", 0.99)),
+        "lr_decay_t_max": int(_cfg_get(config, "optimizer.lr_decay.t_max", 0)),
+        "lr_decay_eta_min": float(_cfg_get(config, "optimizer.lr_decay.eta_min", 0.0)),
+        "lr_decay_min_lr": float(_cfg_get(config, "optimizer.lr_decay.min_lr", 0.0)),
+        "loss_name": str(_cfg_get(config, "loss.name", "CrossEntropyLoss")),
+        "loss_backend": str(_cfg_get(config, "loss.backend", "auto")),
+        "loss_path": str(_cfg_get(config, "loss.path", "")),
+        "loss_configs": loss_configs,
         "num_rounds": int(_cfg_get(config, "train.num_rounds", 20)),
-        "max_grad_norm": float(_cfg_get(config, "train.max_grad_norm", 0.0)),
+        "max_grad_norm": float(_cfg_get(config, "optimizer.clip_grad_norm", 0.0)),
+        "accum_grad": int(_cfg_get(config, "optimizer.accum_grad", 0)),
         "logging_output_dirname": str(run_log_dir),
         "logging_output_filename": "client",
         "experiment_id": str(_cfg_get(config, "experiment.name", "appfl-sim")),

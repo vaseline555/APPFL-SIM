@@ -5,6 +5,7 @@ import torch
 from omegaconf import DictConfig
 from appfl_sim.metrics import MetricsManager, parse_metric_names
 from appfl_sim.misc.config_utils import _cfg_bool
+from appfl_sim.misc.config_utils import build_loss_from_config
 from appfl_sim.misc.data_utils import _resolve_client_eval_dataset, _sample_eval_clients
 from appfl_sim.misc.metrics_utils import _weighted_mean
 from appfl_sim.misc.system_utils import _client_processing_chunk_size, _iter_id_chunks
@@ -104,13 +105,13 @@ def _evaluate_dataset_direct(
     num_workers: int,
 ) -> Dict[str, float]:
     if dataset is None:
-        return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
+        return {"loss": -1.0, "num_examples": 0, "metrics": {}}
     try:
         n = len(dataset)
     except Exception:
         n = 0
     if int(n) <= 0:
-        return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
+        return {"loss": -1.0, "num_examples": 0, "metrics": {}}
 
     loader = torch.utils.data.DataLoader(
         dataset,
@@ -120,8 +121,6 @@ def _evaluate_dataset_direct(
     )
     manager = MetricsManager(eval_metrics=eval_metric_names)
     total_examples = 0
-    correct = 0
-    has_logits = False
     for data, target in loader:
         data = data.to(device)
         target = target.to(device)
@@ -133,15 +132,8 @@ def _evaluate_dataset_direct(
         manager.track(float(loss.item()), logits_cpu, target_cpu)
         batch = int(target_cpu.shape[0]) if target_cpu.ndim > 0 else 1
         total_examples += batch
-        if logits_cpu.ndim > 1:
-            has_logits = True
-            correct += int(
-                torch.sum(logits_cpu.argmax(dim=1) == target_cpu.reshape(-1)).item()
-            )
 
     stats = manager.aggregate(total_len=total_examples)
-    if float(stats.get("accuracy", -1.0)) < 0.0 and has_logits:
-        stats["accuracy"] = float(correct / max(total_examples, 1))
     return stats
 
 def _build_federated_eval_plan(
@@ -269,14 +261,9 @@ def _aggregate_eval_stats(stats: Dict[int, Dict]) -> Optional[Dict[str, float]]:
             result[f"{key}_max"] = -1.0
         if "loss" not in result:
             result["loss"] = -1.0
-        if "accuracy" not in result:
-            result["accuracy"] = -1.0
         result.setdefault("loss_std", -1.0)
-        result.setdefault("accuracy_std", -1.0)
         result.setdefault("loss_min", -1.0)
         result.setdefault("loss_max", -1.0)
-        result.setdefault("accuracy_min", -1.0)
-        result.setdefault("accuracy_max", -1.0)
         return result
 
     for key in numeric_keys:
@@ -294,14 +281,9 @@ def _aggregate_eval_stats(stats: Dict[int, Dict]) -> Optional[Dict[str, float]]:
 
     if "loss" not in result:
         result["loss"] = -1.0
-    if "accuracy" not in result:
-        result["accuracy"] = -1.0
     result.setdefault("loss_std", 0.0)
-    result.setdefault("accuracy_std", 0.0)
     result.setdefault("loss_min", result["loss"])
     result.setdefault("loss_max", result["loss"])
-    result.setdefault("accuracy_min", result["accuracy"])
-    result.setdefault("accuracy_max", result["accuracy"])
     return result
 
 def _run_federated_eval_serial(
@@ -320,9 +302,7 @@ def _run_federated_eval_serial(
 ) -> Optional[Dict[str, float]]:
     if not eval_client_ids:
         return None
-    eval_loss_fn = getattr(
-        torch.nn, str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss"))
-    )()
+    eval_loss_fn = build_loss_from_config(config)
     eval_metric_names = parse_metric_names(_cfg_get(config, "eval.metrics", ["acc1"]))
     eval_batch_size = int(
         _cfg_get(config, "train.eval_batch_size", _cfg_get(config, "train.batch_size", 32))
@@ -334,7 +314,8 @@ def _run_federated_eval_serial(
     )
     model.load_state_dict(global_state)
     model = model.to(device)
-    eval_loss_fn = eval_loss_fn.to(device)
+    if hasattr(eval_loss_fn, "to"):
+        eval_loss_fn = eval_loss_fn.to(device)
     was_training = bool(getattr(model, "training", False))
     model.eval()
     chunk_size = _client_processing_chunk_size(

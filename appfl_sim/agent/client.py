@@ -7,7 +7,6 @@ import torch
 import pathlib
 import warnings
 import importlib
-import torch.nn as nn
 from datetime import datetime
 from appfl_sim.algorithm.trainer import BaseTrainer
 from omegaconf import DictConfig, OmegaConf
@@ -17,6 +16,7 @@ from appfl_sim.misc.runtime_utils import (
     create_instance_from_file,
     run_function_from_file,
 )
+from appfl_sim.misc.config_utils import build_loss_from_train_cfg
 
 
 class _NullClientLogger:
@@ -200,7 +200,7 @@ class ClientAgent:
 
     def evaluate(self, split: str = "test", **kwargs) -> Dict:
         if self.trainer is None:
-            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0}
+            return {"loss": -1.0, "num_examples": 0, "metrics": {}}
         if hasattr(self.trainer, "evaluate"):
             try:
                 return self.trainer.evaluate(split=split, **kwargs)
@@ -289,18 +289,12 @@ class ClientAgent:
 
     def _load_loss(self) -> None:
         """
-        Load loss function from `train_configs.loss_fn` in `torch.nn` (optional).
+        Load loss function from train configuration (`loss_name`, `loss_backend`, ...).
         """
         if self.loss_fn is not None:
             return
         train_cfg = self.client_agent_config.train_configs
-        if "loss_fn" in train_cfg:
-            if hasattr(nn, train_cfg.loss_fn):
-                self.loss_fn = getattr(nn, train_cfg.loss_fn)()
-            else:
-                self.loss_fn = None
-        else:
-            self.loss_fn = None
+        self.loss_fn = build_loss_from_train_cfg(train_cfg)
 
     def _load_metric(self) -> None:
         """
@@ -366,9 +360,15 @@ class ClientAgent:
                     "eval_pin_memory": False,
                     "dataloader_persistent_workers": False,
                     "dataloader_prefetch_factor": 2,
-                    "optim": "SGD",
+                    "optimizer_name": "SGD",
+                    "optimizer_backend": "auto",
+                    "optimizer_path": "",
+                    "optimizer_configs": {"weight_decay": 0.0},
                     "lr": 0.01,
-                    "weight_decay": 0.0,
+                    "loss_name": "CrossEntropyLoss",
+                    "loss_backend": "auto",
+                    "loss_path": "",
+                    "loss_configs": {},
                     "max_grad_norm": 0.0,
                     "client_logging_enabled": True,
                     "do_pre_evaluation": True,

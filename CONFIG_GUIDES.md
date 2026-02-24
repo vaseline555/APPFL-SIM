@@ -79,9 +79,16 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `scheduler_kwargs` (default: `{}`): configs forwarded to scheduler class construction.
 - `trainer_kwargs` (default: `{}`): configs forwarded to trainer class construction.
 
-## Optimization (`optimization`)
-- `optimizer` (default: `SGD`): optimizer from `torch.optim`.
-- `criterion` (default: `CrossEntropyLoss`): loss from `torch.nn`.
+## Loss (`loss`)
+- `path` (default: `""`): loss root path.
+- `name` (default: `CrossEntropyLoss`): loss name.
+- `backend` (default: `auto`): loss source (`auto`, `torch`, `custom`).
+- `configs` (default: `{}`): loss-agnostic keyword arguments.
+
+## Optimization (`optimizer`)
+- `path` (default: `""`): optimizer root path.
+- `name` (default: `SGD`): optimizer name`.
+- `backend` (default: `auto`): optimizer source (`auto`, `torch`, `custom`).
 - `lr` (default: `0.01`): learning rate for local updates.
 - `lr_decay` (default: disabled): local LR scheduler applied during each client update.
   - `enable` (default: `false`): enable local LR decay.

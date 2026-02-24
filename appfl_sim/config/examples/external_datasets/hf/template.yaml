@@ -46,7 +46,6 @@ train:
   local_iters: 1
   batch_size: 8
   shuffle: true
-  max_grad_norm: 0.0
   eval_batch_size: 16
   num_workers: 0
   pin_memory: false
@@ -64,9 +63,16 @@ algorithm:
   aggregator_kwargs: {}
   scheduler_kwargs: {}
   trainer_kwargs: {}
-optimization:
-  optimizer: AdamW
-  criterion: CrossEntropyLoss
+loss:
+  name: CrossEntropyLoss
+  backend: auto
+  path: ""
+  configs: {}
+
+optimizer:
+  name: AdamW
+  backend: auto
+  path: ""
   lr: 0.005
   clip_grad_norm: 0.0
   accum_grad: 0

@@ -130,6 +130,105 @@ def _warn_if_workers_pinned_to_single_device(
     else:
         print(msg)
 
+
+def _trainer_metric_title(metric_name: str) -> str:
+    text = str(metric_name).strip()
+    if text == "":
+        return "Metric"
+    return text[:1].upper() + text[1:]
+
+
+def _trainer_metric_value(
+    stats_obj: Optional[Dict[str, Any]],
+    metric_name: str,
+) -> float:
+    if not isinstance(stats_obj, dict):
+        return -1.0
+    nested = stats_obj.get("metrics", {})
+    if isinstance(nested, dict):
+        value = nested.get(metric_name, None)
+        if isinstance(value, (int, float)):
+            return float(value)
+    for key in (f"metric_{metric_name}", metric_name):
+        value = stats_obj.get(key, None)
+        if isinstance(value, (int, float)):
+            return float(value)
+    return -1.0
+
+
+def _build_trainer_log_row(
+    *,
+    mode: str,
+    has_any_eval_split: bool,
+    has_val_split: bool,
+    has_test_split: bool,
+    metric_names_for_log: List[str],
+    epoch_idx: Optional[int],
+    pre_eval_flag: str,
+    elapsed: Any,
+    train_stats_obj: Optional[Dict[str, Any]],
+    val_stats_obj: Optional[Dict[str, Any]],
+    test_stats_obj: Optional[Dict[str, Any]],
+) -> List[Any]:
+    row: List[Any] = []
+    if str(mode).strip().lower() == "epoch":
+        row.append(epoch_idx if epoch_idx is not None else "-")
+    if bool(has_any_eval_split):
+        row.append(pre_eval_flag)
+    row.append(elapsed)
+    row.append(
+        float(train_stats_obj["loss"])
+        if isinstance(train_stats_obj, dict) and "loss" in train_stats_obj
+        else "-"
+    )
+    for metric_name in metric_names_for_log:
+        row.append(_trainer_metric_value(train_stats_obj, metric_name))
+    if bool(has_val_split):
+        row.append(
+            float(val_stats_obj["loss"])
+            if isinstance(val_stats_obj, dict) and "loss" in val_stats_obj
+            else -1.0
+        )
+        for metric_name in metric_names_for_log:
+            row.append(_trainer_metric_value(val_stats_obj, metric_name))
+    if bool(has_test_split):
+        row.append(
+            float(test_stats_obj["loss"])
+            if isinstance(test_stats_obj, dict) and "loss" in test_stats_obj
+            else -1.0
+        )
+        for metric_name in metric_names_for_log:
+            row.append(_trainer_metric_value(test_stats_obj, metric_name))
+    return row
+
+
+def _build_trainer_log_title(
+    *,
+    mode: str,
+    has_any_eval_split: bool,
+    has_val_split: bool,
+    has_test_split: bool,
+    metric_names_for_log: List[str],
+) -> List[str]:
+    title: List[str] = []
+    if str(mode).strip().lower() == "epoch":
+        title.append("Epoch")
+    if bool(has_any_eval_split):
+        title.append("Pre Eval?")
+    title.extend(["Time", "Train. Loss"])
+    for metric_name in metric_names_for_log:
+        title.append(f"Train. {_trainer_metric_title(metric_name)}")
+    if bool(has_val_split):
+        title.append("Val. Loss")
+        for metric_name in metric_names_for_log:
+            title.append(f"Val. {_trainer_metric_title(metric_name)}")
+    if bool(has_test_split):
+        title.append("Test Loss")
+        for metric_name in metric_names_for_log:
+            title.append(f"Test {_trainer_metric_title(metric_name)}")
+    return title
+
+
 def _log_round(
     config: DictConfig,
     round_idx: int,
@@ -327,8 +426,6 @@ def _log_round(
                 if candidate in extrema and candidate not in ordered_keys:
                     ordered_keys.append(candidate)
                     break
-        if len(ordered_keys) <= 1 and "accuracy" in extrema and "accuracy" not in ordered_keys:
-            ordered_keys.append("accuracy")
         if not ordered_keys:
             ordered_keys = sorted(extrema.keys())
 

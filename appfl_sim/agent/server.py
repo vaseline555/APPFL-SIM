@@ -2,8 +2,6 @@ import io
 import gc
 import torch
 import threading
-import numpy as np
-import torch.nn as nn
 from appfl_sim.logger import ServerAgentFileLogger
 from appfl_sim.algorithm.scheduler import BaseScheduler
 from appfl_sim.algorithm.aggregator import BaseAggregator
@@ -13,6 +11,7 @@ from appfl_sim.misc.runtime_utils import (
     get_appfl_aggregator,
     get_appfl_scheduler,
 )
+from appfl_sim.misc.config_utils import build_loss_from_train_cfg
 from concurrent.futures import Future
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf, DictConfig
@@ -46,7 +45,6 @@ class ServerAgent:
         self.num_clients: Optional[int] = None
         self.model = None
         self.loss_fn = None
-        self.metric = None
         self.aggregator = None
         self.scheduler = None
         self._val_dataset = None
@@ -66,7 +64,6 @@ class ServerAgent:
         self._create_logger()
         self._load_model()
         self._load_loss()
-        self._load_metric()
         self._load_scheduler()
         self._load_val_data()
 
@@ -246,11 +243,11 @@ class ServerAgent:
 
     def _evaluate_metrics(self, round_idx: Optional[int] = None) -> Dict[str, Any]:
         if self._val_dataset is None:
-            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
+            return {"loss": -1.0, "num_examples": 0, "metrics": {}}
         if len(self._val_dataset) == 0:
-            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
+            return {"loss": -1.0, "num_examples": 0, "metrics": {}}
         if self.model is None:
-            return {"loss": -1.0, "accuracy": -1.0, "num_examples": 0, "metrics": {}}
+            return {"loss": -1.0, "num_examples": 0, "metrics": {}}
 
         if self.loss_fn is None:
             self.loss_fn = torch.nn.CrossEntropyLoss()
@@ -285,11 +282,7 @@ class ServerAgent:
             self.loss_fn = self.loss_fn.to(device)
         self.model.eval()
 
-        total_correct = 0
-        total_has_logits = False
         total_examples = 0
-        target_pred = []
-        target_true = []
         show_progress = bool(
             self.server_agent_config.server_configs.get("eval_show_progress", True)
         )
@@ -326,30 +319,11 @@ class ServerAgent:
                 manager.track(float(loss.item()), logits_cpu, targets_cpu)
                 bs = targets_cpu.size(0)
                 total_examples += bs
-                target_pred.append(logits_cpu.numpy())
-                target_true.append(targets_cpu.numpy())
-                if logits_cpu.ndim > 1:
-                    total_has_logits = True
-                    total_correct += int(
-                        torch.eq(torch.argmax(logits_cpu, dim=1), targets_cpu.view(-1))
-                        .sum()
-                        .item()
-                    )
         finally:
             if progress_bar is not None:
                 progress_bar.close()
 
         result = manager.aggregate(total_len=total_examples)
-        if float(result.get("accuracy", -1.0)) < 0.0:
-            if total_has_logits:
-                result["accuracy"] = float(total_correct / max(total_examples, 1))
-            elif self.metric is not None and target_true and target_pred:
-                try:
-                    result["accuracy"] = float(
-                        self.metric(np.concatenate(target_true), np.concatenate(target_pred))
-                    )
-                except Exception:
-                    pass
 
         if was_training:
             self.model.train()
@@ -367,7 +341,19 @@ class ServerAgent:
             return None
         else:
             stats = self._evaluate_metrics()
-            return float(stats["loss"]), float(stats["accuracy"])
+            metric_names = parse_metric_names(
+                self.server_agent_config.server_configs.get("eval_metrics", None)
+            )
+            metric_name = (
+                str(metric_names[0]).strip().lower() if metric_names else "acc1"
+            )
+            metric_value = -1.0
+            nested = stats.get("metrics", {})
+            if isinstance(nested, dict) and metric_name in nested:
+                metric_value = float(nested[metric_name])
+            elif f"metric_{metric_name}" in stats:
+                metric_value = float(stats[f"metric_{metric_name}"])
+            return float(stats["loss"]), metric_value
 
     def training_finished(self, **kwargs) -> bool:
         """Indicate whether the training is finished."""
@@ -439,19 +425,10 @@ class ServerAgent:
 
     def _load_loss(self) -> None:
         """
-        Load loss function from `client_configs.train_configs.loss_fn` (torch.nn).
+        Load loss function from client train configuration.
         """
         train_cfg = self.server_agent_config.client_configs.train_configs
-        if "loss_fn" in train_cfg:
-            if hasattr(nn, train_cfg.loss_fn):
-                self.loss_fn = getattr(nn, train_cfg.loss_fn)()
-            else:
-                self.loss_fn = None
-        else:
-            self.loss_fn = None
-
-    def _load_metric(self) -> None:
-        self.metric = None
+        self.loss_fn = build_loss_from_train_cfg(train_cfg)
 
     def _load_scheduler(self) -> None:
         """Obtain the scheduler."""
@@ -581,9 +558,15 @@ class ServerAgent:
                         "eval_pin_memory": False,
                         "dataloader_persistent_workers": False,
                         "dataloader_prefetch_factor": 2,
-                        "optim": "SGD",
+                        "optimizer_name": "SGD",
+                        "optimizer_backend": "auto",
+                        "optimizer_path": "",
+                        "optimizer_configs": {"weight_decay": 0.0},
                         "lr": 0.01,
-                        "weight_decay": 0.0,
+                        "loss_name": "CrossEntropyLoss",
+                        "loss_backend": "auto",
+                        "loss_path": "",
+                        "loss_configs": {},
                         "max_grad_norm": 0.0,
                         "client_logging_enabled": True,
                         "do_pre_evaluation": True,

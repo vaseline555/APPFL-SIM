@@ -22,6 +22,7 @@ from appfl_sim.misc.config_utils import (
     _resolve_client_logging_policy,
     _resolve_num_sampled_clients,
 )
+from appfl_sim.misc.config_utils import build_loss_from_config
 from appfl_sim.misc.data_utils import _build_client_groups
 
 def _maybe_select_round_local_steps(server, round_idx: int):
@@ -393,9 +394,6 @@ def _build_clients(
                 "train_configs": {
                     **train_cfg,
                     "trainer": str(trainer_name),
-                    "loss_fn": str(
-                        _cfg_get(config, "optimization.criterion", "CrossEntropyLoss")
-                    ),
                 },
                 "model_configs": {},
                 "data_configs": {},
@@ -457,14 +455,22 @@ def _build_server(
         algorithm_components = _resolve_algorithm_components(config)
     num_clients = int(runtime_cfg["num_clients"])
     num_sampled_clients = _resolve_num_sampled_clients(config, num_clients=num_clients)
+    loss_configs = _cfg_get(config, "loss.configs", {})
+    if isinstance(loss_configs, DictConfig):
+        loss_configs = dict(OmegaConf.to_container(loss_configs, resolve=True))
+    elif isinstance(loss_configs, dict):
+        loss_configs = dict(loss_configs)
+    else:
+        loss_configs = {}
     server_cfg = OmegaConf.create(
         {
             "client_configs": {
                 "train_configs": {
-                    "loss_fn": str(
-                        _cfg_get(config, "optimization.criterion", "CrossEntropyLoss")
-                    ),
                     "eval_metrics": _cfg_get(config, "eval.metrics", ["acc1"]),
+                    "loss_name": str(_cfg_get(config, "loss.name", "CrossEntropyLoss")),
+                    "loss_backend": str(_cfg_get(config, "loss.backend", "auto")),
+                    "loss_path": str(_cfg_get(config, "loss.path", "")),
+                    "loss_configs": loss_configs,
                 },
                 "model_configs": {},
             },
@@ -500,7 +506,7 @@ def _build_server(
         and getattr(server.aggregator, "model", None) is None
     ):
         server.aggregator.model = server.model
-    server.loss_fn = torch.nn.__dict__[str(_cfg_get(config, "optimization.criterion", "CrossEntropyLoss"))]()
+    server.loss_fn = build_loss_from_config(config)
     server._val_dataset = server_dataset
     server._load_val_data()
     return server
