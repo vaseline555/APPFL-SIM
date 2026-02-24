@@ -29,11 +29,6 @@ class BaseScheduler:
         """
         pass
 
-    @abc.abstractmethod
-    def get_num_global_epochs(self) -> int:
-        """Return the total number of global epochs for federated learning."""
-        pass
-
     def get_parameters(
         self, **kwargs
     ) -> Union[Future, Dict, OrderedDict, Tuple[Union[Dict, OrderedDict], Dict]]:

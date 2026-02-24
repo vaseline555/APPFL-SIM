@@ -28,9 +28,11 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 
 ## Split Simulation (`split`)
 - `type` (default: `iid`): split policy (`iid`, `unbalanced`, `dirichlet`, `pathological`, `pre`). (prev. `split_type`)
-  - `pre`: use benchmark-defined client partition (required for `dataset.backend` in `leaf`, `flamby`, `tff`).
-- `infer_num_clients` (default: `false`): infer client count from fixed-pool datasets (`leaf`, `flamby`, `tff`).
+  (`pre`: use pre-defined client partition from dataset metadata; required for fixed-pool backends `leaf`, `flamby`, `tff`, and also supported by `hf`/`custom` when `split.configs.pre_source` or `split.configs.pre_index` is provided.)
 - `configs`: split type-agnostic keyword arguments.
+  - `pre_source` (default: `""`): key/column name used to group samples by pre-defined client id (when `split.type=pre`).
+  - `pre_index` (default: `-1`): tuple/list index used to read pre-defined client id from each sample (when `split.type=pre` and samples are tuple/list).
+  - `pre_infer_num_clients` (default: `false`): infer number of clients from unique pre-defined ids instead of `train.num_clients` (when `split.type=pre`).
   - `unbalanced_keep_min` (default: `0.5`): minimum keep ratio (when `split.type=unbalanced`).
   - `dirichlet_alpha` (default: `0.3`): concentration parameter (when `split.type=dirichlet`).
   - `min_classes` (default: `2`): minimum unique classes per client (when `split.type=pathological`).
@@ -38,7 +40,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## Model (`model`)
 - `path` (default: `./models`): local model root path and default cache fallback.
 - `name` (default: `SimpleCNN`): model name. (prev. `model`)
-- `backend` (default: `auto`): model source (`auto`, `local`, `hf`, `torchvision`, `torchtext`, `torchaudio`).
+- `backend` (default: `auto`): model source (`auto`, `custom`, `hf`, `torchvision`, `torchtext`, `torchaudio`).
 - `configs` (default: `{}`): backend-agnostic model keyword arguments.
   - `cache_dir` (default: `model.path`): cache directory used for external model artifacts (e.g., HuggingFace model/config downloads).
   - `hf_local_files_only` (default: `false`): when `true`, forbid HuggingFace network download and read from local cache only.
@@ -105,7 +107,6 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
   - `eta_min` (default: `0.0`): cosine minimum LR when `type=cosine`.
   - `min_lr` (default: `0.0`): floor clamp applied after scheduler step.
 - `clip_grad_norm` (default: `0.0`): enable gradient norm clipping when `>0`.
-- `accum_grad` (default: `0`): accumulate gradient when `>0`.
 - `configs` (default: `{}`): optimizer-agnostic keyword arguments.
   - `weight_decay` (default: `0.0`): weight decay.
   - `momentum` (default: `0.0`): moemntum.

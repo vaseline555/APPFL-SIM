@@ -1,5 +1,5 @@
-from appfl_sim.algorithm.trainer.vanilla_trainer import VanillaTrainer
+from appfl_sim.algorithm.trainer.fedavg_trainer import FedavgTrainer
 
 
-class SwtsTrainer(VanillaTrainer):
+class SwtsTrainer(FedavgTrainer):
     pass

@@ -3,7 +3,7 @@
 Use `template.yaml` as a base and override exact model card id via CLI:
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m appfl_sim.runner \
+python -m appfl_sim.runner \
   --config appfl_sim/config/examples/external_datasets/hf/template.yaml \
   model_name=bert-base-uncased \
   experiment_name=hf-bert-test

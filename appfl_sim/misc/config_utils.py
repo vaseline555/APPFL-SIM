@@ -1,8 +1,11 @@
 from __future__ import annotations
+import ast
 import importlib
 import importlib.util
 import inspect
+import os
 import re
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, Iterable, List, Optional
@@ -139,6 +142,61 @@ def _load_named_symbol(path: str, name: str):
         raise ValueError(f"Custom component `{name}` not found in {file_path}")
     return getattr(module, name)
 
+def _get_last_class_name_from_file(file_path: str) -> Optional[str]:
+    with open(file_path) as file:
+        file_content = file.read()
+    tree = ast.parse(file_content)
+    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    if classes:
+        return classes[-1].name
+    return None
+
+
+def _get_last_function_name_from_file(file_path: str) -> Optional[str]:
+    with open(file_path) as file:
+        file_content = file.read()
+    tree = ast.parse(file_content)
+    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+    if functions:
+        return functions[-1].name
+    return None
+
+
+def _load_module_from_file(file_path: str):
+    file_path = os.path.abspath(file_path)
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+    module_dir, module_file = os.path.split(file_path)
+    module_name, _ = os.path.splitext(module_file)
+    if module_dir not in sys.path:
+        sys.path.append(module_dir)
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Unable to load python module from: {file_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _create_instance_from_file(file_path, class_name=None, *args, **kwargs):
+    if class_name is None:
+        class_name = _get_last_class_name_from_file(file_path)
+    if class_name is None:
+        raise ValueError(f"No class found in file: {file_path}")
+    module = _load_module_from_file(file_path)
+    cls = getattr(module, class_name)
+    return cls(*args, **kwargs)
+
+
+def _run_function_from_file(file_path, function_name=None, *args, **kwargs):
+    if function_name is None:
+        function_name = _get_last_function_name_from_file(file_path)
+    if function_name is None:
+        raise ValueError(f"No function found in file: {file_path}")
+    module = _load_module_from_file(file_path)
+    function = getattr(module, function_name)
+    return function(*args, **kwargs)
+
 
 def build_loss_from_config(config: DictConfig | dict):
     name = str(_cfg_get(config, "loss.name", "CrossEntropyLoss"))
@@ -163,27 +221,29 @@ def build_loss_from_config(config: DictConfig | dict):
 def build_loss_from_train_cfg(train_cfg: DictConfig | dict):
     payload = {
         "loss": {
-            "name": _cfg_get(train_cfg, "loss_name", "CrossEntropyLoss"),
-            "backend": _cfg_get(train_cfg, "loss_backend", "auto"),
-            "path": _cfg_get(train_cfg, "loss_path", ""),
-            "configs": _cfg_get(train_cfg, "loss_configs", {}),
+            "name": _cfg_get(train_cfg, "loss.name", "CrossEntropyLoss"),
+            "backend": _cfg_get(train_cfg, "loss.backend", "auto"),
+            "path": _cfg_get(train_cfg, "loss.path", ""),
+            "configs": _cfg_get(train_cfg, "loss.configs", {}),
         }
     }
     return build_loss_from_config(payload)
 
 
 def build_optimizer_from_train_cfg(train_cfg: DictConfig | dict, params: Iterable):
-    name = str(_cfg_get(train_cfg, "optimizer_name", "SGD"))
-    path = str(_cfg_get(train_cfg, "optimizer_path", ""))
+    name = str(_cfg_get(train_cfg, "optimizer.name", "SGD"))
+    path = str(_cfg_get(train_cfg, "optimizer.path", ""))
     backend = _resolve_component_backend(
         kind="optimizer",
-        backend=str(_cfg_get(train_cfg, "optimizer_backend", "auto")),
+        backend=str(_cfg_get(train_cfg, "optimizer.backend", "auto")),
         path=path,
     )
-    kwargs = _cfg_to_dict(_cfg_get(train_cfg, "optimizer_configs", {}))
-    kwargs.setdefault("lr", float(_cfg_get(train_cfg, "lr", 0.01)))
+    kwargs = _cfg_to_dict(_cfg_get(train_cfg, "optimizer.configs", {}))
+    kwargs.setdefault("lr", float(_cfg_get(train_cfg, "optimizer.lr", 0.01)))
     if "weight_decay" not in kwargs:
-        kwargs["weight_decay"] = float(_cfg_get(train_cfg, "weight_decay", 0.0))
+        kwargs["weight_decay"] = float(
+            _cfg_get(train_cfg, "optimizer.configs.weight_decay", 0.0)
+        )
 
     if backend == "torch":
         if not hasattr(torch.optim, name):
@@ -252,20 +312,8 @@ def _build_train_cfg(
         mode = "epoch"
         local_epochs = int(_cfg_get(config, "train.local_epochs", 1))
         local_epochs = max(1, local_epochs)
-    optimizer_configs = _cfg_get(config, "optimizer.configs", {})
-    if isinstance(optimizer_configs, DictConfig):
-        optimizer_configs = dict(OmegaConf.to_container(optimizer_configs, resolve=True))
-    elif isinstance(optimizer_configs, dict):
-        optimizer_configs = dict(optimizer_configs)
-    else:
-        optimizer_configs = {}
-    loss_configs = _cfg_get(config, "loss.configs", {})
-    if isinstance(loss_configs, DictConfig):
-        loss_configs = dict(OmegaConf.to_container(loss_configs, resolve=True))
-    elif isinstance(loss_configs, dict):
-        loss_configs = dict(loss_configs)
-    else:
-        loss_configs = {}
+    optimizer_configs = _cfg_to_dict(_cfg_get(config, "optimizer.configs", {}))
+    loss_configs = _cfg_to_dict(_cfg_get(config, "loss.configs", {}))
     train_cfg = {
         "device": device,
         "mode": mode,
@@ -281,25 +329,29 @@ def _build_train_cfg(
             config, "train.dataloader_persistent_workers", False
         ),
         "dataloader_prefetch_factor": int(_cfg_get(config, "train.dataloader_prefetch_factor", 2)),
-        "optimizer_name": str(_cfg_get(config, "optimizer.name", "SGD")),
-        "optimizer_backend": str(_cfg_get(config, "optimizer.backend", "auto")),
-        "optimizer_path": str(_cfg_get(config, "optimizer.path", "")),
-        "optimizer_configs": optimizer_configs,
-        "lr": float(_cfg_get(config, "optimizer.lr", 0.01)),
-        "weight_decay": float(_cfg_get(config, "optimizer.configs.weight_decay", 0.0)),
-        "lr_decay_enable": _cfg_bool(config, "optimizer.lr_decay.enable", False),
-        "lr_decay_type": str(_cfg_get(config, "optimizer.lr_decay.type", "none")),
-        "lr_decay_gamma": float(_cfg_get(config, "optimizer.lr_decay.gamma", 0.99)),
-        "lr_decay_t_max": int(_cfg_get(config, "optimizer.lr_decay.t_max", 0)),
-        "lr_decay_eta_min": float(_cfg_get(config, "optimizer.lr_decay.eta_min", 0.0)),
-        "lr_decay_min_lr": float(_cfg_get(config, "optimizer.lr_decay.min_lr", 0.0)),
-        "loss_name": str(_cfg_get(config, "loss.name", "CrossEntropyLoss")),
-        "loss_backend": str(_cfg_get(config, "loss.backend", "auto")),
-        "loss_path": str(_cfg_get(config, "loss.path", "")),
-        "loss_configs": loss_configs,
+        "optimizer": {
+            "name": str(_cfg_get(config, "optimizer.name", "SGD")),
+            "backend": str(_cfg_get(config, "optimizer.backend", "auto")),
+            "path": str(_cfg_get(config, "optimizer.path", "")),
+            "configs": optimizer_configs,
+            "lr": float(_cfg_get(config, "optimizer.lr", 0.01)),
+            "lr_decay": {
+                "enable": _cfg_bool(config, "optimizer.lr_decay.enable", False),
+                "type": str(_cfg_get(config, "optimizer.lr_decay.type", "none")),
+                "gamma": float(_cfg_get(config, "optimizer.lr_decay.gamma", 0.99)),
+                "t_max": int(_cfg_get(config, "optimizer.lr_decay.t_max", 0)),
+                "eta_min": float(_cfg_get(config, "optimizer.lr_decay.eta_min", 0.0)),
+                "min_lr": float(_cfg_get(config, "optimizer.lr_decay.min_lr", 0.0)),
+            },
+        },
+        "loss": {
+            "name": str(_cfg_get(config, "loss.name", "CrossEntropyLoss")),
+            "backend": str(_cfg_get(config, "loss.backend", "auto")),
+            "path": str(_cfg_get(config, "loss.path", "")),
+            "configs": loss_configs,
+        },
         "num_rounds": int(_cfg_get(config, "train.num_rounds", 20)),
         "max_grad_norm": float(_cfg_get(config, "optimizer.clip_grad_norm", 0.0)),
-        "accum_grad": int(_cfg_get(config, "optimizer.accum_grad", 0)),
         "logging_output_dirname": str(run_log_dir),
         "logging_output_filename": "client",
         "experiment_id": str(_cfg_get(config, "experiment.name", "appfl-sim")),
@@ -533,14 +585,14 @@ def _parse_cli_tokens(argv: list[str]) -> tuple[str | None, str | None, list[str
                 out.append(f"{key.replace('-', '_')}={value}")
                 idx += 1
                 continue
-                key = keyval.replace("-", "_")
-                if idx + 1 < len(remaining) and not remaining[idx + 1].startswith("--"):
-                    out.append(f"{key}={remaining[idx + 1]}")
-                    idx += 2
-                else:
-                    out.append(f"{key}=true")
-                    idx += 1
-                continue
+            key = keyval.replace("-", "_")
+            if idx + 1 < len(remaining) and not remaining[idx + 1].startswith("--"):
+                out.append(f"{key}={remaining[idx + 1]}")
+                idx += 2
+            else:
+                out.append(f"{key}=true")
+                idx += 1
+            continue
         if "=" in tok:
             key, value = tok.split("=", 1)
             key = key.replace("-", "_")

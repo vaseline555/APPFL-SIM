@@ -18,7 +18,6 @@ dataset:
 
 split:
   type: iid
-  infer_num_clients: false
   configs:
     unbalanced_keep_min: 0.5
     dirichlet_alpha: 0.3
@@ -84,7 +83,6 @@ optimizer:
     eta_min: 0.0
     min_lr: 0.0
   clip_grad_norm: 0.0
-  accum_grad: 0
   configs:
     weight_decay: 0.0
     momentum: 0.0

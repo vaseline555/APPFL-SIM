@@ -83,7 +83,9 @@ class DatasetArgs:
     dirichlet_alpha: float = 0.3
     min_classes: int = 2
     unbalanced_keep_min: float = 0.5
-    infer_num_clients: bool = False
+    pre_infer_num_clients: bool = False
+    pre_source: str = ""
+    pre_index: int = -1
     seq_len: int = 128
     num_embeddings: int = 10000
     use_model_tokenizer: bool = False
@@ -186,7 +188,9 @@ def to_namespace(args: Any) -> DatasetArgs:
         dirichlet_alpha=float(_get_path(split_cfg, "dirichlet_alpha", 0.3)),
         min_classes=int(_get_path(split_cfg, "min_classes", 2)),
         unbalanced_keep_min=float(_get_path(split_cfg, "unbalanced_keep_min", 0.5)),
-        infer_num_clients=bool(_get_path(payload, "split.infer_num_clients", False)),
+        pre_infer_num_clients=bool(_get_path(split_cfg, "pre_infer_num_clients", False)),
+        pre_source=str(_get_path(split_cfg, "pre_source", "")),
+        pre_index=int(_get_path(split_cfg, "pre_index", -1)),
         seq_len=int(_get_path(model_cfg, "seq_len", 128)),
         num_embeddings=int(_get_path(model_cfg, "num_embeddings", 10000)),
         use_model_tokenizer=bool(_get_path(model_cfg, "use_model_tokenizer", False)),
@@ -242,7 +246,7 @@ def resolve_fixed_pool_clients(
     if not pool:
         return []
 
-    infer_clients = _safe_bool(getattr(args, "infer_num_clients", False), False)
+    infer_clients = _safe_bool(getattr(args, "pre_infer_num_clients", False), False)
     requested_num = _safe_int(getattr(args, "num_clients", 0), 0)
     if infer_clients or requested_num <= 0:
         requested_num = len(pool)
@@ -574,19 +578,17 @@ def clientize_raw_dataset(
     targets = extract_targets(raw_train)
     split_type = str(args.split_type).strip().lower()
     if split_type == "pre":
-        raise ValueError(
-            "split.type='pre' is only supported by predefined backends "
-            "(leaf/flamby/tff), which directly return client_datasets."
+        client_indices = _predefined_client_split_indices(raw_train=raw_train, args=args)
+    else:
+        client_indices = simulate_split(
+            labels=targets,
+            num_clients=int(args.num_clients),
+            split_type=str(args.split_type),
+            seed=int(args.seed),
+            min_classes=int(args.min_classes),
+            dirichlet_alpha=float(args.dirichlet_alpha),
+            unbalanced_keep_min=float(args.unbalanced_keep_min),
         )
-    client_indices = simulate_split(
-        labels=targets,
-        num_clients=int(args.num_clients),
-        split_type=str(args.split_type),
-        seed=int(args.seed),
-        min_classes=int(args.min_classes),
-        dirichlet_alpha=float(args.dirichlet_alpha),
-        unbalanced_keep_min=float(args.unbalanced_keep_min),
-    )
 
     client_datasets = []
     for cid in sorted(int(k) for k in client_indices.keys()):
@@ -601,6 +603,106 @@ def clientize_raw_dataset(
         client_datasets.append((train_ds, test_ds))
 
     return client_datasets
+
+
+def _predefined_client_split_indices(
+    raw_train: Dataset,
+    args: DatasetArgs,
+) -> dict[int, np.ndarray]:
+    source = str(getattr(args, "pre_source", "")).strip()
+    pre_index = _safe_int(getattr(args, "pre_index", -1), -1)
+    if source == "" and pre_index < 0:
+        raise ValueError(
+            "split.type='pre' requires split.configs.pre_source (key/column name) "
+            "or split.configs.pre_index (tuple/list position)."
+        )
+    values = _extract_pre_source_values(
+        raw_train=raw_train,
+        source=source,
+        pre_index=pre_index,
+    )
+    if values is None:
+        raise ValueError(
+            f"Unable to extract pre split source '{source or f'index {pre_index}'}' from dataset. "
+            "For HF, ensure split.configs.pre_source matches an existing column."
+        )
+    if len(values) != len(raw_train):
+        raise ValueError(
+            f"Pre split source '{source}' length mismatch: {len(values)} vs {len(raw_train)}."
+        )
+    unique_values = sorted({str(v) for v in values})
+    if not unique_values:
+        raise ValueError("Pre split source produced no client identifiers.")
+
+    requested_num = _safe_int(getattr(args, "num_clients", 0), 0)
+    infer_num = _safe_bool(getattr(args, "pre_infer_num_clients", False), False)
+    if infer_num or requested_num <= 0:
+        selected_values = unique_values
+    else:
+        if requested_num > len(unique_values):
+            raise ValueError(
+                f"Requested train.num_clients={requested_num}, but pre source '{source}' "
+                f"contains only {len(unique_values)} unique client ids."
+            )
+        selected_values = unique_values[:requested_num]
+
+    selected_set = set(selected_values)
+    index_bins: dict[str, list[int]] = {k: [] for k in selected_values}
+    for idx, raw in enumerate(values):
+        key = str(raw)
+        if key in selected_set:
+            index_bins[key].append(int(idx))
+
+    non_empty_keys = [k for k, arr in index_bins.items() if len(arr) > 0]
+    if not non_empty_keys:
+        raise ValueError("Pre split produced no non-empty client subsets.")
+
+    result: dict[int, np.ndarray] = {}
+    for cid, key in enumerate(non_empty_keys):
+        result[int(cid)] = np.asarray(index_bins[key], dtype=np.int64)
+    args.num_clients = len(result)
+    return result
+
+
+def _extract_pre_source_values(raw_train: Dataset, source: str, pre_index: int):
+    if source != "":
+        direct = getattr(raw_train, source, None)
+        if direct is not None:
+            if torch.is_tensor(direct):
+                return direct.detach().cpu().numpy().reshape(-1).tolist()
+            arr = np.asarray(direct)
+            if arr.size > 0:
+                return arr.reshape(-1).tolist()
+
+        if hasattr(raw_train, "metadata"):
+            meta = getattr(raw_train, "metadata", None)
+            if isinstance(meta, dict) and source in meta:
+                arr = np.asarray(meta[source])
+                if arr.size > 0:
+                    return arr.reshape(-1).tolist()
+
+        values = []
+        for i in range(len(raw_train)):
+            item = raw_train[i]
+            if isinstance(item, dict):
+                if source not in item:
+                    return None
+                values.append(item[source])
+                continue
+            return None
+        return values
+
+    if pre_index < 0:
+        return None
+    values = []
+    for i in range(len(raw_train)):
+        item = raw_train[i]
+        if not isinstance(item, (tuple, list)):
+            return None
+        if pre_index >= len(item):
+            return None
+        values.append(item[int(pre_index)])
+    return values
 
 
 def set_common_metadata(

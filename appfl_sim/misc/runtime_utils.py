@@ -1,14 +1,9 @@
 from __future__ import annotations
-import ast
 import copy
 import importlib
-import importlib.util
 import logging
-import os
-import sys
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 import numpy as np
-import torch
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from appfl_sim.misc.config_utils import (
@@ -25,6 +20,7 @@ from appfl_sim.misc.data_utils import (
     _normalize_client_tuple,
     _resolve_num_sampled_clients,
 )
+from appfl_sim.misc.system_utils import _iter_id_chunks, _release_clients
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,11 +37,6 @@ def _select_round_local_steps(server, round_idx: int):
         LOGGER.debug("Scheduler.pull failed to provide integer local steps: %s", exc)
         return None
 
-def _normalize_uploaded_state(uploaded):
-    if isinstance(uploaded, tuple):
-        return uploaded[0]
-    return uploaded
-
 def _run_local_client_update(
     client,
     *,
@@ -53,15 +44,109 @@ def _run_local_client_update(
     round_idx: int,
     round_local_steps: Optional[int],
 ):
-    client.download(global_state)
+    client.load_parameters(global_state)
     if round_local_steps is None:
-        train_result = client.update(round_idx=round_idx)
+        train_result = client.train(round=round_idx)
     else:
-        train_result = client.update(
-            round_idx=round_idx, local_steps=int(round_local_steps)
+        train_result = client.train(
+            round=round_idx, local_steps=int(round_local_steps)
         )
-    state = _normalize_uploaded_state(client.upload())
+    uploaded = client.get_parameters()
+    state = uploaded[0] if isinstance(uploaded, tuple) else uploaded
     return train_result, state
+
+
+def _collect_local_training_payload(
+    *,
+    selected_client_ids: Sequence[int],
+    persistent_clients: Optional[Sequence],
+    worker_pool: Optional[Sequence],
+    config: DictConfig,
+    model,
+    on_demand_model,
+    client_datasets: Sequence,
+    client_device: str,
+    run_log_dir: str,
+    client_logging_enabled: bool,
+    trainer_name: str,
+    round_idx: int,
+    round_local_steps: Optional[int],
+    global_state,
+    chunk_size: int,
+    num_workers_override: Optional[int],
+) -> Dict[int, Dict[str, Any]]:
+    local_payload: Dict[int, Dict[str, Any]] = {}
+    if persistent_clients is not None:
+        selected_set = {int(cid) for cid in selected_client_ids}
+        for client in persistent_clients:
+            if int(client.id) not in selected_set:
+                continue
+            train_result, state = _run_local_client_update(
+                client,
+                global_state=global_state,
+                round_idx=round_idx,
+                round_local_steps=round_local_steps,
+            )
+            local_payload[int(client.id)] = {
+                "state": state,
+                "num_examples": int(train_result.get("num_examples", 0)),
+                "stats": train_result,
+            }
+        return local_payload
+
+    for chunk_ids in _iter_id_chunks(selected_client_ids, chunk_size):
+        if worker_pool:
+            chunk_clients = worker_pool[: len(chunk_ids)]
+            for client, cid in zip(chunk_clients, chunk_ids):
+                _rebind_client_for_on_demand_job(
+                    client,
+                    client_id=int(cid),
+                    client_datasets=client_datasets,
+                    num_workers_override=num_workers_override,
+                )
+        else:
+            chunk_clients = _build_clients(
+                config=config,
+                model=on_demand_model if on_demand_model is not None else model,
+                client_datasets=client_datasets,
+                local_client_ids=np.asarray(chunk_ids).astype(int),
+                device=client_device,
+                run_log_dir=run_log_dir,
+                client_logging_enabled=client_logging_enabled,
+                trainer_name=trainer_name,
+                share_model=True,
+                num_workers_override=num_workers_override,
+            )
+        for client in chunk_clients:
+            train_result, state = _run_local_client_update(
+                client,
+                global_state=global_state,
+                round_idx=round_idx,
+                round_local_steps=round_local_steps,
+            )
+            local_payload[int(client.id)] = {
+                "state": state,
+                "num_examples": int(train_result.get("num_examples", 0)),
+                "stats": train_result,
+            }
+        if not worker_pool:
+            _release_clients(chunk_clients)
+    return local_payload
+
+
+def _payload_to_updates(local_payload: Dict[int, Dict[str, Any]]):
+    updates: Dict[int, Any] = {}
+    sample_sizes: Dict[int, int] = {}
+    stats: Dict[int, Dict[str, Any]] = {}
+    for cid, payload_item in local_payload.items():
+        state = payload_item.get("state")
+        if isinstance(state, tuple):
+            state = state[0]
+        updates[int(cid)] = state
+        sample_sizes[int(cid)] = int(payload_item.get("num_examples", 0))
+        stats[int(cid)] = payload_item.get("stats", {})
+    return updates, sample_sizes, stats
+
 
 def _resolve_runtime_policies(config: DictConfig, runtime_cfg: Dict[str, Any]) -> Dict[str, Any]:
     num_clients = int(runtime_cfg["num_clients"])
@@ -88,57 +173,6 @@ def _resolve_runtime_policies(config: DictConfig, runtime_cfg: Dict[str, Any]) -
         "num_sampled_clients": num_sampled_clients,
         "logging_policy": logging_policy,
     }
-
-def _get_last_class_name(file_path):
-    with open(file_path) as file:
-        file_content = file.read()
-    tree = ast.parse(file_content)
-    classes = [node for node in tree.body if isinstance(node, ast.ClassDef)]
-    if classes:
-        return classes[-1].name
-    return None
-
-def _get_last_function_name(file_path):
-    with open(file_path) as file:
-        file_content = file.read()
-    tree = ast.parse(file_content)
-    functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
-    if functions:
-        return functions[-1].name
-    return None
-
-def _load_module_from_file(file_path: str):
-    file_path = os.path.abspath(file_path)
-    if not os.path.isfile(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
-    module_dir, module_file = os.path.split(file_path)
-    module_name, _ = os.path.splitext(module_file)
-    if module_dir not in sys.path:
-        sys.path.append(module_dir)
-    spec = importlib.util.spec_from_file_location(module_name, file_path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Unable to load python module from: {file_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-def _create_instance_from_file(file_path, class_name=None, *args, **kwargs):
-    if class_name is None:
-        class_name = _get_last_class_name(file_path)
-    if class_name is None:
-        raise ValueError(f"No class found in file: {file_path}")
-    module = _load_module_from_file(file_path)
-    cls = getattr(module, class_name)
-    return cls(*args, **kwargs)
-
-def _run_function_from_file(file_path, function_name=None, *args, **kwargs):
-    if function_name is None:
-        function_name = _get_last_function_name(file_path)
-    if function_name is None:
-        raise ValueError(f"No function found in file: {file_path}")
-    module = _load_module_from_file(file_path)
-    function = getattr(module, function_name)
-    return function(*args, **kwargs)
 
 def _create_aggregator_instance(
     aggregator_name: str,
@@ -344,28 +378,23 @@ def _build_server(
         algorithm_components = _resolve_algorithm_components(config)
     num_clients = int(runtime_cfg["num_clients"])
     num_sampled_clients = _resolve_num_sampled_clients(config, num_clients=num_clients)
-    loss_configs = _cfg_get(config, "loss.configs", {})
-    if isinstance(loss_configs, DictConfig):
-        loss_configs = dict(OmegaConf.to_container(loss_configs, resolve=True))
-    elif isinstance(loss_configs, dict):
-        loss_configs = dict(loss_configs)
-    else:
-        loss_configs = {}
+    loss_configs = _cfg_to_dict(_cfg_get(config, "loss.configs", {}))
     server_cfg = OmegaConf.create(
         {
             "client_configs": {
                 "train_configs": {
                     "eval_metrics": _cfg_get(config, "eval.metrics", ["acc1"]),
-                    "loss_name": str(_cfg_get(config, "loss.name", "CrossEntropyLoss")),
-                    "loss_backend": str(_cfg_get(config, "loss.backend", "auto")),
-                    "loss_path": str(_cfg_get(config, "loss.path", "")),
-                    "loss_configs": loss_configs,
+                    "loss": {
+                        "name": str(_cfg_get(config, "loss.name", "CrossEntropyLoss")),
+                        "backend": str(_cfg_get(config, "loss.backend", "auto")),
+                        "path": str(_cfg_get(config, "loss.path", "")),
+                        "configs": loss_configs,
+                    },
                 },
                 "model_configs": {},
             },
             "server_configs": {
                 "num_clients": num_clients,
-                "num_global_epochs": int(_cfg_get(config, "train.num_rounds", 20)),
                 "num_sampled_clients": int(num_sampled_clients),
                 "device": str(_cfg_get(config, "experiment.server_device", "cpu")),
                 "eval_show_progress": _cfg_bool(config, "eval.show_eval_progress", True),
@@ -396,6 +425,6 @@ def _build_server(
     ):
         server.aggregator.model = server.model
     server.loss_fn = build_loss_from_config(config)
-    server._val_dataset = server_dataset
-    server._load_val_data()
+    server._eval_dataset = server_dataset
+    server._load_eval_data()
     return server

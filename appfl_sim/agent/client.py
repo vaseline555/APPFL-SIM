@@ -1,31 +1,24 @@
 from __future__ import annotations
 
-import os
 import gc
 import uuid
 import torch
-import pathlib
-import warnings
 import importlib
-from datetime import datetime
 from appfl_sim.algorithm.trainer import BaseTrainer
 from omegaconf import DictConfig, OmegaConf
 from typing import Union, Dict, OrderedDict, Tuple, Optional, Any
 from appfl_sim.logger import ClientAgentFileLogger
-from appfl_sim.misc.runtime_utils import (
+from appfl_sim.misc.config_utils import (
     _create_instance_from_file,
     _run_function_from_file,
+    build_loss_from_train_cfg,
 )
-from appfl_sim.misc.config_utils import build_loss_from_train_cfg
 
 
 class _NullClientLogger:
     """No-op logger used when client-side logging is disabled."""
 
     def log_title(self, titles):
-        return None
-
-    def set_title(self, titles):
         return None
 
     def log_content(self, contents):
@@ -69,8 +62,6 @@ except Exception:  # pragma: no cover
 class ClientAgent:
     """
     The `ClientAgent` should act on behalf of the FL client to:
-    - load configurations received from the server `ClientAgent.load_config`
-    - get the size of the local dataset `ClientAgent.get_sample_size`
     - do the local training job using configurations `ClientAgent.train`
     - prepare data for communication `ClientAgent.get_parameters`
     - load parameters from the server `ClientAgent.load_parameters`
@@ -94,7 +85,10 @@ class ClientAgent:
             self.client_agent_config = client_agent_config
         else:
             self.client_agent_config = OmegaConf.create(client_agent_config)
-        self.client_id: Optional[str] = None
+        if "client_id" in self.client_agent_config:
+            self.client_id: Optional[str] = str(self.client_agent_config.client_id)
+        else:
+            self.client_id = str(uuid.uuid4())
         self.logger = None
         self.model = None
         self.loss_fn = None
@@ -113,15 +107,6 @@ class ClientAgent:
         self._load_data()
         self._load_trainer()
 
-    def load_config(self, config: DictConfig) -> None:
-        """Load additional configurations provided by the server."""
-        self.client_agent_config = OmegaConf.merge(self.client_agent_config, config)
-        self._ensure_config_contract()
-        self._load_model()
-        self._load_loss()
-        self._load_metric()
-        self._load_trainer()
-
     def _ensure_config_contract(self) -> None:
         missing = [name for name in ("train_configs", "model_configs", "data_configs") if name not in self.client_agent_config]
         if missing:
@@ -134,23 +119,6 @@ class ClientAgent:
         train_cfg = self.client_agent_config.train_configs
         if "trainer" not in train_cfg:
             raise ValueError("ClientAgentConfig.train_configs.trainer is required.")
-
-    def get_id(self) -> str:
-        """Return a unique client id for server to distinguish clients."""
-        if self.client_id is None:
-            if "client_id" in self.client_agent_config:
-                self.client_id = str(self.client_agent_config.client_id)
-            else:
-                warnings.warn(
-                    message="Client ID (client_id) not specified. Generating a random one.",
-                    category=UserWarning,
-                )
-                self.client_id = str(uuid.uuid4())
-        return self.client_id
-
-    def get_sample_size(self) -> int:
-        """Return the size of the local dataset."""
-        return len(self.train_dataset)
 
     def train(self, **kwargs):
         """Train the model locally."""
@@ -188,47 +156,12 @@ class ClientAgent:
         if self.optimize_memory:
             gc.collect()
 
-    # Convenience wrappers for simulation loops.
-    def update(self, round_idx: int = 0, **kwargs):
-        return self.train(round=round_idx, **kwargs)
-
-    def download(self, global_state):
-        self.load_parameters(global_state)
-
-    def upload(self):
-        return self.get_parameters()
-
     def evaluate(self, split: str = "test", **kwargs) -> Dict:
         if self.trainer is None:
             return {"loss": -1.0, "num_examples": 0, "metrics": {}}
-        if hasattr(self.trainer, "evaluate"):
-            try:
-                return self.trainer.evaluate(split=split, **kwargs)
-            except TypeError:
-                return self.trainer.evaluate()
-        raise AttributeError("Trainer does not implement evaluate().")
-
-    def save_checkpoint(self, checkpoint_path: Optional[str] = None) -> None:
-        """Save the model to a checkpoint file."""
-        if checkpoint_path is None:
-            output_dir = self.client_agent_config.train_configs.get(
-                "checkpoint_dirname", "./output"
-            )
-            output_filename = self.client_agent_config.train_configs.get(
-                "checkpoint_filename", "checkpoint"
-            )
-            curr_time_str = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-            checkpoint_path = (
-                f"{output_dir}/{output_filename}_{self.get_id()}_{curr_time_str}.pth"
-            )
-
-        # Make sure the directory exists
-        if not os.path.exists(os.path.dirname(checkpoint_path)):
-            pathlib.Path(os.path.dirname(checkpoint_path)).mkdir(
-                parents=True, exist_ok=True
-            )
-
-        torch.save(self.model.state_dict(), checkpoint_path)
+        if not hasattr(self.trainer, "evaluate"):
+            raise AttributeError("Trainer does not implement evaluate().")
+        return self.trainer.evaluate(split=split, **kwargs)
 
     def _create_logger(self):
         """
@@ -238,7 +171,7 @@ class ClientAgent:
         if self.logger is not None:
             return
         kwargs = {}
-        kwargs["logging_id"] = self.get_id()
+        kwargs["logging_id"] = self.client_id
         train_cfg = self.client_agent_config.train_configs
         if not train_cfg.get("client_logging_enabled", True):
             self.logger = _NullClientLogger()
@@ -289,7 +222,7 @@ class ClientAgent:
 
     def _load_loss(self) -> None:
         """
-        Load loss function from train configuration (`loss_name`, `loss_backend`, ...).
+        Load loss function from `train_configs`.
         """
         if self.loss_fn is not None:
             return
@@ -331,7 +264,7 @@ class ClientAgent:
             test_dataset=getattr(self, "test_dataset", None),
             train_configs=train_cfg,
             logger=self.logger,
-            client_id=self.get_id(),
+            client_id=self.client_id,
         )
 
     def _init_wandb(self) -> None:
@@ -340,7 +273,7 @@ class ClientAgent:
         """
         train_cfg = self.client_agent_config.train_configs
         train_cfg.enable_wandb = wandb.run is not None
-        train_cfg.wandb_logging_id = self.get_id()
+        train_cfg.wandb_logging_id = self.client_id
 
     @staticmethod
     def _default_config() -> DictConfig:
@@ -349,31 +282,6 @@ class ClientAgent:
                 "optimize_memory": True,
                 "train_configs": {
                     "trainer": "FedavgTrainer",
-                    "device": "cpu",
-                    "mode": "epoch",
-                    "num_local_epochs": 1,
-                    "batch_size": 32,
-                    "eval_batch_size": 128,
-                    "num_workers": 0,
-                    "train_data_shuffle": True,
-                    "train_pin_memory": False,
-                    "eval_pin_memory": False,
-                    "dataloader_persistent_workers": False,
-                    "dataloader_prefetch_factor": 2,
-                    "optimizer_name": "SGD",
-                    "optimizer_backend": "auto",
-                    "optimizer_path": "",
-                    "optimizer_configs": {"weight_decay": 0.0},
-                    "lr": 0.01,
-                    "loss_name": "CrossEntropyLoss",
-                    "loss_backend": "auto",
-                    "loss_path": "",
-                    "loss_configs": {},
-                    "max_grad_norm": 0.0,
-                    "client_logging_enabled": True,
-                    "do_pre_evaluation": True,
-                    "do_post_evaluation": True,
-                    "eval_metrics": ["acc1"],
                 },
                 "model_configs": {},
                 "data_configs": {},

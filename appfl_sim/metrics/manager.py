@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Sequence
 
-import numpy as np
 import torch
 
 from appfl_sim.metrics.metricszoo import get_metric

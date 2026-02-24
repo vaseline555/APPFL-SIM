@@ -186,8 +186,8 @@ def _write_config_template(out_dir: Path, algorithm: str, trainer: Optional[Comp
     cfg_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = cfg_dir / f"{algorithm}.yaml"
 
-    trainer_name = trainer.class_name if trainer is not None else "VanillaTrainer"
-    scheduler_name = scheduler.class_name if scheduler is not None else "SyncScheduler"
+    trainer_name = trainer.class_name if trainer is not None else "FedavgTrainer"
+    scheduler_name = scheduler.class_name if scheduler is not None else "FedavgScheduler"
 
     text = (
         f"# APPFL algorithm template for {algorithm}\n"

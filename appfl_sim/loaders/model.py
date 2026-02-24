@@ -141,7 +141,7 @@ def _parse_model_spec(
     needs_embedding = _safe_bool(context.get("need_embedding", False), False)
     if (
         needs_embedding
-        and source in {"auto", "local", "appfl"}
+        and source in {"auto", "custom"}
         and name.lower() == "simplecnn"
     ):
         # Default image model is incompatible with tokenized/text datasets.
@@ -187,7 +187,7 @@ def _load_appfl_model(spec: ModelSpec):
     if spec.name not in MODEL_REGISTRY:
         available = ", ".join(sorted(MODEL_REGISTRY.keys()))
         raise ValueError(
-            f"model.backend=local requires an exact local model name. "
+            f"model.backend=custom requires an exact local model name. "
             f"Got '{spec.name}'. Available: {available}"
         )
 
@@ -445,7 +445,7 @@ def _load_torchtext_model(spec: ModelSpec):
             "torchtext backend requires `torchtext.models`, which is unavailable in "
             f"installed torchtext=={version}. "
             "Use a newer torchtext build exposing `torchtext.models`, or use "
-            "`model.backend=local`/`model.backend=hf`."
+            "`model.backend=custom`/`model.backend=hf`."
         )
     tt_models = torchtext.models
 
@@ -549,13 +549,13 @@ def _is_torchaudio_candidate(name: str) -> bool:
 
 def _resolve_source(spec: ModelSpec) -> str:
     source = spec.source.lower()
-    if source == "local":
+    if source == "custom":
         return "appfl"
     if source in {"hf", "torchvision", "torchtext", "torchaudio"}:
         return source
     if source != "auto":
         raise ValueError(
-            "model.backend must be one of: auto, local, hf, "
+            "model.backend must be one of: auto, custom, hf, "
             "torchvision, torchtext, torchaudio"
         )
 
@@ -584,7 +584,7 @@ def load_model(
     """Unified model factory with explicit backend controls.
 
     Backends:
-    - ``local``: local models in ``appfl_sim.models``.
+    - ``custom``: local models in ``appfl_sim.models``.
     - ``torchvision``: exact torchvision model name via ``model.name``.
     - ``torchtext``: exact torchtext model/bundle symbol via ``model.name``.
     - ``torchaudio``: exact torchaudio model name via ``model.name``.

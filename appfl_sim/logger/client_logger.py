@@ -43,7 +43,7 @@ class ClientAgentFileLogger:
         file_dir: str = "",
         file_name: str = "",
         experiment_id: str = "",
-        title_every_n: int = 1,
+        title_every_n: int = 20,
         show_titles: bool = True,
     ) -> None:
         del experiment_id
@@ -197,10 +197,6 @@ class ClientAgentFileLogger:
         self._widths = [max(len(str(t)), 10) for t in titles]
         # Do not emit an unconditional header line here.
         # Headers are emitted by `log_content` according to `title_every_n`.
-
-    def set_title(self, titles: List) -> None:
-        if not hasattr(self, "titles"):
-            self.titles = titles
 
     def log_content(self, contents: Union[Dict, List]) -> None:
         if not isinstance(contents, dict) and not isinstance(contents, list):

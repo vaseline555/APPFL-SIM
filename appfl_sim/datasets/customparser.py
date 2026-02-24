@@ -26,7 +26,7 @@ from appfl_sim.datasets.common import (
 logger = logging.getLogger(__name__)
 
 
-def _to_basic_tensor_dataset(payload: Any, name: str) -> Dataset:
+def _to_basic_tensor_dataset(payload: Any, name: str, args: Any | None = None) -> Dataset:
     if isinstance(payload, Dataset):
         return payload
 
@@ -63,7 +63,18 @@ def _to_basic_tensor_dataset(payload: Any, name: str) -> Dataset:
     else:
         x_tensor = x_tensor.float()
 
-    return BasicTensorDataset(x_tensor, y_tensor, name=name)
+    ds = BasicTensorDataset(x_tensor, y_tensor, name=name)
+    if isinstance(payload, dict) and args is not None:
+        source = str(getattr(args, "pre_source", "")).strip()
+        if source != "" and source in payload:
+            source_values = np.asarray(payload[source]).reshape(-1)
+            if int(source_values.size) != int(y_tensor.shape[0]):
+                raise ValueError(
+                    f"Custom pre split source '{source}' length mismatch: "
+                    f"{int(source_values.size)} vs {int(y_tensor.shape[0])}."
+                )
+            setattr(ds, source, source_values.astype(object, copy=False))
+    return ds
 
 
 def _normalize_loader_result(result: Any, args: Any):
@@ -133,7 +144,9 @@ def _load_from_callable(args):
     return _normalize_loader_result(result, args)
 
 
-def _load_train_test_from_directory(data_dir: Path) -> Tuple[Dataset, Dataset | None]:
+def _load_train_test_from_directory(
+    data_dir: Path, args: Any
+) -> Tuple[Dataset, Dataset | None]:
     train_candidates = [
         data_dir / "train.pt",
         data_dir / "train.pth",
@@ -170,9 +183,11 @@ def _load_train_test_from_directory(data_dir: Path) -> Tuple[Dataset, Dataset | 
                 test_obj = torch.load(path, map_location="cpu")
             break
 
-    train_ds = _to_basic_tensor_dataset(train_obj, "[CUSTOM] TRAIN")
+    train_ds = _to_basic_tensor_dataset(train_obj, "[CUSTOM] TRAIN", args=args)
     test_ds = (
-        _to_basic_tensor_dataset(test_obj, "[CUSTOM] TEST") if test_obj is not None else None
+        _to_basic_tensor_dataset(test_obj, "[CUSTOM] TEST", args=args)
+        if test_obj is not None
+        else None
     )
     return train_ds, test_ds
 
@@ -191,7 +206,7 @@ def _load_from_path(args):
         try:
             return _normalize_loader_result(payload, args)
         except (TypeError, ValueError, KeyError):
-            train_ds = _to_basic_tensor_dataset(payload, "[CUSTOM] TRAIN")
+            train_ds = _to_basic_tensor_dataset(payload, "[CUSTOM] TRAIN", args=args)
             client_datasets = clientize_raw_dataset(train_ds, args)
             return finalize_dataset_outputs(
                 client_datasets=client_datasets,
@@ -221,7 +236,7 @@ def _load_from_path(args):
                 dataset_meta=dataset_meta,
             )
 
-    train_ds, test_ds = _load_train_test_from_directory(custom_path)
+    train_ds, test_ds = _load_train_test_from_directory(custom_path, args=args)
     client_datasets = clientize_raw_dataset(train_ds, args)
     return finalize_dataset_outputs(
         client_datasets=client_datasets,

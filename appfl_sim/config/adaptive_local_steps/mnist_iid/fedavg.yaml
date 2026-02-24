@@ -12,11 +12,10 @@ dataset:
   download: true
 split:
   type: iid
-  infer_num_clients: false
 model:
   path: ./models
   name: LeNet
-  backend: local
+  backend: custom
 train:
   num_rounds: 500
   num_clients: 10
@@ -53,7 +52,6 @@ optimizer:
     type: exponential
     gamma: 0.995
   clip_grad_norm: 0.0
-  accum_grad: 0
   configs:
     weight_decay: 0.0
     momentum: 0.0

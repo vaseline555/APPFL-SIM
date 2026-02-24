@@ -5,10 +5,10 @@ import numpy as np
 from omegaconf import DictConfig
 
 from appfl_sim.algorithm.aggregator import BaseAggregator
-from appfl_sim.algorithm.scheduler.sync_scheduler import SyncScheduler
+from appfl_sim.algorithm.scheduler.fedavg_scheduler import FedavgScheduler
 
 
-class SwtsScheduler(SyncScheduler):
+class SwtsScheduler(FedavgScheduler):
     """
     Sliding-window Thompson Sampling for non-contextual local-step adaptation.
     """

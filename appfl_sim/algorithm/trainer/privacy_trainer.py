@@ -18,7 +18,7 @@ class PrivacyFutureTrainer(BaseTrainer):
     ) -> None:
         del args, kwargs, train_configs
         raise NotImplementedError(
-            "PrivacyFutureTrainer is a placeholder. DP/Secure Aggregation paths are intentionally excluded from VanillaTrainer."
+            "PrivacyFutureTrainer is a placeholder. DP/Secure Aggregation paths are intentionally excluded from FedavgTrainer."
         )
 
     def train(self, **kwargs) -> Dict[str, Any]:

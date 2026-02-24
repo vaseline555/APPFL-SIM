@@ -55,7 +55,6 @@ Most new FL methods need these pieces:
 - Inherit: `BaseScheduler`
 - Implement:
   - `schedule(...)`
-  - `get_num_global_epochs(...)`
 
 4. Config example (required)
 - Add: `appfl_sim/config/algorithms/<algo>.yaml`
@@ -173,7 +172,7 @@ Use exporter script:
 Generates an artifact folder without touching `APPFL-main`:
 
 ```bash
-PYTHONPATH=. .venv/bin/python tools/export_appfl_plugin.py \
+python tools/export_appfl_plugin.py \
   --algorithm myalgo \
   --aggregator-source appfl_sim/algorithm/aggregator/myalgo_aggregator.py \
   --aggregator-class MyAlgoAggregator \
@@ -187,7 +186,7 @@ PYTHONPATH=. .venv/bin/python tools/export_appfl_plugin.py \
 ### Direct mode (writes into APPFL-main)
 
 ```bash
-PYTHONPATH=. .venv/bin/python tools/export_appfl_plugin.py \
+python tools/export_appfl_plugin.py \
   --algorithm myalgo \
   --aggregator-source appfl_sim/algorithm/aggregator/myalgo_aggregator.py \
   --aggregator-class MyAlgoAggregator \
@@ -200,4 +199,4 @@ Exporter output includes:
 - Config template under `appfl_sim/config/algorithms/<algo>.yaml`
 - Patch/install instructions (artifact mode)
 - Optional compatibility audit with APPFL tree:
-  `--check-appfl-root /path/to/APPFL-main`
+  `--check-appfl-root /path/to/APPFL`

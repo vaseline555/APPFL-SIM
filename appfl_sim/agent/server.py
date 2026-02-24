@@ -1,22 +1,20 @@
-import io
-import gc
 import torch
-import threading
 from appfl_sim.logger import ServerAgentFileLogger
 from appfl_sim.algorithm.scheduler import BaseScheduler
 from appfl_sim.algorithm.aggregator import BaseAggregator
 from appfl_sim.metrics import MetricsManager, parse_metric_names
 from appfl_sim.misc.runtime_utils import (
-    _create_instance_from_file,
-    _run_function_from_file,
     _create_aggregator_instance,
     _create_scheduler_instance,
 )
-from appfl_sim.misc.config_utils import build_loss_from_train_cfg
-from concurrent.futures import Future
+from appfl_sim.misc.config_utils import (
+    _create_instance_from_file,
+    _run_function_from_file,
+    build_loss_from_train_cfg,
+)
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf, DictConfig
-from typing import Union, Dict, OrderedDict, Tuple, Optional, Any
+from typing import Union, Dict, OrderedDict, Optional, Any
 
 try:
     from tqdm.auto import tqdm as _tqdm
@@ -26,12 +24,7 @@ except Exception:  # pragma: no cover
 
 class ServerAgent:
     """
-    `ServerAgent` should act on behalf of the FL server to:
-    - provide configurations that are shared among all clients to the clients (e.g. trainer, model, etc.) `ServerAgent.get_client_configs`
-    - take the local model from a client, update the global model, and return it `ServerAgent.global_update`
-    - provide the global model to the clients (no input and no aggregation) `ServerAgent.get_parameters`
-
-    User can overwrite any class method to customize the behavior of the server agent.
+    FL server runtime for simulation: model/loss/scheduler wiring, aggregation, and evaluation.
     """
 
     def __init__(
@@ -48,25 +41,15 @@ class ServerAgent:
         self.loss_fn = None
         self.aggregator = None
         self.scheduler = None
-        self._val_dataset = None
-        self._val_dataloader = None
-        self._client_sample_size = {}
-        self._client_sample_size_future = {}
-        self._client_sample_size_lock = threading.Lock()
-        self.closed_clients = set()
-        self._close_connection_lock = threading.Lock()
-        self.cleaned = False
+        self._eval_dataset = None
+        self._eval_dataloader = None
         self._ensure_config_contract()
-        self.optimize_memory = bool(
-            self.server_agent_config.server_configs.get("optimize_memory", True)
-        )
         self._set_num_clients()
-        self._prepare_configs()
         self._create_logger()
         self._load_model()
         self._load_loss()
         self._load_scheduler()
-        self._load_val_data()
+        self._load_eval_data()
 
     def _ensure_config_contract(self) -> None:
         if "server_configs" not in self.server_agent_config:
@@ -85,111 +68,12 @@ class ServerAgent:
             if name not in self.server_agent_config.server_configs:
                 raise ValueError(f"ServerAgentConfig.server_configs.{name} is required.")
 
-    def get_num_clients(self) -> int:
-        """
-        Get the number of clients.
-        """
-        if self.num_clients is None:
-            self._set_num_clients()
-        return self.num_clients
-
-    def get_client_configs(self, **kwargs) -> DictConfig:
-        """Return the FL configurations that are shared among all clients."""
-        return self.server_agent_config.client_configs
-
-    def global_update(
-        self,
-        client_id: Union[int, str],
-        local_model: Union[Dict, OrderedDict, bytes],
-        blocking: bool = False,
-        **kwargs,
-    ) -> Union[Future, Dict, OrderedDict, Tuple[Union[Dict, OrderedDict], Dict]]:
-        """
-        Update the global model using the local model from a client and return the updated global model.
-        :param: client_id: A unique client id for server to distinguish clients, which be obtained via `ClientAgent.get_id()`.
-        :param: local_model: The local model from a client, can be serialized bytes.
-        :param: blocking: The global model may not be immediately available for certain aggregation methods (e.g. any synchronous method).
-            Setting `blocking` to `True` will block the client until the global model is available.
-            Otherwise, the method may return a `Future` object if the most up-to-date global model is not yet available.
-        :return: The updated global model (as a Dict or OrderedDict), and optional metadata (as a Dict) if `blocking` is `True`.
-            Otherwise, return the `Future` object of the updated global model and optional metadata.
-        """
-        if self.training_finished():
-            global_model = self.scheduler.get_parameters()
-            return global_model
-        else:
-            if isinstance(local_model, bytes):
-                local_model = self._bytes_to_model(local_model)
-            global_model = self.scheduler.schedule(client_id, local_model, **kwargs)
-
-            # Memory optimization: Clean up local model after scheduling
-            if self.optimize_memory:
-                del local_model
-                gc.collect()
-            if not isinstance(global_model, Future):
-                return global_model
-            if blocking:
-                return global_model.result()  # blocking until the `Future` is done
-            else:
-                return global_model  # return the `Future` object
-
-    def get_parameters(
-        self, blocking: bool = False, **kwargs
-    ) -> Union[Future, Dict, OrderedDict, Tuple[Union[Dict, OrderedDict], Dict]]:
+    def get_parameters(self, **kwargs):
         """
         Return the global model to the clients.
-        :param: `blocking`: The global model may not be immediately available.
-            Setting `blocking` to `True` will block the client until the global model is available.
         """
         del kwargs
-        global_model = self.scheduler.get_parameters()
-        if not isinstance(global_model, Future):
-            return global_model
-        if blocking:
-            return global_model.result()  # blocking until the `Future` is done
-        else:
-            return global_model  # return the `Future` object
-
-    def set_sample_size(
-        self,
-        client_id: Union[int, str],
-        sample_size: int,
-        sync: bool = False,
-        blocking: bool = False,
-        **kwargs,
-    ) -> Optional[Union[Dict, Future]]:
-        """
-        Set the size of the local dataset of a client.
-        :param: client_id: A unique client id for server to distinguish clients, which can be obtained via `ClientAgent.get_id()`.
-        :param: sample_size: The size of the local dataset of a client.
-        :param: sync: Whether to synchronize the sample size among all clients. If `True`, the method can return the relative weight of the client.
-        :param: blocking: Whether to block the client until the sample size of all clients is synchronized.
-            If `True`, the method will return the relative weight of the client.
-            Otherwise, the method may return a `Future` object of the relative weight, which will be resolved
-            when the sample size of all clients is synchronized.
-        """
-        self.aggregator.set_client_sample_size(client_id, sample_size)
-        if sync:
-            with self._client_sample_size_lock:
-                self._client_sample_size[client_id] = sample_size
-                future = Future()
-                self._client_sample_size_future[client_id] = future
-                if len(self._client_sample_size) == self.get_num_clients():
-                    total_sample_size = sum(self._client_sample_size.values())
-                    for client_id in self._client_sample_size_future:
-                        self._client_sample_size_future[client_id].set_result(
-                            {
-                                "client_weight": self._client_sample_size[client_id]
-                                / total_sample_size
-                            }
-                        )
-                    self._client_sample_size = {}
-                    self._client_sample_size_future = {}
-            if blocking:
-                return future.result()
-            else:
-                return future
-        return None
+        return self.scheduler.get_parameters()
 
     def aggregate(
         self,
@@ -243,9 +127,9 @@ class ServerAgent:
         return self._evaluate_metrics(round_idx=round_idx)
 
     def _evaluate_metrics(self, round_idx: Optional[int] = None) -> Dict[str, Any]:
-        if self._val_dataset is None:
+        if self._eval_dataset is None:
             return {"loss": -1.0, "num_examples": 0, "metrics": {}}
-        if len(self._val_dataset) == 0:
+        if len(self._eval_dataset) == 0:
             return {"loss": -1.0, "num_examples": 0, "metrics": {}}
         if self.model is None:
             return {"loss": -1.0, "num_examples": 0, "metrics": {}}
@@ -253,9 +137,9 @@ class ServerAgent:
         if self.loss_fn is None:
             self.loss_fn = torch.nn.CrossEntropyLoss()
 
-        if self._val_dataloader is None:
-            self._val_dataloader = DataLoader(
-                self._val_dataset,
+        if self._eval_dataloader is None:
+            self._eval_dataloader = DataLoader(
+                self._eval_dataset,
                 batch_size=int(
                     self.server_agent_config.server_configs.get("eval_batch_size", 128)
                 ),
@@ -288,18 +172,18 @@ class ServerAgent:
             self.server_agent_config.server_configs.get("eval_show_progress", True)
         )
         progress_bar = None
-        iterator = self._val_dataloader
+        iterator = self._eval_dataloader
         if show_progress and _tqdm is not None:
             try:
-                total_batches = len(self._val_dataloader)
+                total_batches = len(self._eval_dataloader)
             except Exception:
                 total_batches = None
             if round_idx is None:
-                desc = f"appfl-sim: ✅[Server | Evaluation (Global)]"
+                desc = "appfl-sim: ✅[Server | Evaluation (Global)]"
             else:
                 desc = f"appfl-sim: ✅[Server (Round {int(round_idx):04d}) Evaluation (Global)]"
             progress_bar = _tqdm(
-                self._val_dataloader,
+                self._eval_dataloader,
                 total=total_batches,
                 desc=desc,
                 leave=False,
@@ -332,59 +216,6 @@ class ServerAgent:
         if hasattr(self.loss_fn, "to"):
             self.loss_fn = self.loss_fn.to("cpu")
         return result
-
-    def server_validate(self):
-        """
-        Validate the server model using the validation dataset.
-        """
-        if self._val_dataset is None:
-            self.logger.info("No validation dataset is provided.")
-            return None
-        else:
-            stats = self._evaluate_metrics()
-            metric_names = parse_metric_names(
-                self.server_agent_config.server_configs.get("eval_metrics", None)
-            )
-            metric_name = (
-                str(metric_names[0]).strip().lower() if metric_names else "acc1"
-            )
-            metric_value = -1.0
-            nested = stats.get("metrics", {})
-            if isinstance(nested, dict) and metric_name in nested:
-                metric_value = float(nested[metric_name])
-            elif f"metric_{metric_name}" in stats:
-                metric_value = float(stats[f"metric_{metric_name}"])
-            return float(stats["loss"]), metric_value
-
-    def training_finished(self, **kwargs) -> bool:
-        """Indicate whether the training is finished."""
-        return (
-            self.server_agent_config.server_configs.num_global_epochs
-            <= self.scheduler.get_num_global_epochs()
-        )
-
-    def close_connection(self, client_id: Union[int, str]) -> None:
-        """Record the client that has finished the communication with the server."""
-        with self._close_connection_lock:
-            self.closed_clients.add(client_id)
-
-    def server_terminated(self):
-        """Indicate whether the server can be terminated from listening to the clients."""
-        with self._close_connection_lock:
-            terminated = len(self.closed_clients) >= self.get_num_clients()
-        if terminated:
-            self.clean_up()
-        return terminated
-
-    def clean_up(self) -> None:
-        """
-        Nececessary clean-up operations.
-        No need to call this method if using `server_terminated` to check the termination status.
-        """
-        if not self.cleaned:
-            self.cleaned = True
-            if hasattr(self.scheduler, "clean_up"):
-                self.scheduler.clean_up()
 
     def _create_logger(self) -> None:
         kwargs = {}
@@ -447,48 +278,20 @@ class ServerAgent:
             logger=self.logger,
         )
 
-    def _bytes_to_model(self, model_bytes: bytes) -> Union[Dict, OrderedDict]:
-        """Deserialize the model from bytes (compression disabled)."""
-        if self.optimize_memory:
-            with io.BytesIO(model_bytes) as buffer:
-                model = torch.load(buffer, map_location="cpu")
-            gc.collect()
-            return model
-        return torch.load(io.BytesIO(model_bytes))
-
-    def _load_val_data(self) -> None:
-        if self._val_dataset is not None:
-            self._val_dataloader = DataLoader(
-                self._val_dataset,
-                batch_size=int(
-                    self.server_agent_config.server_configs.get("eval_batch_size", 128)
-                ),
-                shuffle=False,
-                num_workers=int(
-                    self.server_agent_config.server_configs.get("num_workers", 0)
-                ),
-            )
+    def _load_eval_data(self) -> None:
+        if self._eval_dataset is None:
+            self._eval_dataloader = None
             return
-        if "val_data_configs" in self.server_agent_config.server_configs:
-            self._val_dataset = _run_function_from_file(
-                self.server_agent_config.server_configs.val_data_configs.dataset_path,
-                self.server_agent_config.server_configs.val_data_configs.dataset_name,
-                **self.server_agent_config.server_configs.val_data_configs.get(
-                    "dataset_kwargs", {}
-                ),
-            )
-            self._val_dataloader = DataLoader(
-                self._val_dataset,
-                batch_size=self.server_agent_config.server_configs.val_data_configs.get(
-                    "batch_size", 1
-                ),
-                shuffle=self.server_agent_config.server_configs.val_data_configs.get(
-                    "shuffle", False
-                ),
-                num_workers=self.server_agent_config.server_configs.val_data_configs.get(
-                    "num_workers", 0
-                ),
-            )
+        self._eval_dataloader = DataLoader(
+            self._eval_dataset,
+            batch_size=int(
+                self.server_agent_config.server_configs.get("eval_batch_size", 128)
+            ),
+            shuffle=False,
+            num_workers=int(
+                self.server_agent_config.server_configs.get("num_workers", 0)
+            ),
+        )
 
     def _set_seed(self):
         """
@@ -525,65 +328,16 @@ class ServerAgent:
             # Set num_clients for server_configs
             self.server_agent_config.server_configs.num_clients = self.num_clients
 
-    def _prepare_configs(self):
-        """
-        Prepare the configurations for the server agent.
-        """
-        train_cfg = self.server_agent_config.client_configs.train_configs
-        agg_kwargs = self.server_agent_config.server_configs.get("aggregator_kwargs", {})
-        if "send_gradient" in train_cfg:
-            agg_kwargs["gradient_based"] = bool(train_cfg.send_gradient)
-        if "use_secure_agg" in agg_kwargs:
-            train_cfg.use_secure_agg = bool(agg_kwargs["use_secure_agg"])
-        if "secure_agg_client_weights_mode" in agg_kwargs:
-            train_cfg.secure_agg_client_weights_mode = str(
-                agg_kwargs["secure_agg_client_weights_mode"]
-            )
-
     @staticmethod
     def _default_config() -> DictConfig:
         return OmegaConf.create(
             {
                 "client_configs": {
-                    "train_configs": {
-                        "trainer": "FedavgTrainer",
-                        "device": "cpu",
-                        "mode": "epoch",
-                        "num_local_epochs": 1,
-                        "batch_size": 32,
-                        "eval_batch_size": 128,
-                        "num_workers": 0,
-                        "train_data_shuffle": True,
-                        "train_pin_memory": False,
-                        "eval_pin_memory": False,
-                        "dataloader_persistent_workers": False,
-                        "dataloader_prefetch_factor": 2,
-                        "optimizer_name": "SGD",
-                        "optimizer_backend": "auto",
-                        "optimizer_path": "",
-                        "optimizer_configs": {"weight_decay": 0.0},
-                        "lr": 0.01,
-                        "loss_name": "CrossEntropyLoss",
-                        "loss_backend": "auto",
-                        "loss_path": "",
-                        "loss_configs": {},
-                        "max_grad_norm": 0.0,
-                        "client_logging_enabled": True,
-                        "do_pre_evaluation": True,
-                        "do_post_evaluation": True,
-                        "eval_metrics": ["acc1"],
-                    },
+                    "train_configs": {},
                     "model_configs": {},
                 },
                 "server_configs": {
                     "num_clients": 1,
-                    "num_global_epochs": 1,
-                    "num_sampled_clients": 1,
-                    "device": "cpu",
-                    "num_workers": 0,
-                    "eval_batch_size": 128,
-                    "eval_show_progress": True,
-                    "eval_metrics": ["acc1"],
                     "aggregator": "FedavgAggregator",
                     "aggregator_kwargs": {},
                     "scheduler": "FedavgScheduler",

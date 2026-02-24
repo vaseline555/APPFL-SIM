@@ -3,7 +3,7 @@ import gc
 import os
 import random
 import warnings
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Dict, List, Optional, Sequence, Union
 import numpy as np
 import torch
 from omegaconf import DictConfig
@@ -84,6 +84,12 @@ def validate_backend_device_consistency(backend: str, config: DictConfig) -> Non
     server_device = str(_cfg_get(config, "experiment.server_device", "cpu")).strip().lower()
     cuda_available = bool(torch.cuda.is_available())
     visible_gpus = int(torch.cuda.device_count()) if cuda_available else 0
+
+    if server_device.startswith("cuda") and not cuda_available:
+        raise ValueError(
+            "server_device is CUDA but CUDA is unavailable. "
+            "Set `experiment.server_device=cpu`."
+        )
 
     if backend == "nccl":
         if not cuda_available:

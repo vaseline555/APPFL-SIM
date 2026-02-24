@@ -1,9 +1,9 @@
-# Export APPFL Plugin Guide (Friendly Version)
+# Export to `APPFL` Plugin Guide
 
 This guide explains how to use:
 - `tools/export_appfl_plugin.py`
 
-It helps you move your algorithm module(s) from `appfl_sim` into an APPFL fork in a plug-and-play style.
+It helps you move your algorithm module(s) from `APPFL-SIM` into the main `APPFL` package in a plug-and-play manner.
 
 Naming rule:
 - Exported class names are validated against `algorithm`:
@@ -36,8 +36,7 @@ Given your aggregator/trainer/scheduler files, it will:
 Does not modify your APPFL fork directly.
 
 ```bash
-cd /Users/vaseline555/Desktop/workspace/APPFL_SIM/APPFL-SIM
-PYTHONPATH=. .venv/bin/python tools/export_appfl_plugin.py \
+python tools/export_appfl_plugin.py \
   --algorithm myalgo \
   --aggregator-source appfl_sim/algorithm/aggregator/myalgo_aggregator.py \
   --aggregator-class MyAlgoAggregator \
@@ -129,17 +128,7 @@ If you use Artifact mode, move files as follows:
 
 ---
 
-## 5) Real trial status (validated)
-
-Validation in this repository:
-- Exported `SwtsAggregator + SwtsTrainer + SwtsScheduler` artifact.
-- Ran compatibility audit against `/Users/vaseline555/Desktop/workspace/APPFL_SIM/APPFL-main`.
-- `unresolved_appfl_imports` came back empty.
-- When trainer used metrics manager imports, exporter generated `src/appfl/metrics/*` support files automatically.
-
----
-
-## 6) Quick verification commands in your fork
+## 5) Quick verification commands in your fork
 
 ```bash
 # 1) confirm symbols are exported
@@ -160,5 +149,3 @@ rg "appfl_sim" src/appfl/algorithm/aggregator src/appfl/algorithm/trainer src/ap
 - Using a source file that does not define the class.
 - Forgetting to patch `__init__.py` in artifact mode.
 - Testing in an APPFL environment missing optional deps used by your modules.
-
-If you are unsure, start with Artifact mode, verify, then move to Direct mode.

@@ -6,10 +6,10 @@ import numpy as np
 from omegaconf import DictConfig
 
 from appfl_sim.algorithm.aggregator import BaseAggregator
-from appfl_sim.algorithm.scheduler.sync_scheduler import SyncScheduler
+from appfl_sim.algorithm.scheduler.fedavg_scheduler import FedavgScheduler
 
 
-class SwucbScheduler(SyncScheduler):
+class SwucbScheduler(FedavgScheduler):
     """
     Sliding-window UCB for non-contextual local-step adaptation.
     """

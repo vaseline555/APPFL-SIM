@@ -195,12 +195,18 @@ def _to_audio_tensor(value: Any, num_frames: int) -> torch.Tensor:
 
 def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: str):
     row_count = len(rows)
+    split_type = str(getattr(args, "split_type", "")).strip().lower()
+    pre_source = str(getattr(args, "pre_source", "")).strip()
+    pre_values = [] if (split_type == "pre" and pre_source != "") else None
     if row_count == 0:
-        return BasicTensorDataset(
+        ds = BasicTensorDataset(
             torch.zeros(0, 1, dtype=torch.float32),
             torch.zeros(0, dtype=torch.long),
             name=name,
         )
+        if pre_values is not None:
+            setattr(ds, pre_source, np.asarray([], dtype=object))
+        return ds
 
     features = []
     raw_labels = []
@@ -208,6 +214,12 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
         row = rows[idx]
         features.append(row[feature_key])
         raw_labels.append(row[label_key])
+        if pre_values is not None:
+            if pre_source not in row:
+                raise ValueError(
+                    f"split.configs.pre_source='{pre_source}' not found in HF row columns."
+                )
+            pre_values.append(row[pre_source])
     labels = _normalize_labels(raw_labels)
 
     first = features[0]
@@ -219,7 +231,10 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
         args.need_embedding = True
         args.seq_len = int(x_tensor.shape[1])
         args.num_embeddings = int(vocab_size)
-        return BasicTensorDataset(x_tensor, labels, name=name)
+        ds = BasicTensorDataset(x_tensor, labels, name=name)
+        if pre_values is not None:
+            setattr(ds, pre_source, np.asarray(pre_values, dtype=object))
+        return ds
 
     if isinstance(first, Image.Image) or (
         isinstance(first, np.ndarray) and np.asarray(first).ndim in {2, 3}
@@ -228,7 +243,10 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
         args.need_embedding = False
         args.seq_len = None
         args.num_embeddings = None
-        return BasicTensorDataset(x_tensor, labels, name=name)
+        ds = BasicTensorDataset(x_tensor, labels, name=name)
+        if pre_values is not None:
+            setattr(ds, pre_source, np.asarray(pre_values, dtype=object))
+        return ds
 
     if isinstance(first, dict) and "array" in first:
         nframes = int(getattr(args, "audio_num_frames", 16000))
@@ -236,7 +254,10 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
         args.need_embedding = False
         args.seq_len = None
         args.num_embeddings = None
-        return BasicTensorDataset(x_tensor, labels, name=name)
+        ds = BasicTensorDataset(x_tensor, labels, name=name)
+        if pre_values is not None:
+            setattr(ds, pre_source, np.asarray(pre_values, dtype=object))
+        return ds
 
     x_np = np.asarray(features)
     x_tensor = torch.as_tensor(x_np)
@@ -249,7 +270,10 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
     args.need_embedding = False
     args.seq_len = None
     args.num_embeddings = None
-    return BasicTensorDataset(x_tensor, labels, name=name)
+    ds = BasicTensorDataset(x_tensor, labels, name=name)
+    if pre_values is not None:
+        setattr(ds, pre_source, np.asarray(pre_values, dtype=object))
+    return ds
 
 
 def _fetch_hf_dataset(args, dataset_name: str):
@@ -309,6 +333,16 @@ def _fetch_hf_dataset(args, dataset_name: str):
     columns = list(getattr(train_hf, "column_names", [])) or list(train_hf[0].keys())
     label_key = _pick_label_key(columns, args)
     feature_key = _pick_feature_key(columns, label_key, args)
+    if str(getattr(args, "split_type", "")).strip().lower() == "pre":
+        pre_source = str(getattr(args, "pre_source", "")).strip()
+        if pre_source == "":
+            raise ValueError(
+                "split.type='pre' requires split.configs.pre_source for HF backend."
+            )
+        if pre_source not in columns:
+            raise ValueError(
+                f"split.configs.pre_source='{pre_source}' not found in HF columns: {columns}"
+            )
 
     raw_train = _rows_to_tensor_dataset(
         train_hf,

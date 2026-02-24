@@ -16,15 +16,12 @@ dataset:
     terms_accepted: true
 split:
   type: pre
-  infer_num_clients: true
   configs:
-    unbalanced_keep_min: 0.5
-    dirichlet_alpha: 0.3
-    min_classes: 2
+    pre_infer_num_clients: true
 model:
   path: ./models
   name: StackedLSTM
-  backend: local
+  backend: custom
   configs:
     hidden_size: 64
     dropout: 0.0
@@ -72,7 +69,6 @@ optimizer:
   path: ""
   lr: 0.01
   clip_grad_norm: 0.0
-  accum_grad: 0
   configs:
     weight_decay: 0.0
     momentum: 0.0

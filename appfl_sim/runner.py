@@ -7,7 +7,7 @@ import time
 import torch
 import numpy as np
 
-from typing import List, Optional
+from typing import Any, List, Optional
 from omegaconf import DictConfig, OmegaConf
 
 from appfl_sim.agent import ClientAgent
@@ -16,7 +16,6 @@ from appfl_sim.loaders import load_dataset, load_model
 from appfl_sim.misc.system_utils import (
     _client_processing_chunk_size,
     _force_server_cpu_when_global_eval_disabled,
-    _iter_id_chunks,
     _release_clients,
     get_local_rank,
     resolve_rank_device,
@@ -64,10 +63,10 @@ from appfl_sim.misc.runtime_utils import (
     _build_clients,
     _build_on_demand_worker_pool,
     _build_server,
+    _collect_local_training_payload,
+    _payload_to_updates,
     _select_round_local_steps,
-    _rebind_client_for_on_demand_job,
     _resolve_runtime_policies,
-    _run_local_client_update,
 )
 from appfl_sim.misc.dist_utils import (
     _broadcast_model_state_inplace,
@@ -118,6 +117,192 @@ def _adapt_and_track_gen_reward(
         next_cumulative += float(round_gen_reward)
     next_prev = float(round_pre_val_error)
     return round_gen_reward, next_prev, next_cumulative
+
+
+def _log_round_metrics(
+    *,
+    config: DictConfig,
+    round_idx: int,
+    selected_count: int,
+    train_client_count: int,
+    stats: dict,
+    round_local_steps: Optional[int],
+    round_wall_time_sec: Optional[float],
+    round_gen_error: Optional[float],
+    global_eval_metrics,
+    federated_eval_metrics,
+    federated_eval_out_metrics,
+    track_gen_rewards: bool,
+    round_gen_reward: Optional[float],
+    cumulative_gen_reward: Optional[float],
+    server_logger,
+    tracker,
+) -> None:
+    _log_round(
+        config,
+        round_idx,
+        selected_count,
+        train_client_count,
+        stats,
+        round_local_steps=round_local_steps,
+        round_wall_time_sec=round_wall_time_sec,
+        global_gen_error=round_gen_error,
+        global_eval_metrics=global_eval_metrics,
+        federated_eval_metrics=federated_eval_metrics,
+        federated_eval_out_metrics=federated_eval_out_metrics,
+        track_gen_rewards=bool(track_gen_rewards),
+        round_gen_reward=round_gen_reward,
+        cumulative_gen_reward=float(cumulative_gen_reward)
+        if bool(track_gen_rewards) and cumulative_gen_reward is not None
+        else None,
+        logger=server_logger,
+        tracker=tracker,
+    )
+
+
+def _run_federated_eval_serial_round(
+    *,
+    config: DictConfig,
+    enable_federated_eval: bool,
+    round_idx: int,
+    num_rounds: int,
+    train_client_ids: list[int],
+    holdout_client_ids: list[int],
+    persistent_clients: Optional[List[ClientAgent]],
+    server,
+    on_demand_model,
+    model,
+    client_datasets,
+    client_device: str,
+    on_demand_workers: dict,
+):
+    federated_eval_metrics = None
+    federated_eval_out_metrics = None
+    if not enable_federated_eval:
+        return federated_eval_metrics, federated_eval_out_metrics
+
+    plan = _build_federated_eval_plan(
+        config=config,
+        round_idx=round_idx,
+        num_rounds=num_rounds,
+        train_client_ids=train_client_ids,
+        holdout_client_ids=holdout_client_ids,
+    )
+    if persistent_clients is not None:
+        state = server.model.state_dict()
+        if plan["scheme"] == "client":
+            eval_out_set = set(plan["out_ids"])
+            eval_out_stats = {}
+            for client in persistent_clients:
+                if client.id in eval_out_set:
+                    client.load_parameters(state)
+                    eval_out_stats[int(client.id)] = client.evaluate(
+                        split="test",
+                        offload_after=False,
+                    )
+            federated_eval_out_metrics = _aggregate_eval_stats(eval_out_stats)
+        else:
+            eval_set = set(plan["in_ids"])
+            eval_stats = {}
+            for client in persistent_clients:
+                if client.id not in eval_set:
+                    continue
+                client.load_parameters(state)
+                eval_stats[int(client.id)] = client.evaluate(
+                    split="test",
+                    offload_after=False,
+                )
+            federated_eval_metrics = _aggregate_eval_stats(eval_stats)
+        return federated_eval_metrics, federated_eval_out_metrics
+
+    if plan["scheme"] == "client":
+        federated_eval_out_metrics = _run_federated_eval_serial(
+            config=config,
+            model=on_demand_model if on_demand_model is not None else model,
+            client_datasets=client_datasets,
+            device=client_device,
+            global_state=server.model.state_dict(),
+            eval_client_ids=list(plan["out_ids"]),
+            round_idx=round_idx,
+            eval_tag="fed-out",
+            eval_split="test",
+            eval_num_workers_override=on_demand_workers["eval"],
+        )
+    else:
+        federated_eval_metrics = _run_federated_eval_serial(
+            config=config,
+            model=on_demand_model if on_demand_model is not None else model,
+            client_datasets=client_datasets,
+            device=client_device,
+            global_state=server.model.state_dict(),
+            eval_client_ids=list(plan["in_ids"]),
+            round_idx=round_idx,
+            eval_tag="fed",
+            eval_split="test",
+            eval_num_workers_override=on_demand_workers["eval"],
+        )
+    return federated_eval_metrics, federated_eval_out_metrics
+
+
+def _run_federated_eval_distributed_round(
+    *,
+    dist,
+    rank: int,
+    config: DictConfig,
+    enable_federated_eval: bool,
+    round_idx: int,
+    num_rounds: int,
+    train_client_ids: list[int],
+    holdout_client_ids: list[int],
+    on_demand_model,
+    model,
+    client_datasets,
+    client_device: str,
+    next_global_state,
+    world_size: int,
+):
+    plan_payload = [None]
+    if rank == 0 and enable_federated_eval:
+        plan_payload[0] = _build_federated_eval_plan(
+            config=config,
+            round_idx=round_idx,
+            num_rounds=num_rounds,
+            train_client_ids=train_client_ids,
+            holdout_client_ids=holdout_client_ids,
+        )
+    dist.broadcast_object_list(plan_payload, src=0)
+    plan = plan_payload[0]
+
+    federated_eval_metrics = None
+    federated_eval_out_metrics = None
+    if not (enable_federated_eval and isinstance(plan, dict)):
+        return federated_eval_metrics, federated_eval_out_metrics
+
+    if plan["scheme"] == "client":
+        federated_eval_out_metrics = _run_federated_eval_distributed(
+            config=config,
+            model=on_demand_model if on_demand_model is not None else model,
+            client_datasets=client_datasets,
+            device=client_device,
+            global_state=next_global_state,
+            eval_client_ids=list(plan["out_ids"]),
+            rank=rank,
+            world_size=world_size,
+            eval_split="test",
+        )
+    else:
+        federated_eval_metrics = _run_federated_eval_distributed(
+            config=config,
+            model=on_demand_model if on_demand_model is not None else model,
+            client_datasets=client_datasets,
+            device=client_device,
+            global_state=next_global_state,
+            eval_client_ids=list(plan["in_ids"]),
+            rank=rank,
+            world_size=world_size,
+            eval_split="test",
+        )
+    return federated_eval_metrics, federated_eval_out_metrics
 
 
 def run_serial(config) -> None:
@@ -278,63 +463,29 @@ def run_serial(config) -> None:
             round_local_steps = _select_round_local_steps(server, round_idx)
             global_state = server.model.state_dict()
 
-            updates = {}
-            sample_sizes = {}
-            stats = {}
             _assert_stateful_dataloaders_unchanged(
                 persistent_clients=persistent_clients,
                 stateful_dataloader_ids=stateful_dataloader_ids,
             )
-            if persistent_clients is not None:
-                selected = set(selected_ids)
-                for client in persistent_clients:
-                    if client.id not in selected:
-                        continue
-                    train_result, state = _run_local_client_update(
-                        client,
-                        global_state=global_state,
-                        round_idx=round_idx,
-                        round_local_steps=round_local_steps,
-                    )
-                    updates[client.id] = state
-                    sample_sizes[client.id] = int(train_result["num_examples"])
-                    stats[client.id] = train_result
-            else:
-                for chunk_ids in _iter_id_chunks(selected_ids, chunk_size):
-                    if worker_pool:
-                        chunk_clients = worker_pool[: len(chunk_ids)]
-                        for client, cid in zip(chunk_clients, chunk_ids):
-                            _rebind_client_for_on_demand_job(
-                                client,
-                                client_id=int(cid),
-                                client_datasets=client_datasets,
-                                num_workers_override=on_demand_workers["train"],
-                            )
-                    else:
-                        chunk_clients = _build_clients(
-                            config=config,
-                            model=on_demand_model if on_demand_model is not None else model,
-                            client_datasets=client_datasets,
-                            local_client_ids=np.asarray(chunk_ids).astype(int),
-                            device=client_device,
-                            run_log_dir=run_log_dir,
-                            client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-                            trainer_name=str(algorithm_components["trainer_name"]),
-                            share_model=True,
-                            num_workers_override=on_demand_workers["train"],
-                        )
-                    for client in chunk_clients:
-                        train_result, state = _run_local_client_update(
-                            client,
-                            global_state=global_state,
-                            round_idx=round_idx,
-                            round_local_steps=round_local_steps,
-                        )
-                        updates[client.id] = state
-                        sample_sizes[client.id] = int(train_result["num_examples"])
-                        stats[client.id] = train_result
-                    if not worker_pool:
-                        _release_clients(chunk_clients)
+            local_payload = _collect_local_training_payload(
+                selected_client_ids=selected_ids,
+                persistent_clients=persistent_clients,
+                worker_pool=worker_pool,
+                config=config,
+                model=model,
+                on_demand_model=on_demand_model,
+                client_datasets=client_datasets,
+                client_device=client_device,
+                run_log_dir=run_log_dir,
+                client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
+                trainer_name=str(algorithm_components["trainer_name"]),
+                round_idx=round_idx,
+                round_local_steps=round_local_steps,
+                global_state=global_state,
+                chunk_size=chunk_size,
+                num_workers_override=on_demand_workers["train"],
+            )
+            updates, sample_sizes, stats = _payload_to_updates(local_payload)
 
             server.aggregate(
                 updates,
@@ -368,87 +519,38 @@ def run_serial(config) -> None:
             ):
                 global_eval_metrics = server.evaluate(round_idx=round_idx)
 
-            federated_eval_metrics = None
-            federated_eval_out_metrics = None
-            if enable_federated_eval:
-                plan = _build_federated_eval_plan(
-                    config=config,
-                    round_idx=round_idx,
-                    num_rounds=num_rounds,
-                    train_client_ids=train_client_ids,
-                    holdout_client_ids=holdout_client_ids,
-                )
-                if persistent_clients is not None:
-                    state = server.model.state_dict()
-                    if plan["scheme"] == "client":
-                        eval_out_set = set(plan["out_ids"])
-                        eval_out_stats = {}
-                        for client in persistent_clients:
-                            if client.id in eval_out_set:
-                                client.download(state)
-                                eval_out_stats[int(client.id)] = client.evaluate(
-                                    split="test",
-                                    offload_after=False,
-                                )
-                        federated_eval_out_metrics = _aggregate_eval_stats(eval_out_stats)
-                    else:
-                        eval_set = set(plan["in_ids"])
-                        eval_stats = {}
-                        for client in persistent_clients:
-                            if client.id not in eval_set:
-                                continue
-                            client.download(state)
-                            eval_stats[int(client.id)] = client.evaluate(
-                                split="test",
-                                offload_after=False,
-                            )
-                        federated_eval_metrics = _aggregate_eval_stats(eval_stats)
-                else:
-                    if plan["scheme"] == "client":
-                        federated_eval_out_metrics = _run_federated_eval_serial(
-                            config=config,
-                            model=on_demand_model if on_demand_model is not None else model,
-                            client_datasets=client_datasets,
-                            device=client_device,
-                            global_state=server.model.state_dict(),
-                            eval_client_ids=list(plan["out_ids"]),
-                            round_idx=round_idx,
-                            eval_tag="fed-out",
-                            eval_split="test",
-                            eval_num_workers_override=on_demand_workers["eval"],
-                        )
-                    else:
-                        federated_eval_metrics = _run_federated_eval_serial(
-                            config=config,
-                            model=on_demand_model if on_demand_model is not None else model,
-                            client_datasets=client_datasets,
-                            device=client_device,
-                            global_state=server.model.state_dict(),
-                            eval_client_ids=list(plan["in_ids"]),
-                            round_idx=round_idx,
-                            eval_tag="fed",
-                            eval_split="test",
-                            eval_num_workers_override=on_demand_workers["eval"],
-                        )
+            federated_eval_metrics, federated_eval_out_metrics = _run_federated_eval_serial_round(
+                config=config,
+                enable_federated_eval=enable_federated_eval,
+                round_idx=round_idx,
+                num_rounds=num_rounds,
+                train_client_ids=train_client_ids,
+                holdout_client_ids=holdout_client_ids,
+                persistent_clients=persistent_clients,
+                server=server,
+                on_demand_model=on_demand_model,
+                model=model,
+                client_datasets=client_datasets,
+                client_device=client_device,
+                on_demand_workers=on_demand_workers,
+            )
 
-            _log_round(
-                config,
-                round_idx,
-                len(selected_ids),
-                len(train_client_ids),
-                stats,
+            _log_round_metrics(
+                config=config,
+                round_idx=round_idx,
+                selected_count=len(selected_ids),
+                train_client_count=len(train_client_ids),
+                stats=stats,
                 round_local_steps=round_local_steps,
                 round_wall_time_sec=(time.time() - round_t0),
-                global_gen_error=round_gen_error,
+                round_gen_error=round_gen_error,
                 global_eval_metrics=global_eval_metrics,
                 federated_eval_metrics=federated_eval_metrics,
                 federated_eval_out_metrics=federated_eval_out_metrics,
                 track_gen_rewards=bool(track_gen_rewards),
                 round_gen_reward=round_gen_reward,
-                cumulative_gen_reward=float(cumulative_gen_reward)
-                if bool(track_gen_rewards)
-                else None,
-                logger=server_logger,
+                cumulative_gen_reward=float(cumulative_gen_reward),
+                server_logger=server_logger,
                 tracker=tracker,
             )
     except KeyboardInterrupt:
@@ -465,8 +567,8 @@ def run_serial(config) -> None:
     if interrupted:
         raise SystemExit(130)
     server_logger.info(f"Finished serial simulation in {time.time() - t0:.2f}s.")
-    server_logger.info(f"Saved resulting metrics in a log folder.")
-    server_logger.info(f"Good Bye!")
+    server_logger.info("Saved resulting metrics in a log folder.")
+    server_logger.info("Good Bye!")
 
 
 def run_distributed(config, backend: str) -> None:
@@ -689,65 +791,28 @@ def run_distributed(config, backend: str) -> None:
             global_state = sync_model.state_dict()
     
             selected_local_ids = sorted(int(cid) for cid in selected_ids if int(cid) in local_client_set)
-            local_payload = {}
             _assert_stateful_dataloaders_unchanged(
                 persistent_clients=persistent_clients,
                 stateful_dataloader_ids=stateful_dataloader_ids,
             )
-            if persistent_clients is not None:
-                selected_set = set(selected_local_ids)
-                for client in persistent_clients:
-                    if client.id not in selected_set:
-                        continue
-                    train_result, state = _run_local_client_update(
-                        client,
-                        global_state=global_state,
-                        round_idx=round_idx,
-                        round_local_steps=round_local_steps,
-                    )
-                    local_payload[int(client.id)] = {
-                        "state": state,
-                        "num_examples": int(train_result.get("num_examples", 0)),
-                        "stats": train_result,
-                    }
-            else:
-                for chunk_ids in _iter_id_chunks(selected_local_ids, chunk_size):
-                    if worker_pool:
-                        chunk_clients = worker_pool[: len(chunk_ids)]
-                        for client, cid in zip(chunk_clients, chunk_ids):
-                            _rebind_client_for_on_demand_job(
-                                client,
-                                client_id=int(cid),
-                                client_datasets=client_datasets,
-                                num_workers_override=on_demand_workers["train"],
-                            )
-                    else:
-                        chunk_clients = _build_clients(
-                            config=config,
-                            model=on_demand_model if on_demand_model is not None else model,
-                            client_datasets=client_datasets,
-                            local_client_ids=np.asarray(chunk_ids).astype(int),
-                            device=client_device,
-                            run_log_dir=run_log_dir,
-                            client_logging_enabled=local_client_logging_enabled,
-                            trainer_name=str(algorithm_components["trainer_name"]),
-                            share_model=True,
-                            num_workers_override=on_demand_workers["train"],
-                        )
-                    for client in chunk_clients:
-                        train_result, state = _run_local_client_update(
-                            client,
-                            global_state=global_state,
-                            round_idx=round_idx,
-                            round_local_steps=round_local_steps,
-                        )
-                        local_payload[int(client.id)] = {
-                            "state": state,
-                            "num_examples": int(train_result.get("num_examples", 0)),
-                            "stats": train_result,
-                        }
-                    if not worker_pool:
-                        _release_clients(chunk_clients)
+            local_payload = _collect_local_training_payload(
+                selected_client_ids=selected_local_ids,
+                persistent_clients=persistent_clients,
+                worker_pool=worker_pool,
+                config=config,
+                model=model,
+                on_demand_model=on_demand_model,
+                client_datasets=client_datasets,
+                client_device=client_device,
+                run_log_dir=run_log_dir,
+                client_logging_enabled=local_client_logging_enabled,
+                trainer_name=str(algorithm_components["trainer_name"]),
+                round_idx=round_idx,
+                round_local_steps=round_local_steps,
+                global_state=global_state,
+                chunk_size=chunk_size,
+                num_workers_override=on_demand_workers["train"],
+            )
     
             if rank == 0:
                 gathered = [None] * world_size
@@ -759,18 +824,16 @@ def run_distributed(config, backend: str) -> None:
             round_gen_reward = None
             round_gen_error = None
             if rank == 0:
-                updates = {}
-                sample_sizes = {}
+                updates: dict[int, Any] = {}
+                sample_sizes: dict[int, int] = {}
+                stats = {}
                 for payload_map in gathered or []:
                     if not isinstance(payload_map, dict):
                         continue
-                    for cid, payload_item in payload_map.items():
-                        state = payload_item["state"]
-                        if isinstance(state, tuple):
-                            state = state[0]
-                        updates[int(cid)] = state
-                        sample_sizes[int(cid)] = int(payload_item.get("num_examples", 0))
-                        stats[int(cid)] = payload_item.get("stats", {})
+                    part_updates, part_sizes, part_stats = _payload_to_updates(payload_map)
+                    updates.update(part_updates)
+                    sample_sizes.update(part_sizes)
+                    stats.update(part_stats)
                 server.aggregate(
                     updates,
                     sample_sizes,
@@ -810,70 +873,47 @@ def run_distributed(config, backend: str) -> None:
             ):
                 global_eval_metrics = server.evaluate(round_idx=round_idx)
     
-            plan_payload = [None]
-            if rank == 0 and enable_federated_eval:
-                plan_payload[0] = _build_federated_eval_plan(
+            federated_eval_metrics, federated_eval_out_metrics = (
+                _run_federated_eval_distributed_round(
+                    dist=dist,
+                    rank=rank,
                     config=config,
+                    enable_federated_eval=enable_federated_eval,
                     round_idx=round_idx,
                     num_rounds=num_rounds,
                     train_client_ids=train_client_ids,
                     holdout_client_ids=holdout_client_ids,
+                    on_demand_model=on_demand_model,
+                    model=model,
+                    client_datasets=client_datasets,
+                    client_device=client_device,
+                    next_global_state=next_global_state,
+                    world_size=world_size,
                 )
-            dist.broadcast_object_list(plan_payload, src=0)
-            plan = plan_payload[0]
-    
-            federated_eval_metrics = None
-            federated_eval_out_metrics = None
-            if enable_federated_eval and isinstance(plan, dict):
-                if plan["scheme"] == "client":
-                    federated_eval_out_metrics = _run_federated_eval_distributed(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        device=client_device,
-                        global_state=next_global_state,
-                        eval_client_ids=list(plan["out_ids"]),
-                        rank=rank,
-                        world_size=world_size,
-                        eval_split="test",
-                    )
-                else:
-                    federated_eval_metrics = _run_federated_eval_distributed(
-                        config=config,
-                        model=on_demand_model if on_demand_model is not None else model,
-                        client_datasets=client_datasets,
-                        device=client_device,
-                        global_state=next_global_state,
-                        eval_client_ids=list(plan["in_ids"]),
-                        rank=rank,
-                        world_size=world_size,
-                        eval_split="test",
-                    )
-                if rank == 0:
-                    _log_round(
-                        config,
-                        round_idx,
-                        len(selected_ids),
-                        len(train_client_ids),
-                        stats,
-                        round_local_steps=round_local_steps,
-                        round_wall_time_sec=(
-                            (time.time() - float(round_t0))
-                            if isinstance(round_t0, (int, float))
-                            else None
-                        ),
-                        global_gen_error=round_gen_error,
-                        global_eval_metrics=global_eval_metrics,
-                        federated_eval_metrics=federated_eval_metrics,
-                        federated_eval_out_metrics=federated_eval_out_metrics,
-                        track_gen_rewards=bool(track_gen_rewards),
-                        round_gen_reward=round_gen_reward,
-                        cumulative_gen_reward=float(cumulative_gen_reward)
-                        if bool(track_gen_rewards)
-                        else None,
-                        logger=server_logger,
-                        tracker=tracker,
-                    )
+            )
+            if rank == 0:
+                _log_round_metrics(
+                    config=config,
+                    round_idx=round_idx,
+                    selected_count=len(selected_ids),
+                    train_client_count=len(train_client_ids),
+                    stats=stats,
+                    round_local_steps=round_local_steps,
+                    round_wall_time_sec=(
+                        (time.time() - float(round_t0))
+                        if isinstance(round_t0, (int, float))
+                        else None
+                    ),
+                    round_gen_error=round_gen_error,
+                    global_eval_metrics=global_eval_metrics,
+                    federated_eval_metrics=federated_eval_metrics,
+                    federated_eval_out_metrics=federated_eval_out_metrics,
+                    track_gen_rewards=bool(track_gen_rewards),
+                    round_gen_reward=round_gen_reward,
+                    cumulative_gen_reward=float(cumulative_gen_reward),
+                    server_logger=server_logger,
+                    tracker=tracker,
+                )
     except KeyboardInterrupt:
         interrupted = True
         if rank == 0 and server_logger is not None:
