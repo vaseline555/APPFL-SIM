@@ -1,9 +1,13 @@
 from __future__ import annotations
+import hashlib
+import os
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 import numpy as np
 from omegaconf import DictConfig
-from appfl_sim.logger import ServerAgentFileLogger
+from appfl_sim.logger.server_logger import ServerAgentFileLogger
 from appfl_sim.metrics import parse_metric_names
 from appfl_sim.misc.config_utils import _cfg_bool, _cfg_get
 
@@ -52,6 +56,106 @@ try:
     from tqdm.auto import tqdm as _tqdm
 except Exception:  # pragma: no cover
     _tqdm = None
+
+
+def _sanitize_wandb_token(token: str) -> str:
+    text = re.sub(r"[^0-9a-zA-Z_]+", "_", str(token).strip())
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text.lower()
+
+
+def _format_wandb_panel_key(panel: str, parts: List[str]) -> str:
+    tokens = [_sanitize_wandb_token(p) for p in parts if str(p).strip()]
+    tokens = [t for t in tokens if t]
+    leaf = "_".join(tokens) if tokens else "metric"
+    return f"{panel}/{leaf}"
+
+
+def _set_unique_wandb_metric(
+    payload: Dict[str, float],
+    *,
+    key: str,
+    value: float,
+    source: str,
+    source_by_key: Dict[str, str],
+) -> str:
+    candidate = str(key)
+    existing_source = source_by_key.get(candidate, None)
+    if candidate in payload and existing_source != source:
+        digest = hashlib.sha1(str(source).encode("utf-8")).hexdigest()[:8]
+        candidate = f"{key}__{digest}"
+        idx = 2
+        while candidate in payload and source_by_key.get(candidate) != source:
+            candidate = f"{key}__{digest}_{idx}"
+            idx += 1
+    source_by_key[candidate] = str(source)
+    payload[candidate] = float(value)
+    return candidate
+
+
+def _orchestration_client_wandb_key(client_id: str, metric: str) -> str:
+    client_token = _sanitize_wandb_token(client_id) or "client"
+    metric_token = _sanitize_wandb_token(metric) or "metric"
+    return f"orchestration/{client_token}_{metric_token}"
+
+
+def _resolve_run_dir_path(config: DictConfig, run_id: str) -> Path:
+    run_name = str(
+        _cfg_get(config, "logging.name", _cfg_get(config, "experiment.name", "appfl-sim"))
+    )
+    return (
+        Path(str(_cfg_get(config, "logging.path", "./logs")))
+        / str(_cfg_get(config, "experiment.name", "appfl-sim"))
+        / run_name
+        / str(run_id).strip()
+    )
+
+
+def _remap_server_wandb_payload(flat_payload: Dict[str, float]) -> Dict[str, float]:
+    remapped: Dict[str, float] = {}
+    remap_sources: Dict[str, str] = {}
+    eval_roots = {
+        "global_eval",
+        "fed_eval",
+        "fed_eval_in",
+        "fed_eval_out",
+        "fed_extrema",
+        "local_pre_val",
+        "local_post_val",
+        "local_pre_test",
+        "local_post_test",
+    }
+    orchestration_roots = {
+        "clients",
+        "policy",
+        "timing",
+        "gen_reward",
+        "local_gen_error",
+    }
+    for raw_key, raw_value in flat_payload.items():
+        parts = [p for p in str(raw_key).split("/") if p]
+        if not parts:
+            continue
+        if len(parts) == 2 and parts[0] == "clients" and parts[1] in {"selected", "total"}:
+            continue
+
+        root = parts[0]
+        if root == "training":
+            dst = _format_wandb_panel_key("training", parts[1:])
+        elif root in eval_roots:
+            dst = _format_wandb_panel_key("evaluation", parts)
+        elif root in orchestration_roots or root in {"global_gen_error", "round"}:
+            dst = _format_wandb_panel_key("orchestration", parts)
+        else:
+            dst = _format_wandb_panel_key("orchestration", parts)
+        _set_unique_wandb_metric(
+            remapped,
+            key=dst,
+            value=float(raw_value),
+            source=str(raw_key),
+            source_by_key=remap_sources,
+        )
+    return remapped
 
 def _new_progress(total: int, desc: str, enabled: bool):
     if not enabled or _tqdm is None or int(total) <= 0:
@@ -662,12 +766,8 @@ def _log_round(
     if tracker is not None:
         tracker.log_metrics(step=round_idx, metrics=round_metrics)
 
-def _new_server_logger(config: DictConfig, mode: str, run_ts: str) -> ServerAgentFileLogger:
-    run_dir = (
-        Path(str(_cfg_get(config, "logging.path", "./logs")))
-        / str(_cfg_get(config, "experiment.name", "appfl-sim"))
-        / run_ts
-    )
+def _new_server_logger(config: DictConfig, mode: str, run_id: str) -> ServerAgentFileLogger:
+    run_dir = _resolve_run_dir_path(config, run_id)
     mode_text = str(mode).strip().lower()
     file_name = "server.log"
     if "-rank" in mode_text:
@@ -681,21 +781,10 @@ def _new_server_logger(config: DictConfig, mode: str, run_ts: str) -> ServerAgen
     )
 
 def _resolve_run_log_dir(config: DictConfig, run_id: str) -> str:
-    return str(
-        Path(str(_cfg_get(config, "logging.path", "./logs")))
-        / str(_cfg_get(config, "experiment.name", "appfl-sim"))
-        / str(run_id)
-    )
+    return str(_resolve_run_dir_path(config, run_id))
 
-def _resolve_run_timestamp(config: DictConfig, preset: Optional[str] = None) -> str:
-    if config is None:
-        seed_text = "0"
-    else:
-        seed_text = str(_cfg_get(config, "experiment.seed", 0))
-    run_ts = str(preset if preset is not None else "").strip()
-    if run_ts == "":
-        run_ts = seed_text
-    return run_ts
+def _resolve_run_id() -> str:
+    return f"{datetime.now().strftime('%y%m%d%H%M%S')}_{os.getpid()}"
 
 def _start_summary_lines(
     mode: str,

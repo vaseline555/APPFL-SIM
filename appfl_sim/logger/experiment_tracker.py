@@ -7,18 +7,19 @@ from pathlib import Path
 from typing import Any, Dict
 
 from omegaconf import DictConfig, OmegaConf
+from appfl_sim.misc.logging_utils import _remap_server_wandb_payload
 
 
 @dataclass
 class TrackerConfig:
     backend: str
     project_name: str
-    experiment_name: str
-    exp_name: str
-    run_timestamp: str
+    run_name: str
     log_dir: str
+    experiment_seed: str
     wandb_entity: str = ""
     wandb_mode: str = "online"
+    wandb_tags: list[str] | None = None
 
 
 def _cfg_get(payload: dict, path: str, default: Any = None) -> Any:
@@ -42,21 +43,33 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
 
     backend = str(_cfg_get(cfg, "logging.backend", "file")).lower()
     experiment_name = str(_cfg_get(cfg, "experiment.name", "appfl-sim"))
+    run_name = str(_cfg_get(cfg, "logging.name", experiment_name))
     project_name = experiment_name
-    exp_name = experiment_name
-    run_timestamp = str(_cfg_get(cfg, "experiment.seed", 0))
     log_dir = str(_cfg_get(cfg, "logging.path", "./logs"))
+    experiment_seed = str(_cfg_get(cfg, "experiment.seed", 0))
     wandb_entity = str(_cfg_get(cfg, "logging.configs.wandb_entity", ""))
     wandb_mode = str(_cfg_get(cfg, "logging.configs.wandb_mode", "online")).lower()
+    wandb_tags_cfg = _cfg_get(cfg, "logging.configs.wandb_tags", None)
+    wandb_tags: list[str] | None
+    if isinstance(wandb_tags_cfg, list):
+        wandb_tags = [str(tag).strip() for tag in wandb_tags_cfg if str(tag).strip()]
+    elif isinstance(wandb_tags_cfg, str):
+        wandb_tags = [
+            token.strip()
+            for token in wandb_tags_cfg.split(",")
+            if token.strip()
+        ]
+    else:
+        wandb_tags = None
     return TrackerConfig(
         backend=backend,
         project_name=project_name,
-        experiment_name=experiment_name,
-        exp_name=exp_name,
-        run_timestamp=run_timestamp,
+        run_name=run_name,
         log_dir=log_dir,
+        experiment_seed=experiment_seed,
         wandb_entity=wandb_entity,
         wandb_mode=wandb_mode,
+        wandb_tags=wandb_tags,
     )
 
 
@@ -76,10 +89,11 @@ def _has_wandb_api_credential() -> bool:
 class ExperimentTracker:
     """Track experiment metrics for file-only, TensorBoard, or Weights & Biases backends."""
 
-    def __init__(self, config: DictConfig | dict, run_timestamp: str | None = None):
+    def __init__(self, config: DictConfig | dict, run_id: str):
         cfg = _extract_tracker_config(config)
-        if run_timestamp is not None and str(run_timestamp).strip():
-            cfg.run_timestamp = str(run_timestamp).strip()
+        run_id_text = str(run_id).strip()
+        if run_id_text == "":
+            raise ValueError("run_id must be a non-empty string.")
         self.backend = cfg.backend
         self._writer = None
         self._wandb = None
@@ -88,7 +102,7 @@ class ExperimentTracker:
         self._metrics_records: list[dict[str, Any]] = []
 
         if self.backend in {"none", "file", "console"}:
-            run_dir = Path(cfg.log_dir) / cfg.exp_name / cfg.run_timestamp
+            run_dir = Path(cfg.log_dir) / cfg.project_name / cfg.run_name / run_id_text
             run_dir.mkdir(parents=True, exist_ok=True)
             self._metrics_json_path = run_dir / "metrics.json"
             if self._metrics_json_path.exists():
@@ -111,7 +125,7 @@ class ExperimentTracker:
                     "Install with: pip install tensorboard"
                 ) from e
 
-            run_dir = Path(cfg.log_dir) / cfg.exp_name / cfg.run_timestamp
+            run_dir = Path(cfg.log_dir) / cfg.project_name / cfg.run_name / run_id_text
             run_dir.mkdir(parents=True, exist_ok=True)
             self._writer = SummaryWriter(log_dir=str(run_dir))
             return
@@ -133,11 +147,15 @@ class ExperimentTracker:
 
             init_kwargs = {
                 "project": cfg.project_name,
-                "name": cfg.experiment_name,
+                "name": cfg.run_name,
                 "dir": cfg.log_dir,
                 "mode": cfg.wandb_mode,
                 "reinit": True,
             }
+            tags = list(cfg.wandb_tags or [])
+            tags.append(f"seed:{cfg.experiment_seed}")
+            # Keep order stable while avoiding duplicate tags.
+            init_kwargs["tags"] = list(dict.fromkeys(tags))
             if cfg.wandb_entity:
                 init_kwargs["entity"] = cfg.wandb_entity
 
@@ -215,7 +233,7 @@ class ExperimentTracker:
         if self.backend == "wandb" and self._wandb is not None:
             payload = self._flatten_numeric_metrics(metrics)
             payload["round"] = int(step)
-            self._wandb.log(payload, step=int(step))
+            self._wandb.log(_remap_server_wandb_payload(payload), step=int(step))
 
     def close(self) -> None:
         if self.backend == "tensorboard" and self._writer is not None:
@@ -227,6 +245,6 @@ class ExperimentTracker:
 
 
 def create_experiment_tracker(
-    config: DictConfig | dict, run_timestamp: str | None = None
+    config: DictConfig | dict, run_id: str
 ) -> ExperimentTracker:
-    return ExperimentTracker(config, run_timestamp=run_timestamp)
+    return ExperimentTracker(config, run_id=run_id)

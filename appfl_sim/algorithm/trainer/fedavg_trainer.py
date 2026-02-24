@@ -13,6 +13,8 @@ from appfl_sim.metrics import MetricsManager, parse_metric_names
 from appfl_sim.misc.config_utils import build_optimizer_from_train_cfg
 from appfl_sim.misc.metrics_utils import _attach_prefixed_metrics
 from appfl_sim.misc.logging_utils import (
+    _orchestration_client_wandb_key,
+    _set_unique_wandb_metric,
     _build_trainer_log_row,
     _build_trainer_log_title,
 )
@@ -417,6 +419,7 @@ class FedavgTrainer(BaseTrainer):
     def _append_wandb_eval_stats(
         self,
         payload: Dict[str, float],
+        source_by_key: Dict[str, str],
         *,
         split: str,
         stats: Optional[Dict[str, Any]],
@@ -424,9 +427,27 @@ class FedavgTrainer(BaseTrainer):
     ) -> None:
         if stats is None:
             return
-        payload[f"{self.wandb_logging_id}/{split}-loss ({stage})"] = float(stats["loss"])
+        loss_key = _orchestration_client_wandb_key(
+            self.wandb_logging_id, f"{split}-loss ({stage})"
+        )
+        _set_unique_wandb_metric(
+            payload,
+            key=loss_key,
+            value=float(stats["loss"]),
+            source=f"{self.wandb_logging_id}|{split}-loss ({stage})",
+            source_by_key=source_by_key,
+        )
         for key, value in stats.get("metrics", {}).items():
-            payload[f"{self.wandb_logging_id}/{split}-{key} ({stage})"] = float(value)
+            metric_key = _orchestration_client_wandb_key(
+                self.wandb_logging_id, f"{split}-{key} ({stage})"
+            )
+            _set_unique_wandb_metric(
+                payload,
+                key=metric_key,
+                value=float(value),
+                source=f"{self.wandb_logging_id}|{split}-{key} ({stage})",
+                source_by_key=source_by_key,
+            )
 
     def _train_batch(
         self, optimizer: torch.optim.Optimizer, data, target
@@ -551,21 +572,24 @@ class FedavgTrainer(BaseTrainer):
                 )
             )
             if self.enabled_wandb:
-                payload = {}
+                payload: Dict[str, float] = {}
+                payload_sources: Dict[str, str] = {}
                 self._append_wandb_eval_stats(
                     payload,
+                    payload_sources,
                     split="val",
                     stats=val_stats,
                     stage="before train",
                 )
                 self._append_wandb_eval_stats(
                     payload,
+                    payload_sources,
                     split="test",
                     stats=test_stats,
                     stage="before train",
                 )
                 if payload:
-                    wandb.log(payload)
+                    wandb.log(payload, step=int(self.round))
 
         # Define optimizer
         optimizer = build_optimizer_from_train_cfg(
@@ -654,27 +678,45 @@ class FedavgTrainer(BaseTrainer):
 
             elapsed = time.time() - start_time
             if self.enabled_wandb:
-                payload = {
-                    f"{self.wandb_logging_id}/train-loss (during train)": train_loss,
-                }
+                payload: Dict[str, float] = {}
+                payload_sources: Dict[str, str] = {}
+                train_key = _orchestration_client_wandb_key(
+                    self.wandb_logging_id, "train-loss (during train)"
+                )
+                _set_unique_wandb_metric(
+                    payload,
+                    key=train_key,
+                    value=train_loss,
+                    source=f"{self.wandb_logging_id}|train-loss (during train)",
+                    source_by_key=payload_sources,
+                )
                 for key, value in train_stats.get("metrics", {}).items():
-                    payload[f"{self.wandb_logging_id}/train-{key} (during train)"] = float(
-                        value
+                    metric_key = _orchestration_client_wandb_key(
+                        self.wandb_logging_id, f"train-{key} (during train)"
+                    )
+                    _set_unique_wandb_metric(
+                        payload,
+                        key=metric_key,
+                        value=float(value),
+                        source=f"{self.wandb_logging_id}|train-{key} (during train)",
+                        source_by_key=payload_sources,
                     )
                 self._append_wandb_eval_stats(
                     payload,
+                    payload_sources,
                     split="val",
                     stats=val_stats,
                     stage="during train",
                 )
                 self._append_wandb_eval_stats(
                     payload,
+                    payload_sources,
                     split="test",
                     stats=test_stats,
                     stage="during train",
                 )
                 if payload:
-                    wandb.log(payload)
+                    wandb.log(payload, step=int(self.round))
             self.logger.log_content(
                 _build_trainer_log_row(
                     mode=self.train_configs.mode,

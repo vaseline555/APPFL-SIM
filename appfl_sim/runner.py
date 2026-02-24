@@ -55,7 +55,7 @@ from appfl_sim.misc.logging_utils import (
     _log_round,
     _new_server_logger,
     _resolve_run_log_dir,
-    _resolve_run_timestamp,
+    _resolve_run_id,
     _start_summary_lines,
     _warn_if_workers_pinned_to_single_device,
 )
@@ -312,10 +312,10 @@ def run_serial(config) -> None:
 
     set_seed_everything(int(_cfg_get(config, "experiment.seed", 42)))
     t0 = time.time()
-    run_ts = _resolve_run_timestamp(config, preset=None)
-    run_log_dir = _resolve_run_log_dir(config, run_ts)
-    server_logger = _new_server_logger(config, mode="serial", run_ts=run_ts)
-    tracker = create_experiment_tracker(config, run_timestamp=run_ts)
+    run_id = _resolve_run_id()
+    run_log_dir = _resolve_run_log_dir(config, run_id)
+    server_logger = _new_server_logger(config, mode="serial", run_id=run_id)
+    tracker = create_experiment_tracker(config, run_id=run_id)
 
     loader_cfg = _cfg_to_dict(config)
     # Respect user-configured download policy in serial mode.
@@ -592,14 +592,14 @@ def run_distributed(config, backend: str) -> None:
         torch.cuda.set_device(local_rank % max(1, torch.cuda.device_count()))
 
     set_seed_everything(int(_cfg_get(config, "experiment.seed", 42)) + rank)
-    run_ts_root = _resolve_run_timestamp(config, preset=None) if rank == 0 else ""
-    run_ts_payload = [run_ts_root]
-    dist.broadcast_object_list(run_ts_payload, src=0)
-    run_ts = str(run_ts_payload[0])
-    run_log_dir = _resolve_run_log_dir(config, run_ts)
+    run_id_root = _resolve_run_id() if rank == 0 else ""
+    run_id_payload = [run_id_root]
+    dist.broadcast_object_list(run_id_payload, src=0)
+    run_id = str(run_id_payload[0])
+    run_log_dir = _resolve_run_log_dir(config, run_id)
 
     bootstrap_logger = (
-        _new_server_logger(config, mode=f"{backend}-rank{rank}", run_ts=run_ts)
+        _new_server_logger(config, mode=f"{backend}-rank{rank}", run_id=run_id)
         if rank == 0
         else None
     )
@@ -751,7 +751,7 @@ def run_distributed(config, backend: str) -> None:
             holdout_client_count=len(holdout_client_ids),
             logger=server_logger,
         )
-        tracker = create_experiment_tracker(config, run_timestamp=run_ts)
+        tracker = create_experiment_tracker(config, run_id=run_id)
         server = _build_server(
             config=config,
             runtime_cfg=runtime_cfg,

@@ -129,13 +129,14 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 
 ## Logging (`logging`)
 - `path` (default: `./logs`): output log path.
-- `name` (default: `appfl-sim`): ignored at runtime; logging project/name is forced to `experiment.name`.
+- `name` (default: `experiment.name`): logging run name. Local log directory is `logging.path/experiment.name/logging.name/<run_id>` where `run_id` defaults to `YYMMDDHHMMSS_<pid>`; for WandB this maps to run name.
 - `backend` (default: `file`): logging scheme (`none`, `file`, `console`, `tensorboard`, `wandb`).
 - `type` (default: `auto`): logging policy (`auto`, `both`, `server_only`).  
   (`auto`: when `num_sampled_clients < num_clients`, per-cleint logging is forced off for performance, i.e., server-only logging)
 - `configs` (default: `{}`): backend-agnostic keyword arguments.
   - `wandb_mode` (default: `online`): wandb mode (`online` or `offline`).
   - `wandb_entity` (default: `""`): wandb entity/team.
+  - `wandb_tags` (default: `[]`): optional WandB tags (list or comma-separated string). `seed:<experiment.seed>` is always appended automatically.
   - `track_gen_rewards` (default: `false`): log per-round and cumulative generalization reward (`-(g_t - g_{t-1})`) computed at server from round global generalization error.
 
 ## Privacy (`privacy`)
