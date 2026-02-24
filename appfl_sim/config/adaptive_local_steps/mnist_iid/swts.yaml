@@ -1,27 +1,26 @@
 experiment:
-  name: mnist_iid_swts
+  name: GenFL
   seed: 42
   device: cuda
   server_device: cuda
   backend: nccl
-  stateful: true
+  stateful: false
 dataset:
   path: ./data
   name: MNIST
-  backend: auto
+  backend: torchvision
   download: true
 split:
   type: iid
 model:
-  path: ./models
-  name: LeNet
+  name: TwoNN
   backend: custom
 train:
   num_rounds: 500
   num_clients: 10
   num_sampled_clients: 10
   update_base: iter
-  local_iters: 1
+  local_iters: 100
   batch_size: 32
   shuffle: true
   eval_batch_size: 256
@@ -35,7 +34,7 @@ algorithm:
   aggregator_kwargs:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
-    action_space: [75, 150, 300, 1200]
+    action_space: [50, 100, 200, 400, 800]
     window_size: 10
     likelihood_variance: 0.1
     prior_variance: 1.0
@@ -43,19 +42,15 @@ algorithm:
   trainer_kwargs: {}
 loss:
   name: CrossEntropyLoss
-  backend: auto
-  path: ""
-  configs: {}
-
+  backend: torch
 optimizer:
   name: SGD
   backend: auto
-  path: ""
   lr: 0.01
   lr_decay:
     enable: true
     type: exponential
-    gamma: 0.995
+    gamma: 0.9975
   clip_grad_norm: 0.0
   configs:
     weight_decay: 0.0
@@ -77,8 +72,10 @@ eval:
     - 10
 logging:
   path: ./logs
-  name: genfl_swts
-  backend: file
+  name: mnist_iid_swts
+  backend: wandb
   type: both
   configs:
     track_gen_rewards: true
+    wandb_mode: online
+    wandb_entity: ""
