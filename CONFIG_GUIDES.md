@@ -136,7 +136,8 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `configs` (default: `{}`): backend-agnostic keyword arguments.
   - `wandb_mode` (default: `online`): wandb mode (`online` or `offline`).
   - `wandb_entity` (default: `""`): wandb entity/team.
-  - `wandb_tags` (default: `[]`): optional WandB tags (list or comma-separated string). `seed:<experiment.seed>` is always appended automatically.
+  - `wandb_tags` (default: `[]`): optional WandB tags (list or comma-separated string).
+  - `wandb_notes` (default: `""`): optional WandB notes text. `seed:<experiment.seed>` is always appended to WandB notes.
   - `track_gen_rewards` (default: `false`): log per-round and cumulative generalization reward (`-(g_t - g_{t-1})`) computed at server from round global generalization error.
 
 ## Privacy (`privacy`)

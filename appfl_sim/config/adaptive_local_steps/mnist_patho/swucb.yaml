@@ -36,9 +36,9 @@ algorithm:
   aggregator_kwargs:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
-    action_space: [50, 100, 200, 400, 800]
+    action_space: [50, 100, 150, 200]
     window_size: 10
-    exploration_alpha: 0.1
+    exploration_alpha: 1.0
   trainer_kwargs: {}
 loss:
   name: CrossEntropyLoss

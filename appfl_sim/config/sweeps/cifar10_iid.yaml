@@ -1,0 +1,30 @@
+# WandB sweep: CIFAR10 IID
+program: tools/wandb_sweep_bandit.py
+method: random
+metric:
+  name: test/global_eval_acc1
+  goal: maximize
+
+parameters:
+  scheduler:
+    values: [swucb, swts]
+  config_path_swucb:
+    value: appfl_sim/config/adaptive_local_steps/cifar10_iid/swucb.yaml
+  config_path_swts:
+    value: appfl_sim/config/adaptive_local_steps/cifar10_iid/swts.yaml
+
+  window_size:
+    values: [10, 20, 50]
+  exploration_alpha:
+    values: [1e-3, 1e-2, 1e-1]
+  posterior_variance:
+    values: [1e-5, 1e-4, 1e-3]
+  prior_variance:
+    values: [1e-5, 1e-3]
+
+  seed:
+    values: [1, 2, 3]
+  wandb_entity:
+    value: "vaseline555"
+  cuda_visible_devices:
+    value: "0,1,2,3"

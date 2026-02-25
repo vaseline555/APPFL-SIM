@@ -16,7 +16,7 @@ model:
   name: TwoCNN
   backend: custom
 train:
-  num_rounds: 500
+  num_rounds: 100
   num_clients: 10
   num_sampled_clients: 10
   update_base: iter
@@ -45,7 +45,7 @@ optimizer:
   lr_decay:
     enable: true
     type: exponential
-    gamma: 0.9975
+    gamma: 0.95
   clip_grad_norm: 0.0
   configs:
     weight_decay: 0.0

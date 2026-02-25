@@ -36,29 +36,6 @@ class _NullClientLogger:
     def warning(self, warning: str):
         return None
 
-
-try:
-    import wandb
-except Exception:  # pragma: no cover
-    class _WandbStub:
-        run = None
-
-        class util:
-            @staticmethod
-            def generate_id():
-                return str(uuid.uuid4())
-
-        @staticmethod
-        def init(*args, **kwargs):
-            return None
-
-        @staticmethod
-        def log(*args, **kwargs):
-            return None
-
-    wandb = _WandbStub()
-
-
 class ClientAgent:
     """
     The `ClientAgent` should act on behalf of the FL client to:
@@ -100,7 +77,6 @@ class ClientAgent:
         self._ensure_config_contract()
         self.optimize_memory = bool(self.client_agent_config.get("optimize_memory", True))
         self._create_logger()
-        self._init_wandb()
         self._load_model()
         self._load_loss()
         self._load_metric()
@@ -266,14 +242,6 @@ class ClientAgent:
             logger=self.logger,
             client_id=self.client_id,
         )
-
-    def _init_wandb(self) -> None:
-        """
-        Initialize Weights and Biases for logging.
-        """
-        train_cfg = self.client_agent_config.train_configs
-        train_cfg.enable_wandb = wandb.run is not None
-        train_cfg.wandb_logging_id = self.client_id
 
     @staticmethod
     def _default_config() -> DictConfig:

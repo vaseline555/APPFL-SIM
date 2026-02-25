@@ -16,7 +16,7 @@ model:
   name: TwoCNN
   backend: custom
 train:
-  num_rounds: 500
+  num_rounds: 100
   num_clients: 10
   num_sampled_clients: 10
   update_base: iter
@@ -34,9 +34,9 @@ algorithm:
   aggregator_kwargs:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
-    action_space: [50, 100, 200, 400, 800]
+    action_space: [50, 100, 150, 200]
     window_size: 10
-    likelihood_variance: 0.1
+    likelihood_variance: 1.0
     prior_variance: 1.0
     seed: 42
   trainer_kwargs: {}
@@ -50,7 +50,7 @@ optimizer:
   lr_decay:
     enable: true
     type: exponential
-    gamma: 0.9975
+    gamma: 0.95
   clip_grad_norm: 0.0
   configs:
     weight_decay: 0.0

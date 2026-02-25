@@ -31,6 +31,7 @@ class SwucbScheduler(FedavgScheduler):
         self.exploration_alpha = float(scheduler_configs.get("exploration_alpha", 0.1))
         self.history: Deque[Tuple[int, float]] = deque(maxlen=self.window_size)
         self.pending_actions: Deque[int] = deque()
+        self.pull_counts_total: Dict[int, int] = {a: 0 for a in self.action_space}
         self.prev_pre_val_error: Optional[float] = None
         self.current_round: int = 0
         self.last_selected_action: int = int(self.action_space[0])
@@ -40,29 +41,37 @@ class SwucbScheduler(FedavgScheduler):
 
     def pull(self, round_idx: int) -> int:
         self.current_round = max(1, int(round_idx))
-        counts: Dict[int, int] = {a: 0 for a in self.action_space}
-        sums: Dict[int, float] = {a: 0.0 for a in self.action_space}
+        window_counts: Dict[int, int] = {a: 0 for a in self.action_space}
+        window_sums: Dict[int, float] = {a: 0.0 for a in self.action_space}
         for action, reward in self.history:
-            counts[action] += 1
-            sums[action] += float(reward)
+            window_counts[action] += 1
+            window_sums[action] += float(reward)
 
-        missing = [a for a in self.action_space if counts[a] == 0]
-        if missing:
-            chosen = int(self._rng.choice(missing))
+        total_pulls = int(sum(self.pull_counts_total.values()))
+        if total_pulls < len(self.action_space):
+            # Deterministic warm-start: pull each arm exactly once in the first |A| pulls.
+            chosen = int(self.action_space[total_pulls])
         else:
             chosen = None
             best_score = float("-inf")
             for action in self.action_space:
-                n = max(1, counts[action])
-                mean_reward = sums[action] / n
-                ucb = self.exploration_alpha * math.sqrt(max(0.0, math.log(float(self.current_round))) / n)
+                pulls = max(1, int(self.pull_counts_total[action]))
+                mean_reward = (
+                    window_sums[action] / float(window_counts[action])
+                    if window_counts[action] > 0
+                    else 0.0
+                )
+                ucb = self.exploration_alpha * math.sqrt(
+                    max(0.0, math.log(float(self.current_round))) / float(pulls)
+                )
                 score = mean_reward + ucb
                 if score > best_score:
                     best_score = score
                     chosen = int(action)
             if chosen is None:
-               chosen = self._rng.choice(self.action_space)
+                chosen = int(self._rng.choice(self.action_space))
 
+        self.pull_counts_total[chosen] += 1
         self.pending_actions.append(chosen)
         self.last_selected_action = int(chosen)
         return int(chosen)

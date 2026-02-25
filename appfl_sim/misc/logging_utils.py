@@ -93,12 +93,6 @@ def _set_unique_wandb_metric(
     return candidate
 
 
-def _orchestration_client_wandb_key(client_id: str, metric: str) -> str:
-    client_token = _sanitize_wandb_token(client_id) or "client"
-    metric_token = _sanitize_wandb_token(metric) or "metric"
-    return f"orchestration/{client_token}_{metric_token}"
-
-
 def _resolve_run_dir_path(config: DictConfig, run_id: str) -> Path:
     run_name = str(
         _cfg_get(config, "logging.name", _cfg_get(config, "experiment.name", "appfl-sim"))
@@ -114,16 +108,15 @@ def _resolve_run_dir_path(config: DictConfig, run_id: str) -> Path:
 def _remap_server_wandb_payload(flat_payload: Dict[str, float]) -> Dict[str, float]:
     remapped: Dict[str, float] = {}
     remap_sources: Dict[str, str] = {}
-    eval_roots = {
+    validation_roots = {"local_pre_val", "local_post_val"}
+    test_roots = {
+        "local_pre_test",
+        "local_post_test",
         "global_eval",
         "fed_eval",
         "fed_eval_in",
         "fed_eval_out",
         "fed_extrema",
-        "local_pre_val",
-        "local_post_val",
-        "local_pre_test",
-        "local_post_test",
     }
     orchestration_roots = {
         "clients",
@@ -140,11 +133,24 @@ def _remap_server_wandb_payload(flat_payload: Dict[str, float]) -> Dict[str, flo
             continue
 
         root = parts[0]
+        if root == "round":
+            continue
         if root == "training":
             dst = _format_wandb_panel_key("training", parts[1:])
-        elif root in eval_roots:
-            dst = _format_wandb_panel_key("evaluation", parts)
-        elif root in orchestration_roots or root in {"global_gen_error", "round"}:
+        elif root in validation_roots:
+            normalized_parts = [parts[0].removeprefix("local_"), *parts[1:]]
+            dst = _format_wandb_panel_key("validation", normalized_parts)
+        elif root in test_roots:
+            normalized_parts = [parts[0].removeprefix("local_"), *parts[1:]]
+            dst = _format_wandb_panel_key("test", normalized_parts)
+        elif root == "gen_reward":
+            leaf_alias = {
+                "round": "reward",
+                "cumulative": "cumulative_rewards",
+            }
+            leaf = leaf_alias.get(parts[1], parts[1]) if len(parts) > 1 else "reward"
+            dst = _format_wandb_panel_key("orchestration", [leaf])
+        elif root in orchestration_roots or root == "global_gen_error":
             dst = _format_wandb_panel_key("orchestration", parts)
         else:
             dst = _format_wandb_panel_key("orchestration", parts)

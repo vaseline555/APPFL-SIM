@@ -20,6 +20,7 @@ class TrackerConfig:
     wandb_entity: str = ""
     wandb_mode: str = "online"
     wandb_tags: list[str] | None = None
+    wandb_notes: str = ""
 
 
 def _cfg_get(payload: dict, path: str, default: Any = None) -> Any:
@@ -49,6 +50,7 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
     experiment_seed = str(_cfg_get(cfg, "experiment.seed", 0))
     wandb_entity = str(_cfg_get(cfg, "logging.configs.wandb_entity", ""))
     wandb_mode = str(_cfg_get(cfg, "logging.configs.wandb_mode", "online")).lower()
+    wandb_notes = str(_cfg_get(cfg, "logging.configs.wandb_notes", "")).strip()
     wandb_tags_cfg = _cfg_get(cfg, "logging.configs.wandb_tags", None)
     wandb_tags: list[str] | None
     if isinstance(wandb_tags_cfg, list):
@@ -70,6 +72,7 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
         wandb_entity=wandb_entity,
         wandb_mode=wandb_mode,
         wandb_tags=wandb_tags,
+        wandb_notes=wandb_notes,
     )
 
 
@@ -152,10 +155,15 @@ class ExperimentTracker:
                 "mode": cfg.wandb_mode,
                 "reinit": True,
             }
-            tags = list(cfg.wandb_tags or [])
-            tags.append(f"seed:{cfg.experiment_seed}")
-            # Keep order stable while avoiding duplicate tags.
-            init_kwargs["tags"] = list(dict.fromkeys(tags))
+            tags = list(dict.fromkeys(cfg.wandb_tags or []))
+            if tags:
+                init_kwargs["tags"] = tags
+            seed_note = f"seed:{cfg.experiment_seed}"
+            init_kwargs["notes"] = (
+                f"{cfg.wandb_notes}\n{seed_note}".strip()
+                if cfg.wandb_notes
+                else seed_note
+            )
             if cfg.wandb_entity:
                 init_kwargs["entity"] = cfg.wandb_entity
 
