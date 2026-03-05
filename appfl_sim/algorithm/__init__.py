@@ -1,4 +1,4 @@
-"""APPFL algorithm namespace (legacy excluded in appfl[sim])."""
+"""APPFL algorithm namespace for simulation."""
 
 from appfl_sim.algorithm import aggregator, scheduler, trainer
 

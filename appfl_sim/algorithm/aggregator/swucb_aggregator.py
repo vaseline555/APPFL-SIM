@@ -1,12 +1,5 @@
-try:
-    from appfl_sim.algorithm.aggregator.fedavg_aggregator import (
-        FedavgAggregator as _FedavgBase,
-    )
-except ImportError:  # pragma: no cover
-    from appfl_sim.algorithm.aggregator.fedavg_aggregator import (
-        FedAvgAggregator as _FedavgBase,
-    )
+from appfl_sim.algorithm.aggregator.fedavg_aggregator import FedavgAggregator
 
 
-class SwucbAggregator(_FedavgBase):
+class SwucbAggregator(FedavgAggregator):
     pass

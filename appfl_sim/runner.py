@@ -126,7 +126,7 @@ def _log_round_metrics(
     selected_count: int,
     train_client_count: int,
     stats: dict,
-    round_local_steps: Optional[int],
+    scheduler_round_metrics: Optional[dict[str, Any]],
     round_wall_time_sec: Optional[float],
     round_gen_error: Optional[float],
     global_eval_metrics,
@@ -144,7 +144,7 @@ def _log_round_metrics(
         selected_count,
         train_client_count,
         stats,
-        round_local_steps=round_local_steps,
+        scheduler_round_metrics=scheduler_round_metrics,
         round_wall_time_sec=round_wall_time_sec,
         global_gen_error=round_gen_error,
         global_eval_metrics=global_eval_metrics,
@@ -158,6 +158,43 @@ def _log_round_metrics(
         logger=server_logger,
         tracker=tracker,
     )
+
+
+def _resolve_round_local_steps_by_client(
+    scheduler: Any,
+    round_local_steps: Any,
+    selected_ids: List[int],
+) -> Optional[dict[int, int]]:
+    if round_local_steps is None:
+        return None
+    resolved: dict[int, int] = {}
+    if scheduler is not None and hasattr(scheduler, "resolve_client_local_steps"):
+        for cid in selected_ids:
+            value = scheduler.resolve_client_local_steps(round_local_steps, int(cid))
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                resolved[int(cid)] = max(1, int(value))
+        return resolved or None
+
+    if isinstance(round_local_steps, (int, float, np.integer, np.floating)):
+        step = max(1, int(round_local_steps))
+        return {int(cid): int(step) for cid in selected_ids}
+
+    if isinstance(round_local_steps, dict):
+        for cid in selected_ids:
+            value = round_local_steps.get(int(cid), round_local_steps.get(str(int(cid))))
+            if isinstance(value, (int, float, np.integer, np.floating)):
+                resolved[int(cid)] = max(1, int(value))
+        return resolved or None
+
+    if isinstance(round_local_steps, (list, tuple, np.ndarray)):
+        for cid in selected_ids:
+            idx = int(cid)
+            if 0 <= idx < len(round_local_steps):
+                value = round_local_steps[idx]
+                if isinstance(value, (int, float, np.integer, np.floating)):
+                    resolved[int(cid)] = max(1, int(value))
+        return resolved or None
+    return None
 
 
 def _run_federated_eval_serial_round(
@@ -460,7 +497,12 @@ def run_serial(config) -> None:
                 train_client_ids=train_client_ids,
                 num_sampled_clients=int(num_sampled_clients),
             )
-            round_local_steps = _select_round_local_steps(server, round_idx)
+            raw_round_local_steps = _select_round_local_steps(server, round_idx)
+            round_local_steps = _resolve_round_local_steps_by_client(
+                getattr(server, "scheduler", None),
+                raw_round_local_steps,
+                selected_ids,
+            )
             global_state = server.model.state_dict()
 
             _assert_stateful_dataloaders_unchanged(
@@ -541,7 +583,12 @@ def run_serial(config) -> None:
                 selected_count=len(selected_ids),
                 train_client_count=len(train_client_ids),
                 stats=stats,
-                round_local_steps=round_local_steps,
+                scheduler_round_metrics=(
+                    server.scheduler.get_round_metrics(round_local_steps=raw_round_local_steps)
+                    if getattr(server, "scheduler", None) is not None
+                    and hasattr(server.scheduler, "get_round_metrics")
+                    else None
+                ),
                 round_wall_time_sec=(time.time() - round_t0),
                 round_gen_error=round_gen_error,
                 global_eval_metrics=global_eval_metrics,
@@ -775,7 +822,12 @@ def run_distributed(config, backend: str) -> None:
                     train_client_ids=train_client_ids,
                     num_sampled_clients=int(num_sampled_clients),
                 )
-                local_steps = _select_round_local_steps(server, round_idx)
+                raw_local_steps = _select_round_local_steps(server, round_idx)
+                local_steps = _resolve_round_local_steps_by_client(
+                    getattr(server, "scheduler", None),
+                    raw_local_steps,
+                    selected_ids,
+                )
                 payload = {"selected_ids": selected_ids, "local_steps": local_steps}
             else:
                 payload = None
@@ -898,7 +950,12 @@ def run_distributed(config, backend: str) -> None:
                     selected_count=len(selected_ids),
                     train_client_count=len(train_client_ids),
                     stats=stats,
-                    round_local_steps=round_local_steps,
+                    scheduler_round_metrics=(
+                        server.scheduler.get_round_metrics(round_local_steps=raw_local_steps)
+                        if getattr(server, "scheduler", None) is not None
+                        and hasattr(server.scheduler, "get_round_metrics")
+                        else None
+                    ),
                     round_wall_time_sec=(
                         (time.time() - float(round_t0))
                         if isinstance(round_t0, (int, float))

@@ -5,10 +5,11 @@ import numpy as np
 from omegaconf import DictConfig
 
 from appfl_sim.algorithm.aggregator import BaseAggregator
+from appfl_sim.algorithm.scheduler.dsucb_scheduler import _AdaptiveLocalStepSupport
 from appfl_sim.algorithm.scheduler.fedavg_scheduler import FedavgScheduler
 
 
-class SwtsScheduler(FedavgScheduler):
+class SwtsScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
     """
     Sliding-window Thompson Sampling for non-contextual local-step adaptation.
     """
@@ -39,6 +40,7 @@ class SwtsScheduler(FedavgScheduler):
         self.last_reward: Optional[float] = None
         seed = scheduler_configs.get("seed", None)
         self._rng = np.random.default_rng(None if seed is None else int(seed))
+
 
     def pull(self, round_idx: int) -> int:
         self.current_round = max(1, int(round_idx))

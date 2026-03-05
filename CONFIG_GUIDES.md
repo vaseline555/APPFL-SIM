@@ -101,8 +101,10 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `lr` (default: `0.01`): learning rate for local updates.
 - `lr_decay` (default: disabled): local LR scheduler applied during each client update.
   - `enable` (default: `false`): enable local LR decay.
-  - `type` (default: `none`): scheduler type (`none`, `exponential`, `cosine`).
-  - `gamma` (default: `0.99`): exponential decay factor when `type=exponential`.
+  - `type` (default: `none`): scheduler type (`none`, `exponential`, `step`, `multistep`, `cosine`).
+  - `gamma` (default: `0.99`): decay factor when `type=exponential` or `type=step`.
+  - `step_size` (default: `1`): StepLR interval in rounds when `type=step` (e.g., `100` decays every 100 rounds).
+  - `milestones` (default: `[]`): MultiStepLR milestone rounds when `type=multistep` (e.g., `[100, 200, 350]`).
   - `t_max` (default: `0`): cosine cycle length when `type=cosine`; `<=0` auto-uses local update length.
   - `eta_min` (default: `0.0`): cosine minimum LR when `type=cosine`.
   - `min_lr` (default: `0.0`): floor clamp applied after scheduler step.

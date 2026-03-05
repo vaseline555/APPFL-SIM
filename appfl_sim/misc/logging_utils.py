@@ -19,8 +19,12 @@ class _ClientsSummary(TypedDict):
     selected: int
     total: int
 
-class _PolicySummary(TypedDict):
+class _PolicySummary(TypedDict, total=False):
     tau_t: int
+    tau_t_clients: int
+    tau_t_mean: float
+    tau_t_min: int
+    tau_t_max: int
 
 class _TimingSummary(TypedDict):
     round_wall_time_sec: float
@@ -512,7 +516,7 @@ def _build_round_metrics_payload(
     selected_count: int,
     total_train_clients: int,
     stats,
-    round_local_steps: Optional[int],
+    scheduler_round_metrics: Optional[Dict[str, Any]],
     round_wall_time_sec: Optional[float],
     global_gen_error: Optional[float],
     global_eval_metrics: Optional[Dict[str, float]],
@@ -533,8 +537,10 @@ def _build_round_metrics_payload(
             "total": int(total_train_clients),
         }
     }
-    if round_local_steps is not None:
-        round_metrics["policy"] = {"tau_t": int(round_local_steps)}
+    if isinstance(scheduler_round_metrics, dict):
+        for key, value in scheduler_round_metrics.items():
+            if isinstance(value, dict):
+                round_metrics[str(key)] = value
     if isinstance(round_wall_time_sec, (int, float)):
         round_metrics["timing"] = {"round_wall_time_sec": float(round_wall_time_sec)}
 
@@ -734,7 +740,7 @@ def _log_round(
     selected_count: int,
     total_train_clients: int,
     stats,
-    round_local_steps: Optional[int] = None,
+    scheduler_round_metrics: Optional[Dict[str, Any]] = None,
     round_wall_time_sec: Optional[float] = None,
     global_gen_error: Optional[float] = None,
     global_eval_metrics: Optional[Dict[str, float]] = None,
@@ -752,7 +758,7 @@ def _log_round(
         selected_count=selected_count,
         total_train_clients=total_train_clients,
         stats=stats,
-        round_local_steps=round_local_steps,
+        scheduler_round_metrics=scheduler_round_metrics,
         round_wall_time_sec=round_wall_time_sec,
         global_gen_error=global_gen_error,
         global_eval_metrics=global_eval_metrics,

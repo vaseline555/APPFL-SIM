@@ -271,6 +271,31 @@ class FedavgTrainer(BaseTrainer):
         if decay_type in {"exp", "exponential"}:
             gamma = float(decay_cfg.get("gamma", 0.99))
             lr_value = float(base_lr * (gamma**elapsed_rounds))
+        elif decay_type in {"step", "steplr"}:
+            gamma = float(decay_cfg.get("gamma", 0.99))
+            step_size = max(1, int(decay_cfg.get("step_size", 1)))
+            decay_steps = elapsed_rounds // step_size
+            lr_value = float(base_lr * (gamma**decay_steps))
+        elif decay_type in {"multistep", "multi_step", "multisteplr"}:
+            gamma = float(decay_cfg.get("gamma", 0.99))
+            raw_milestones = decay_cfg.get("milestones", [])
+            if isinstance(raw_milestones, str):
+                raw_milestones = [
+                    token.strip()
+                    for token in raw_milestones.split(",")
+                    if token.strip()
+                ]
+            if not isinstance(raw_milestones, (list, tuple)):
+                raise ValueError(
+                    "optimizer.lr_decay.milestones must be a list/tuple or comma-separated string."
+                )
+            milestones = sorted({int(m) for m in raw_milestones if int(m) > 0})
+            if not milestones:
+                raise ValueError(
+                    "optimizer.lr_decay.type=multistep requires non-empty milestones."
+                )
+            decay_steps = sum(1 for m in milestones if elapsed_rounds >= int(m))
+            lr_value = float(base_lr * (gamma**decay_steps))
         elif decay_type in {"cos", "cosine"}:
             t_max = int(decay_cfg.get("t_max", 0))
             if t_max <= 0:
@@ -283,7 +308,7 @@ class FedavgTrainer(BaseTrainer):
         else:
             raise ValueError(
                 f"Unsupported optimizer.lr_decay.type={decay_type}. "
-                "Supported: none, exponential, cosine."
+                "Supported: none, exponential, step, multistep, cosine."
             )
 
         for param_group in optimizer.param_groups:

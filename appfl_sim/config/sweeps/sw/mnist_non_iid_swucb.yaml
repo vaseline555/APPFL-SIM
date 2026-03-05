@@ -1,4 +1,4 @@
-# WandB sweep: MNIST non-IID (pathological split)
+# WandB sweep: MNIST non-IID (pathological) - SWUCB
 program: tools/wandb_sweep_bandit.py
 method: random
 metric:
@@ -7,24 +7,16 @@ metric:
 
 parameters:
   scheduler:
-    values: [swucb, swts]
+    value: swucb
   config_path_swucb:
     value: appfl_sim/config/adaptive_local_steps/mnist_patho/swucb.yaml
-  config_path_swts:
-    value: appfl_sim/config/adaptive_local_steps/mnist_patho/swts.yaml
 
   window_size:
     values: [10, 20, 50]
   exploration_alpha:
     values: [1e-3, 1e-2, 1e-1]
-  posterior_variance:
-    values: [1e-6, 1e-5, 1e-4]
-  prior_variance:
-    values: [1e-5, 1e-3]
 
   seed:
-    values: [1, 2, 3]
+    values: [0]
   wandb_entity:
     value: "vaseline555"
-  cuda_visible_devices:
-    value: "0,1,2,3"

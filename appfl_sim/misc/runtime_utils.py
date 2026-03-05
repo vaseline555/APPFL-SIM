@@ -32,24 +32,30 @@ def _select_round_local_steps(server, round_idx: int):
     if scheduler is None or not hasattr(scheduler, "pull"):
         return None
     try:
-        return int(scheduler.pull(round_idx=int(round_idx)))
+        return scheduler.pull(round_idx=int(round_idx))
     except (TypeError, ValueError, AttributeError) as exc:
-        LOGGER.debug("Scheduler.pull failed to provide integer local steps: %s", exc)
+        LOGGER.debug("Scheduler.pull failed to provide local-step policy: %s", exc)
         return None
+
 
 def _run_local_client_update(
     client,
     *,
     global_state,
     round_idx: int,
-    round_local_steps: Optional[int],
+    round_local_steps: Any,
 ):
     client.load_parameters(global_state)
-    if round_local_steps is None:
+    local_steps = None
+    if isinstance(round_local_steps, dict):
+        value = round_local_steps.get(int(client.id), round_local_steps.get(str(int(client.id))))
+        if isinstance(value, (int, float, np.integer, np.floating)):
+            local_steps = max(1, int(value))
+    if local_steps is None:
         train_result = client.train(round=round_idx)
     else:
         train_result = client.train(
-            round=round_idx, local_steps=int(round_local_steps)
+            round=round_idx, local_steps=int(local_steps)
         )
     uploaded = client.get_parameters()
     state = uploaded[0] if isinstance(uploaded, tuple) else uploaded
@@ -70,7 +76,7 @@ def _collect_local_training_payload(
     client_logging_enabled: bool,
     trainer_name: str,
     round_idx: int,
-    round_local_steps: Optional[int],
+    round_local_steps: Any,
     global_state,
     chunk_size: int,
     num_workers_override: Optional[int],

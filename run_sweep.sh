@@ -22,9 +22,9 @@ source .venv/bin/activate
 
 # Usage examples:
 #   sbatch run_sweep.sh
-#   SWEEP_CONFIG=appfl_sim/config/sweeps/mnist_iid.yaml AGENT_COUNT=2 sbatch run_sweep.sh
+#   SWEEP_CONFIG=appfl_sim/config/sweeps/sw/mnist_iid_swucb.yaml AGENT_COUNT=2 sbatch run_sweep.sh
 #   SWEEP_PATH=entity/project/abcd1234 sbatch run_sweep.sh
-SWEEP_CONFIG="${SWEEP_CONFIG:-appfl_sim/config/sweeps/cifar10_non_iid.yaml}"
+SWEEP_CONFIG="${SWEEP_CONFIG:-appfl_sim/config/sweeps/sw/cifar10_non_iid_swucb.yaml}"
 AGENT_COUNT="${AGENT_COUNT:-1}"
 CUDA_DEVICES="${CUDA_DEVICES:-0,1,2,3}"
 SWEEP_PATH="${SWEEP_PATH:-}"
@@ -33,6 +33,18 @@ export CUDA_VISIBLE_DEVICES="${CUDA_DEVICES}"
 echo "[run_sweep] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 echo "[run_sweep] SWEEP_CONFIG=${SWEEP_CONFIG}"
 echo "[run_sweep] AGENT_COUNT=${AGENT_COUNT}"
+
+# Safety guard: multiple agents with multi-GPU visibility usually oversubscribe NCCL runs.
+GPU_TOKEN_COUNT=$(awk -F',' '{print NF}' <<< "${CUDA_VISIBLE_DEVICES}")
+if (( AGENT_COUNT > 1 )) && (( GPU_TOKEN_COUNT > 1 )); then
+  if [[ "${ALLOW_MULTI_AGENT_NCCL:-0}" != "1" ]]; then
+    echo "[run_sweep] ERROR: AGENT_COUNT=${AGENT_COUNT} with CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+    echo "[run_sweep] This can oversubscribe NCCL jobs and cause collective timeouts."
+    echo "[run_sweep] Use AGENT_COUNT=1, or set CUDA_DEVICES to one GPU (e.g., '0'),"
+    echo "[run_sweep] or explicitly override with ALLOW_MULTI_AGENT_NCCL=1."
+    exit 1
+  fi
+fi
 
 if [[ -z "${SWEEP_PATH}" ]]; then
   echo "[run_sweep] Creating a new sweep..."

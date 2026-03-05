@@ -37,3 +37,10 @@ class BaseScheduler:
         """
         del kwargs
         return self.aggregator.get_parameters()
+
+    @classmethod
+    def required_data_fields(cls) -> set[str]:
+        """
+        Declare additional config/data fields required by this scheduler.
+        """
+        return set()

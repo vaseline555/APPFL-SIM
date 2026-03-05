@@ -153,7 +153,7 @@ class ExperimentTracker:
                 "name": cfg.run_name,
                 "dir": cfg.log_dir,
                 "mode": cfg.wandb_mode,
-                "reinit": True,
+                "reinit": "finish_previous",
             }
             tags = list(dict.fromkeys(cfg.wandb_tags or []))
             if tags:

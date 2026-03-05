@@ -1,5 +1,6 @@
 from __future__ import annotations
 import ast
+import importlib
 import random
 from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
@@ -7,7 +8,7 @@ import torch
 from omegaconf import DictConfig
 from torch.utils.data import ConcatDataset, Subset, random_split
 from appfl_sim.logger import ServerAgentFileLogger
-from appfl_sim.misc.config_utils import _cfg_get, _cfg_set
+from appfl_sim.misc.config_utils import _cfg_get, _cfg_set, _resolve_algorithm_components
 
 
 def _parse_holdout_dataset_ratio(config: DictConfig) -> Optional[List[float]]:
@@ -339,29 +340,43 @@ def _resolve_client_eval_dataset(
         return val_ds if val_ds is not None else test_ds
     return test_ds if test_ds is not None else val_ds
 
-## Algorithm-specific methods
-def _validate_bandit_dataset_ratio(config: DictConfig) -> None:
-    algorithm = str(_cfg_get(config, "algorithm.name", "fedavg")).strip().lower()
-    scheduler_name = str(_cfg_get(config, "algorithm.scheduler", "")).strip().lower()
-    is_bandit = algorithm in {"swucb", "swts"} or scheduler_name in {
-        "swucbscheduler",
-        "swtsscheduler",
-    }
-    if not is_bandit:
-        return
+def _validate_required_dataset_ratio(config: DictConfig) -> None:
     ratios = _parse_holdout_dataset_ratio(config)
     if ratios is None:
         raise ValueError(
-            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` is required "
-            "and must include validation split, e.g. [80,10,10]."
+            "This scheduler requires `eval.configs.dataset_ratio` including "
+            "a validation split, e.g. [80,10,10]."
         )
     if len(ratios) < 3:
         raise ValueError(
-            "For algorithm in {swucb, swts}, `eval.configs.dataset_ratio` must have "
+            "This scheduler requires `eval.configs.dataset_ratio` with "
             "three entries (train/val/test), e.g. [80,10,10]."
         )
 
+
+def _resolve_scheduler_required_data_fields(config: DictConfig) -> set[str]:
+    components = _resolve_algorithm_components(config)
+    scheduler_name = str(components["scheduler_name"]).strip()
+    if scheduler_name == "":
+        return set()
+    module = importlib.import_module("appfl_sim.algorithm.scheduler")
+    scheduler_cls = getattr(module, scheduler_name)
+    fields = (
+        scheduler_cls.required_data_fields()
+        if hasattr(scheduler_cls, "required_data_fields")
+        else set()
+    )
+    return {str(field).strip() for field in fields if str(field).strip()}
+
+
 def _validate_algorithm_data_requirements(config: DictConfig) -> None:
-    # Keep runner decoupled from algorithm-specific checks.
-    # Extend this dispatcher as new algorithms introduce data/runtime constraints.
-    _validate_bandit_dataset_ratio(config)
+    validators = {
+        "eval.configs.dataset_ratio": _validate_required_dataset_ratio,
+    }
+    for field in sorted(_resolve_scheduler_required_data_fields(config)):
+        if field not in validators:
+            raise ValueError(
+                f"Unsupported scheduler data requirement `{field}`. "
+                "Add a corresponding validator in data_utils.py."
+            )
+        validators[field](config)

@@ -1,0 +1,26 @@
+\begin{algorithm}[t]
+\caption{(Contextual case; round-wise) Discounted LinUCB}
+\label{alg:dlinucb_round}
+\textbf{Require:} Finite action set $\mathcal A$; feature map $\varphi(\boldsymbol{x},\tau)\in\mathbb R^d$; discount factor $\gamma\in(0,1)$; ridge parameter $\alpha>0$; exploration parameter $\beta>0$.
+\begin{algorithmic}[1]
+\Procedure{\textsf{Initialize}}{}
+    \State Initialize $\boldsymbol{A}\gets \alpha \boldsymbol{I}_d$, $\boldsymbol{b}\gets 0_d$, and feature cache $C\gets \texttt{null}$.
+    \State \Return $\pi^{(0)} \triangleq \{\boldsymbol{A},\boldsymbol{b},C\}$.
+\EndProcedure
+\Procedure{\textsf{Pull}}{$t,\pi,\{\boldsymbol{x}_i^{(t-1)}\}_{i=1}^K$}
+    \State $\bar{\boldsymbol{x}} \gets \sum_{i=1}^K p_i \boldsymbol{x}_i^{(t-1)}$.
+    \State $\hat{\boldsymbol{w}} \gets \boldsymbol{A}^{-1}\boldsymbol{b}$.
+    \State $\tau^{(t)} \gets \arg\max_{\tau\in\mathcal A}\left\{\langle \varphi(\bar{\boldsymbol{x}},\tau),\hat{\boldsymbol{w}}\rangle
+    + \beta \|\varphi(\bar {\boldsymbol{x}},\tau)\|_{\boldsymbol{A}^{-1}}\right\}$.
+    \State $C \gets \varphi(\bar{\boldsymbol{x}},\tau^{(t)})$.
+    \State \Return $\tau^{(t)}$.
+\EndProcedure
+\Procedure{\textsf{Adapt}}{$r,\pi$}
+    \If{$C=\texttt{null}$} \State \Return $\pi$. \EndIf
+    \State $\psi \gets C$ and $C\gets \texttt{null}$.
+    \State $\boldsymbol{A} \gets \gamma \boldsymbol{A} + \psi\psi^\top + (1-\gamma)\alpha \boldsymbol{I}_d$.
+    \State $\boldsymbol{b} \gets \gamma \boldsymbol{b} + r\psi$.
+    \State \Return $\pi$.
+\EndProcedure
+\end{algorithmic}
+\end{algorithm}
