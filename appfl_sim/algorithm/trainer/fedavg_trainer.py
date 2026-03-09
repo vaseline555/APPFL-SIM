@@ -675,10 +675,6 @@ class FedavgTrainer(BaseTrainer):
         self._attach_split_result(result, split="test", phase="pre")
         self._attach_split_result(result, split="val", phase="post")
         self._attach_split_result(result, split="test", phase="post")
-        if "pre_val_loss" in result and "pre_train_loss" in result:
-            result["local_gen_error"] = float(
-                result["pre_val_loss"] - result["pre_train_loss"]
-            )
         return result
 
     def _evaluate_split_metrics(

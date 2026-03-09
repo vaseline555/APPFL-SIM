@@ -1,5 +1,5 @@
 import abc
-from typing import Dict, Union, OrderedDict, Tuple
+from typing import Any, Dict, Union, OrderedDict, Tuple
 
 
 class BaseAggregator:
@@ -25,3 +25,12 @@ class BaseAggregator:
     ) -> Union[Dict, OrderedDict, Tuple[Union[Dict, OrderedDict], Dict]]:
         """Return global model parameters"""
         pass
+
+    def get_round_metrics(
+        self,
+        *,
+        client_train_stats: Dict[Union[str, int], Dict[str, Any]],
+        sample_sizes: Dict[Union[str, int], int],
+    ) -> Dict[str, Any]:
+        del client_train_stats, sample_sizes
+        return {}

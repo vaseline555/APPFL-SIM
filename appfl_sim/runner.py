@@ -42,11 +42,9 @@ from appfl_sim.misc.data_utils import (
 )
 from appfl_sim.misc.learning_utils import (
     _aggregate_eval_stats,
-    _adapt_bandit_policy,
     _build_federated_eval_plan,
     _run_federated_eval_serial,
     _should_eval_round,
-    _weighted_global_stat,
 )
 from appfl_sim.misc.logging_utils import (
     _emit_client_state_policy_message,
@@ -98,27 +96,6 @@ def _assert_stateful_dataloaders_unchanged(
             )
 
 
-def _adapt_and_track_gen_reward(
-    *,
-    server,
-    round_pre_val_error: Optional[float],
-    prev_pre_val_error: Optional[float],
-    track_gen_rewards: bool,
-    cumulative_gen_reward: float,
-) -> tuple[Optional[float], Optional[float], float]:
-    round_gen_reward: Optional[float] = None
-    next_prev = prev_pre_val_error
-    next_cumulative = float(cumulative_gen_reward)
-    if round_pre_val_error is None:
-        return round_gen_reward, next_prev, next_cumulative
-    _adapt_bandit_policy(server, pre_val_error=round_pre_val_error)
-    if track_gen_rewards and prev_pre_val_error is not None:
-        round_gen_reward = float(prev_pre_val_error - round_pre_val_error)
-        next_cumulative += float(round_gen_reward)
-    next_prev = float(round_pre_val_error)
-    return round_gen_reward, next_prev, next_cumulative
-
-
 def _log_round_metrics(
     *,
     config: DictConfig,
@@ -127,14 +104,11 @@ def _log_round_metrics(
     train_client_count: int,
     stats: dict,
     scheduler_round_metrics: Optional[dict[str, Any]],
+    extra_round_metrics: Optional[dict[str, Any]],
     round_wall_time_sec: Optional[float],
-    round_gen_error: Optional[float],
     global_eval_metrics,
     federated_eval_metrics,
     federated_eval_out_metrics,
-    track_gen_rewards: bool,
-    round_gen_reward: Optional[float],
-    cumulative_gen_reward: Optional[float],
     server_logger,
     tracker,
 ) -> None:
@@ -145,16 +119,11 @@ def _log_round_metrics(
         train_client_count,
         stats,
         scheduler_round_metrics=scheduler_round_metrics,
+        extra_round_metrics=extra_round_metrics,
         round_wall_time_sec=round_wall_time_sec,
-        global_gen_error=round_gen_error,
         global_eval_metrics=global_eval_metrics,
         federated_eval_metrics=federated_eval_metrics,
         federated_eval_out_metrics=federated_eval_out_metrics,
-        track_gen_rewards=bool(track_gen_rewards),
-        round_gen_reward=round_gen_reward,
-        cumulative_gen_reward=float(cumulative_gen_reward)
-        if bool(track_gen_rewards) and cumulative_gen_reward is not None
-        else None,
         logger=server_logger,
         tracker=tracker,
     )
@@ -195,6 +164,27 @@ def _resolve_round_local_steps_by_client(
                     resolved[int(cid)] = max(1, int(value))
         return resolved or None
     return None
+
+
+def _split_round_metric_bundle(
+    bundle: Any,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not isinstance(bundle, dict):
+        return {}, {}
+    feedback = bundle.get("feedback", {})
+    logging = bundle.get("logging", {})
+    return (
+        feedback if isinstance(feedback, dict) else {},
+        logging if isinstance(logging, dict) else {},
+    )
+
+
+def _get_scheduler_round_metrics(server: Any, round_local_steps: Any) -> dict[str, Any]:
+    scheduler = getattr(server, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "get_round_metrics"):
+        return {}
+    metrics = scheduler.get_round_metrics(round_local_steps=round_local_steps)
+    return metrics if isinstance(metrics, dict) else {}
 
 
 def _run_federated_eval_serial_round(
@@ -393,11 +383,8 @@ def run_serial(config) -> None:
         config, enable_global_eval, logger=server_logger
     )
     enable_federated_eval = _cfg_bool(config, "eval.enable_federated_eval", True)
-    track_gen_rewards = _cfg_bool(config, "logging.configs.track_gen_rewards", False)
     num_rounds = int(_cfg_get(config, "train.num_rounds", 20))
     eval_every = int(_cfg_get(config, "eval.every", 1))
-    prev_pre_val_error: Optional[float] = None
-    cumulative_gen_reward: float = 0.0
 
     model = load_model(
         runtime_cfg,
@@ -534,25 +521,30 @@ def run_serial(config) -> None:
                 sample_sizes,
                 client_train_stats=stats,
             )
-            round_gen_error = _weighted_global_stat(
-                stats=stats,
-                sample_sizes=sample_sizes,
-                stat_key="local_gen_error",
-            )
-            round_pre_val_error = _weighted_global_stat(
-                stats=stats,
-                sample_sizes=sample_sizes,
-                stat_key="pre_val_loss",
-            )
-            round_gen_reward, prev_pre_val_error, cumulative_gen_reward = (
-                _adapt_and_track_gen_reward(
-                    server=server,
-                    round_pre_val_error=round_pre_val_error,
-                    prev_pre_val_error=prev_pre_val_error,
-                    track_gen_rewards=bool(track_gen_rewards),
-                    cumulative_gen_reward=float(cumulative_gen_reward),
+            aggregator_metrics_bundle = (
+                server.aggregator.get_round_metrics(
+                    client_train_stats=stats,
+                    sample_sizes=sample_sizes,
                 )
+                if getattr(server, "aggregator", None) is not None
+                and hasattr(server.aggregator, "get_round_metrics")
+                else {}
             )
+            round_feedback_metrics, round_logging_metrics = _split_round_metric_bundle(
+                aggregator_metrics_bundle
+            )
+            scheduler_feedback = (
+                server.scheduler.update_round_feedback(
+                    round_metrics=round_feedback_metrics,
+                )
+                if getattr(server, "scheduler", None) is not None
+                and hasattr(server.scheduler, "update_round_feedback")
+                else {}
+            )
+            _, scheduler_logging_metrics = _split_round_metric_bundle(
+                scheduler_feedback
+            )
+            extra_round_metrics = {**round_logging_metrics, **scheduler_logging_metrics}
             global_eval_metrics = None
             if enable_global_eval and _should_eval_round(
                 round_idx,
@@ -583,20 +575,15 @@ def run_serial(config) -> None:
                 selected_count=len(selected_ids),
                 train_client_count=len(train_client_ids),
                 stats=stats,
-                scheduler_round_metrics=(
-                    server.scheduler.get_round_metrics(round_local_steps=raw_round_local_steps)
-                    if getattr(server, "scheduler", None) is not None
-                    and hasattr(server.scheduler, "get_round_metrics")
-                    else None
+                scheduler_round_metrics=_get_scheduler_round_metrics(
+                    server,
+                    raw_round_local_steps,
                 ),
+                extra_round_metrics=extra_round_metrics,
                 round_wall_time_sec=(time.time() - round_t0),
-                round_gen_error=round_gen_error,
                 global_eval_metrics=global_eval_metrics,
                 federated_eval_metrics=federated_eval_metrics,
                 federated_eval_out_metrics=federated_eval_out_metrics,
-                track_gen_rewards=bool(track_gen_rewards),
-                round_gen_reward=round_gen_reward,
-                cumulative_gen_reward=float(cumulative_gen_reward),
                 server_logger=server_logger,
                 tracker=tracker,
             )
@@ -675,7 +662,6 @@ def run_distributed(config, backend: str) -> None:
         server_dataset
     )
     enable_federated_eval = _cfg_bool(config, "eval.enable_federated_eval", True)
-    track_gen_rewards = _cfg_bool(config, "logging.configs.track_gen_rewards", False)
     num_rounds = int(_cfg_get(config, "train.num_rounds", 20))
     eval_every = int(_cfg_get(config, "eval.every", 1))
     model = load_model(
@@ -757,8 +743,6 @@ def run_distributed(config, backend: str) -> None:
     tracker = None
     server = None
     server_logger = bootstrap_logger if rank == 0 else None
-    prev_pre_val_error: Optional[float] = None
-    cumulative_gen_reward: float = 0.0
     if rank == 0:
         _force_server_cpu_when_global_eval_disabled(
             config, enable_global_eval, logger=server_logger
@@ -873,8 +857,8 @@ def run_distributed(config, backend: str) -> None:
                 dist.gather_object(local_payload, object_gather_list=None, dst=0)
                 gathered = None
             stats = {}
-            round_gen_reward = None
-            round_gen_error = None
+            scheduler_feedback = {}
+            extra_round_metrics = {}
             if rank == 0:
                 updates: dict[int, Any] = {}
                 sample_sizes: dict[int, int] = {}
@@ -891,25 +875,30 @@ def run_distributed(config, backend: str) -> None:
                     sample_sizes,
                     client_train_stats=stats,
                 )
-                round_gen_error = _weighted_global_stat(
-                    stats=stats,
-                    sample_sizes=sample_sizes,
-                    stat_key="local_gen_error",
-                )
-                round_pre_val_error = _weighted_global_stat(
-                    stats=stats,
-                    sample_sizes=sample_sizes,
-                    stat_key="pre_val_loss",
-                )
-                round_gen_reward, prev_pre_val_error, cumulative_gen_reward = (
-                    _adapt_and_track_gen_reward(
-                        server=server,
-                        round_pre_val_error=round_pre_val_error,
-                        prev_pre_val_error=prev_pre_val_error,
-                        track_gen_rewards=bool(track_gen_rewards),
-                        cumulative_gen_reward=float(cumulative_gen_reward),
+                aggregator_metrics_bundle = (
+                    server.aggregator.get_round_metrics(
+                        client_train_stats=stats,
+                        sample_sizes=sample_sizes,
                     )
+                    if getattr(server, "aggregator", None) is not None
+                    and hasattr(server.aggregator, "get_round_metrics")
+                    else {}
                 )
+                round_feedback_metrics, round_logging_metrics = _split_round_metric_bundle(
+                    aggregator_metrics_bundle
+                )
+                scheduler_feedback = (
+                    server.scheduler.update_round_feedback(
+                        round_metrics=round_feedback_metrics,
+                    )
+                    if getattr(server, "scheduler", None) is not None
+                    and hasattr(server.scheduler, "update_round_feedback")
+                    else {}
+                )
+                _, scheduler_logging_metrics = _split_round_metric_bundle(
+                    scheduler_feedback
+                )
+                extra_round_metrics = {**round_logging_metrics, **scheduler_logging_metrics}
     
             sync_model = server.model if rank == 0 else model
             _broadcast_model_state_inplace(sync_model, src=0)
@@ -950,24 +939,19 @@ def run_distributed(config, backend: str) -> None:
                     selected_count=len(selected_ids),
                     train_client_count=len(train_client_ids),
                     stats=stats,
-                    scheduler_round_metrics=(
-                        server.scheduler.get_round_metrics(round_local_steps=raw_local_steps)
-                        if getattr(server, "scheduler", None) is not None
-                        and hasattr(server.scheduler, "get_round_metrics")
-                        else None
+                    scheduler_round_metrics=_get_scheduler_round_metrics(
+                        server,
+                        raw_local_steps,
                     ),
+                    extra_round_metrics=extra_round_metrics,
                     round_wall_time_sec=(
                         (time.time() - float(round_t0))
                         if isinstance(round_t0, (int, float))
                         else None
                     ),
-                    round_gen_error=round_gen_error,
                     global_eval_metrics=global_eval_metrics,
                     federated_eval_metrics=federated_eval_metrics,
                     federated_eval_out_metrics=federated_eval_out_metrics,
-                    track_gen_rewards=bool(track_gen_rewards),
-                    round_gen_reward=round_gen_reward,
-                    cumulative_gen_reward=float(cumulative_gen_reward),
                     server_logger=server_logger,
                     tracker=tracker,
                 )

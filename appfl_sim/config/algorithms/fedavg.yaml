@@ -43,7 +43,6 @@ loss:
   backend: auto
   path: ""
   configs: {}
-
 optimizer:
   name: SGD
   backend: auto
@@ -61,6 +60,7 @@ eval:
   every: 10
   metrics:
   - acc1
+  - acc5
   do_pre_evaluation: true
   do_post_evaluation: true
   show_eval_progress: true

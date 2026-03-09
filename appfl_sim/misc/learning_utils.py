@@ -1,5 +1,4 @@
 from __future__ import annotations
-import logging
 from typing import Dict, List, Optional
 import numpy as np
 import torch
@@ -13,8 +12,6 @@ from appfl_sim.misc.system_utils import _client_processing_chunk_size, _iter_id_
 from appfl_sim.misc.logging_utils import _new_progress
 from appfl_sim.misc.config_utils import _cfg_get
 
-LOGGER = logging.getLogger(__name__)
-
 
 def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
     every_i = int(every)
@@ -22,41 +19,6 @@ def _should_eval_round(round_idx: int, every: int, num_rounds: int) -> bool:
         # Non-positive cadence disables periodic checkpoints and keeps only final-round eval.
         return round_idx == int(num_rounds)
     return round_idx % every_i == 0 or round_idx == int(num_rounds)
-
-def _weighted_global_stat(
-    stats: dict,
-    sample_sizes: dict,
-    stat_key: str,
-) -> float | None:
-    if not stats:
-        return None
-    total = 0.0
-    accum = 0.0
-    for cid, client_stats in stats.items():
-        if not isinstance(client_stats, dict):
-            continue
-        value = client_stats.get(stat_key, None)
-        if not isinstance(value, (int, float)):
-            continue
-        weight = float(sample_sizes.get(cid, 0))
-        if weight <= 0.0:
-            weight = 1.0
-        accum += weight * float(value)
-        total += weight
-    if total <= 0.0:
-        return None
-    return float(accum / total)
-
-
-def _adapt_bandit_policy(server, pre_val_error: float):
-    scheduler = getattr(server, "scheduler", None)
-    if scheduler is None or not hasattr(scheduler, "adapt"):
-        return None
-    try:
-        return scheduler.adapt(pre_val_error=float(pre_val_error))
-    except (TypeError, ValueError, AttributeError) as exc:
-        LOGGER.debug("Scheduler.adapt failed for pre_val_error=%s: %s", pre_val_error, exc)
-        return None
 
 def _resolve_model_output(output):
     if torch.is_tensor(output):

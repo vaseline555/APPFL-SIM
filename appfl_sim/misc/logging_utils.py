@@ -517,15 +517,12 @@ def _build_round_metrics_payload(
     total_train_clients: int,
     stats,
     scheduler_round_metrics: Optional[Dict[str, Any]],
+    extra_round_metrics: Optional[Dict[str, Any]],
     round_wall_time_sec: Optional[float],
-    global_gen_error: Optional[float],
     global_eval_metrics: Optional[Dict[str, float]],
     federated_eval_metrics: Optional[Dict[str, float]],
     federated_eval_in_metrics: Optional[Dict[str, float]],
     federated_eval_out_metrics: Optional[Dict[str, float]],
-    track_gen_rewards: bool,
-    round_gen_reward: Optional[float],
-    cumulative_gen_reward: Optional[float],
 ) -> _RoundMetricsPayload:
     eval_metric_order = parse_metric_names(_cfg_get(config, "eval.metrics", None))
     if not eval_metric_order:
@@ -580,18 +577,12 @@ def _build_round_metrics_payload(
                 "std": float(np.std(vals)),
             }
 
-    if isinstance(global_gen_error, (int, float)):
-        round_metrics["global_gen_error"] = float(global_gen_error)
-
-    if track_gen_rewards:
-        round_metrics["gen_reward"] = {
-            "round": float(round_gen_reward)
-            if isinstance(round_gen_reward, (int, float))
-            else None,
-            "cumulative": float(cumulative_gen_reward)
-            if isinstance(cumulative_gen_reward, (int, float))
-            else None,
-        }
+    if isinstance(extra_round_metrics, dict):
+        for key, value in extra_round_metrics.items():
+            if isinstance(value, dict):
+                round_metrics[str(key)] = value
+            elif isinstance(value, (int, float)):
+                round_metrics[str(key)] = float(value)
 
     def _maybe_add_eval_block(
         json_key: str,
@@ -741,15 +732,12 @@ def _log_round(
     total_train_clients: int,
     stats,
     scheduler_round_metrics: Optional[Dict[str, Any]] = None,
+    extra_round_metrics: Optional[Dict[str, Any]] = None,
     round_wall_time_sec: Optional[float] = None,
-    global_gen_error: Optional[float] = None,
     global_eval_metrics: Optional[Dict[str, float]] = None,
     federated_eval_metrics: Optional[Dict[str, float]] = None,
     federated_eval_in_metrics: Optional[Dict[str, float]] = None,
     federated_eval_out_metrics: Optional[Dict[str, float]] = None,
-    track_gen_rewards: bool = False,
-    round_gen_reward: Optional[float] = None,
-    cumulative_gen_reward: Optional[float] = None,
     logger: ServerAgentFileLogger | None = None,
     tracker=None,
 ):
@@ -759,15 +747,12 @@ def _log_round(
         total_train_clients=total_train_clients,
         stats=stats,
         scheduler_round_metrics=scheduler_round_metrics,
+        extra_round_metrics=extra_round_metrics,
         round_wall_time_sec=round_wall_time_sec,
-        global_gen_error=global_gen_error,
         global_eval_metrics=global_eval_metrics,
         federated_eval_metrics=federated_eval_metrics,
         federated_eval_in_metrics=federated_eval_in_metrics,
         federated_eval_out_metrics=federated_eval_out_metrics,
-        track_gen_rewards=track_gen_rewards,
-        round_gen_reward=round_gen_reward,
-        cumulative_gen_reward=cumulative_gen_reward,
     )
     lines = _render_round_summary_lines(round_metrics)
     log = "\n".join(lines)

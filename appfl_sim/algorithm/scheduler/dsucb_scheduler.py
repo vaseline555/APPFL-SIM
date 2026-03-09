@@ -90,6 +90,38 @@ class _AdaptiveLocalStepSupport:
             return {}
         return {"policy": policy_metrics}
 
+    def update_round_feedback(
+        self,
+        *,
+        round_metrics: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        pre_val_error = round_metrics.get("pre_val_loss", None)
+        round_reward = None
+        if isinstance(pre_val_error, (int, float)) and hasattr(self, "adapt"):
+            round_reward = self.adapt(pre_val_error=float(pre_val_error))
+
+        track_gen_rewards = bool(
+            self.scheduler_configs.get("track_gen_rewards", True)
+        )
+        if not track_gen_rewards:
+            return {"logging": {}}
+        if not hasattr(self, "_cumulative_gen_reward"):
+            self._cumulative_gen_reward = 0.0
+        if isinstance(round_reward, (int, float)):
+            self._cumulative_gen_reward = float(self._cumulative_gen_reward) + float(
+                round_reward
+            )
+        return {
+            "logging": {
+                "gen_reward": {
+                    "round": float(round_reward)
+                    if isinstance(round_reward, (int, float))
+                    else None,
+                    "cumulative": float(self._cumulative_gen_reward),
+                }
+            }
+        }
+
 
 class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
     """

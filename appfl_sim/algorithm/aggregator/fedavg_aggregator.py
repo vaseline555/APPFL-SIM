@@ -293,3 +293,56 @@ class FedavgAggregator(BaseAggregator):
                         self.step[name] += weight * (
                             model[name] - self.global_state[name]
                         )
+
+    @staticmethod
+    def _weighted_stat(
+        stats: Dict[Union[str, int], Dict[str, Any]],
+        sample_sizes: Dict[Union[str, int], int],
+        stat_key: str,
+    ) -> Optional[float]:
+        if not stats:
+            return None
+        total = 0.0
+        accum = 0.0
+        for cid, client_stats in stats.items():
+            if not isinstance(client_stats, dict):
+                continue
+            value = client_stats.get(stat_key, None)
+            if not isinstance(value, (int, float)):
+                continue
+            weight = float(sample_sizes.get(cid, 0))
+            if weight <= 0.0:
+                weight = 1.0
+            accum += weight * float(value)
+            total += weight
+        if total <= 0.0:
+            return None
+        return float(accum / total)
+
+    def get_round_metrics(
+        self,
+        *,
+        client_train_stats: Dict[Union[str, int], Dict[str, Any]],
+        sample_sizes: Dict[Union[str, int], int],
+    ) -> Dict[str, Any]:
+        feedback_metrics: Dict[str, Any] = {}
+        logging_metrics: Dict[str, Any] = {}
+        global_gen_error = self._weighted_stat(
+            client_train_stats,
+            sample_sizes,
+            "local_gen_error",
+        )
+        if isinstance(global_gen_error, (int, float)):
+            logging_metrics["global_gen_error"] = float(global_gen_error)
+
+        pre_val_loss = self._weighted_stat(
+            client_train_stats,
+            sample_sizes,
+            "pre_val_loss",
+        )
+        if isinstance(pre_val_loss, (int, float)):
+            feedback_metrics["pre_val_loss"] = float(pre_val_loss)
+        return {
+            "feedback": feedback_metrics,
+            "logging": logging_metrics,
+        }

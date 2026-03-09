@@ -1,5 +1,5 @@
-from appfl_sim.algorithm.trainer.fedavg_trainer import FedavgTrainer
+from appfl_sim.algorithm.trainer.dsucb_trainer import DsucbTrainer
 
 
-class DslinucbRTrainer(FedavgTrainer):
+class DslinucbRTrainer(DsucbTrainer):
     pass
