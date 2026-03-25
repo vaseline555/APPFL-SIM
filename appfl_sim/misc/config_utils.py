@@ -314,6 +314,18 @@ def _build_train_cfg(
         local_epochs = max(1, local_epochs)
     optimizer_configs = _cfg_to_dict(_cfg_get(config, "optimizer.configs", {}))
     loss_configs = _cfg_to_dict(_cfg_get(config, "loss.configs", {}))
+    raw_lr_milestones = _cfg_get(config, "optimizer.lr_decay.milestones", [])
+    if raw_lr_milestones is None:
+        lr_milestones: Any = []
+    elif isinstance(raw_lr_milestones, str):
+        lr_milestones = raw_lr_milestones
+    elif OmegaConf.is_list(raw_lr_milestones) or isinstance(
+        raw_lr_milestones, (list, tuple)
+    ):
+        lr_milestones = list(raw_lr_milestones)
+    else:
+        lr_milestones = raw_lr_milestones
+
     train_cfg = {
         "device": device,
         "mode": mode,
@@ -339,6 +351,8 @@ def _build_train_cfg(
                 "enable": _cfg_bool(config, "optimizer.lr_decay.enable", False),
                 "type": str(_cfg_get(config, "optimizer.lr_decay.type", "none")),
                 "gamma": float(_cfg_get(config, "optimizer.lr_decay.gamma", 0.99)),
+                "step_size": int(_cfg_get(config, "optimizer.lr_decay.step_size", 1)),
+                "milestones": lr_milestones,
                 "t_max": int(_cfg_get(config, "optimizer.lr_decay.t_max", 0)),
                 "eta_min": float(_cfg_get(config, "optimizer.lr_decay.eta_min", 0.0)),
                 "min_lr": float(_cfg_get(config, "optimizer.lr_decay.min_lr", 0.0)),

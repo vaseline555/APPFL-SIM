@@ -141,18 +141,18 @@ def _resolve_round_local_steps_by_client(
         for cid in selected_ids:
             value = scheduler.resolve_client_local_steps(round_local_steps, int(cid))
             if isinstance(value, (int, float, np.integer, np.floating)):
-                resolved[int(cid)] = max(1, int(value))
+                resolved[int(cid)] = max(0, int(value))
         return resolved or None
 
     if isinstance(round_local_steps, (int, float, np.integer, np.floating)):
-        step = max(1, int(round_local_steps))
+        step = max(0, int(round_local_steps))
         return {int(cid): int(step) for cid in selected_ids}
 
     if isinstance(round_local_steps, dict):
         for cid in selected_ids:
             value = round_local_steps.get(int(cid), round_local_steps.get(str(int(cid))))
             if isinstance(value, (int, float, np.integer, np.floating)):
-                resolved[int(cid)] = max(1, int(value))
+                resolved[int(cid)] = max(0, int(value))
         return resolved or None
 
     if isinstance(round_local_steps, (list, tuple, np.ndarray)):
@@ -161,7 +161,7 @@ def _resolve_round_local_steps_by_client(
             if 0 <= idx < len(round_local_steps):
                 value = round_local_steps[idx]
                 if isinstance(value, (int, float, np.integer, np.floating)):
-                    resolved[int(cid)] = max(1, int(value))
+                    resolved[int(cid)] = max(0, int(value))
         return resolved or None
     return None
 

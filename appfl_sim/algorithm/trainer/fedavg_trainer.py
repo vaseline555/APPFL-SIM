@@ -552,7 +552,7 @@ class FedavgTrainer(BaseTrainer):
         round_local_budget = kwargs.get("local_steps", None)
         if round_local_budget is not None:
             try:
-                round_local_budget = max(1, int(round_local_budget))
+                round_local_budget = max(0, int(round_local_budget))
             except Exception:
                 round_local_budget = None
 

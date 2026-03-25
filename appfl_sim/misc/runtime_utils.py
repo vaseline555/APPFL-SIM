@@ -50,7 +50,7 @@ def _run_local_client_update(
     if isinstance(round_local_steps, dict):
         value = round_local_steps.get(int(client.id), round_local_steps.get(str(int(client.id))))
         if isinstance(value, (int, float, np.integer, np.floating)):
-            local_steps = max(1, int(value))
+            local_steps = max(0, int(value))
     if local_steps is None:
         train_result = client.train(round=round_idx)
     else:

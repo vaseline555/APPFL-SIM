@@ -22,7 +22,7 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             {
                 int(x)
                 for x in scheduler_configs.get("action_space", [1, 2, 4, 8])
-                if int(x) > 0
+                if int(x) >= 0
             }
         )
         if not self.action_space:
@@ -144,6 +144,9 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             self.prev_pre_val_error = current
         else:
             reward_value = float(reward)
+
+        selected_tau = int(self.last_selected_action) if self.C is not None else None
+        reward_value = self._apply_cost_reward(reward_value, selected_tau)
 
         self.last_reward = float(reward_value)
 

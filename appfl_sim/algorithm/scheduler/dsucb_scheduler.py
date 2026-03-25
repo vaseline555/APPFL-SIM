@@ -9,16 +9,58 @@ from appfl_sim.algorithm.scheduler.fedavg_scheduler import FedavgScheduler
 
 
 class _AdaptiveLocalStepSupport:
+    @staticmethod
+    def _clamp_reward_value(value: float) -> float:
+        return float(min(0.1, max(-0.1, float(value))))
+
+    def _apply_cost_reward(
+        self,
+        reward_value: float,
+        selected_steps: int | Sequence[int] | None,
+    ) -> float:
+        adjusted = float(reward_value)
+        if not bool(self.scheduler_configs.get("add_cost_reward", False)):
+            return self._clamp_reward_value(adjusted)
+        cost_reward_lambda = float(
+            self.scheduler_configs.get("cost_reward_lambda", 0.01)
+        )
+        if cost_reward_lambda <= 0.0:
+            return self._clamp_reward_value(adjusted)
+
+        action_space = getattr(self, "action_space", None)
+        if not isinstance(action_space, Sequence) or len(action_space) == 0:
+            return self._clamp_reward_value(adjusted)
+        tau_max = max(int(x) for x in action_space if int(x) > 0)
+        if tau_max <= 0:
+            return self._clamp_reward_value(adjusted)
+
+        if selected_steps is None:
+            return self._clamp_reward_value(adjusted)
+        if isinstance(selected_steps, Sequence) and not isinstance(
+            selected_steps, (str, bytes)
+        ):
+            values = [int(x) for x in selected_steps if int(x) > 0]
+            if not values:
+                return self._clamp_reward_value(adjusted)
+            tau_value = float(sum(values)) / float(len(values))
+        else:
+            tau_value = float(int(selected_steps))
+            if tau_value <= 0.0:
+                return self._clamp_reward_value(adjusted)
+
+        adjusted -= cost_reward_lambda * (float(tau_value) / float(tau_max))
+        return self._clamp_reward_value(adjusted)
+
     @classmethod
     def required_data_fields(cls) -> set[str]:
         return {"eval.configs.dataset_ratio"}
 
     @staticmethod
-    def _coerce_positive_int(value: Any) -> Optional[int]:
+    def _coerce_nonnegative_int(value: Any) -> Optional[int]:
         try:
             if isinstance(value, numbers.Real):
                 parsed = int(value)
-                return max(1, parsed)
+                return max(0, parsed)
         except Exception:
             return None
         return None
@@ -32,7 +74,7 @@ class _AdaptiveLocalStepSupport:
         if round_local_steps is None:
             return None
 
-        scalar = cls._coerce_positive_int(round_local_steps)
+        scalar = cls._coerce_nonnegative_int(round_local_steps)
         if scalar is not None:
             return scalar
 
@@ -42,7 +84,7 @@ class _AdaptiveLocalStepSupport:
                 value = round_local_steps.get(int(client_id))
             elif str(int(client_id)) in round_local_steps:
                 value = round_local_steps.get(str(int(client_id)))
-            return cls._coerce_positive_int(value)
+            return cls._coerce_nonnegative_int(value)
 
         if isinstance(round_local_steps, Sequence) and not isinstance(
             round_local_steps, (str, bytes, dict)
@@ -50,13 +92,13 @@ class _AdaptiveLocalStepSupport:
             idx = int(client_id)
             if idx < 0 or idx >= len(round_local_steps):
                 return None
-            return cls._coerce_positive_int(round_local_steps[idx])
+            return cls._coerce_nonnegative_int(round_local_steps[idx])
 
         return None
 
     @classmethod
     def summarize_round_local_steps(cls, round_local_steps: Any) -> Dict[str, float | int]:
-        scalar = cls._coerce_positive_int(round_local_steps)
+        scalar = cls._coerce_nonnegative_int(round_local_steps)
         if scalar is not None:
             return {"tau_t": int(scalar)}
 
@@ -71,7 +113,7 @@ class _AdaptiveLocalStepSupport:
             source = []
 
         for value in source:
-            parsed = cls._coerce_positive_int(value)
+            parsed = cls._coerce_nonnegative_int(value)
             if parsed is not None:
                 values.append(int(parsed))
         if not values:
@@ -136,7 +178,7 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             {
                 int(x)
                 for x in scheduler_configs.get("action_space", [1, 2, 4, 8])
-                if int(x) > 0
+                if int(x) >= 0
             }
         )
         if not self.action_space:
@@ -203,6 +245,9 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             self.prev_pre_val_error = current
         else:
             reward_value = float(reward)
+
+        chosen = int(self.C) if self.C is not None else None
+        reward_value = self._apply_cost_reward(reward_value, chosen)
 
         self.last_reward = float(reward_value)
 

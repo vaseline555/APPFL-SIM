@@ -65,6 +65,18 @@ def _safe_split_lengths(n: int, ratios: List[float]) -> List[int]:
     return lengths
 
 
+def _splits_have_nonempty_parts(splits, expected_parts: int) -> bool:
+    if splits is None or len(splits) < int(expected_parts):
+        return False
+    for idx in range(int(expected_parts)):
+        try:
+            if int(len(splits[idx])) <= 0:
+                return False
+        except Exception:
+            return False
+    return True
+
+
 def _dataset_targets(dataset) -> Optional[np.ndarray]:
     def _as_label_array(value) -> Optional[np.ndarray]:
         if value is None:
@@ -246,7 +258,9 @@ def _apply_holdout_dataset_ratio(
             ratios=ratios,
             seed=split_seed,
         )
-        if splits is None:
+        if splits is None or (
+            total >= len(ratios) and not _splits_have_nonempty_parts(splits, len(ratios))
+        ):
             lengths = _safe_split_lengths(total, ratios)
             generator = torch.Generator().manual_seed(split_seed)
             splits = random_split(merged, lengths, generator=generator)

@@ -21,7 +21,7 @@ class DstsScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             {
                 int(x)
                 for x in scheduler_configs.get("action_space", [1, 2, 4, 8])
-                if int(x) > 0
+                if int(x) >= 0
             }
         )
         if not self.action_space:
@@ -82,6 +82,9 @@ class DstsScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             self.prev_pre_val_error = current
         else:
             reward_value = float(reward)
+
+        chosen = int(self.C) if self.C is not None else None
+        reward_value = self._apply_cost_reward(reward_value, chosen)
 
         self.last_reward = float(reward_value)
 

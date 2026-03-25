@@ -12,11 +12,11 @@ parameters:
     value: appfl_sim/config/adaptive_local_steps/cifar10_iid/dslints_c.yaml
 
   discount_gamma:
-    values: [0.95, 0.99, 0.995]
+    values: [0.5, 0.9, 0.99, 0.995, 0.999]
   ridge_alpha:
-    values: [0.1, 1.0, 10.0]
+    values: [0.01, 0.1, 1.0, 10.0]
   noise_beta:
-    values: [1e-3, 1e-2, 1e-1]
+    values: [1e-3, 1e-2, 1e-1, 1.0]
   context_dim:
     value: 1
 
