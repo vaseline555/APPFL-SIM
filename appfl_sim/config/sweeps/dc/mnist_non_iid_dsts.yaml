@@ -1,0 +1,24 @@
+# WandB sweep: MNIST non-IID (pathological) - dsts
+program: tools/wandb_sweep_bandit.py
+method: random
+metric:
+  name: test/global_eval_acc1
+  goal: maximize
+
+parameters:
+  scheduler:
+    value: dsts
+  config_path_dsts:
+    value: appfl_sim/config/adaptive_local_steps/mnist_patho/dsts.yaml
+
+  discount_gamma:
+    values: [0.95, 0.99, 0.995]
+  posterior_variance:
+    values: [1e-6, 1e-5, 1e-4]
+  prior_variance:
+    values: [1e-5, 1e-3]
+
+  seed:
+    values: [0]
+  wandb_entity:
+    value: "vaseline555"

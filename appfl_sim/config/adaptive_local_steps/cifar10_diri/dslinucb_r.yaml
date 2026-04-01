@@ -1,0 +1,86 @@
+experiment:
+  name: GenFL_Discounted
+  seed: 42
+  device: cuda
+  server_device: cuda
+  backend: nccl
+  stateful: false
+dataset:
+  path: ./data
+  name: CIFAR10
+  backend: torchvision
+  download: true
+split:
+  type: dirichlet
+  configs:
+    dirichlet_alpha: 0.01
+model:
+  name: TwoCNN
+  backend: custom
+train:
+  num_rounds: 500
+  num_clients: 10
+  num_sampled_clients: 10
+  update_base: iter
+  local_iters: 100
+  batch_size: 32
+  shuffle: true
+  eval_batch_size: 256
+algorithm:
+  name: dslinucb_r
+  mix_coefs: sample_ratio
+  optimize_memory: true
+  aggregator: DslinucbRAggregator
+  scheduler: DslinucbRScheduler
+  trainer: DslinucbRTrainer
+  aggregator_kwargs:
+    client_weights_mode: sample_ratio
+  scheduler_kwargs:
+    action_space: [50, 100, 200, 400]
+    add_cost_reward: false
+    cost_reward_lambda: 0.01
+    discount_gamma: 0.99
+    ridge_alpha: 0.1
+    exploration_beta: 0.01
+    context_dim: 1
+  trainer_kwargs: {}
+loss:
+  name: CrossEntropyLoss
+  backend: torch
+optimizer:
+  name: SGD
+  backend: auto
+  lr: 0.01
+  lr_decay:
+    enable: true
+    type: step
+    gamma: 0.1
+    step_size: 400
+  clip_grad_norm: 0.0
+  configs:
+    weight_decay: 0.0
+    momentum: 0.0
+eval:
+  every: 10
+  metrics:
+  - acc1
+  do_pre_evaluation: true
+  do_post_evaluation: true
+  show_eval_progress: true
+  enable_global_eval: true
+  enable_federated_eval: true
+  configs:
+    scheme: dataset
+    dataset_ratio:
+    - 80
+    - 10
+    - 10
+logging:
+  path: ./logs
+  name: cifar10_diri_dslinucb_r
+  backend: wandb
+  type: both
+  configs:
+    track_gen_rewards: true
+    wandb_mode: online
+    wandb_entity: ""

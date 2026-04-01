@@ -1,0 +1,22 @@
+# WandB sweep: MNIST IID - dsucb
+program: tools/wandb_sweep_bandit.py
+method: random
+metric:
+  name: test/global_eval_acc1
+  goal: maximize
+
+parameters:
+  scheduler:
+    value: dsucb
+  config_path_dsucb:
+    value: appfl_sim/config/adaptive_local_steps/mnist_iid/dsucb.yaml
+
+  discount_gamma:
+    values: [0.95, 0.99, 0.995]
+  exploration_alpha:
+    values: [1e-4, 1e-3, 1e-2]
+
+  seed:
+    values: [0]
+  wandb_entity:
+    value: "vaseline555"
