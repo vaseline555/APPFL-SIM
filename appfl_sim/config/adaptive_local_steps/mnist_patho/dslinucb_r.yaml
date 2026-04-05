@@ -37,12 +37,10 @@ algorithm:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
     action_space: [25, 50, 200, 400]
-    add_cost_reward: false
-    cost_reward_lambda: 0.01
     discount_gamma: 0.99
     ridge_alpha: 1.0
     exploration_beta: 1.0
-    context_dim: 1
+    context_dim: 2
   trainer_kwargs: {}
 loss:
   name: CrossEntropyLoss

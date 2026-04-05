@@ -38,6 +38,19 @@ class BaseScheduler:
         del kwargs
         return self.aggregator.get_parameters()
 
+    def get_client_contexts(
+        self,
+        *,
+        selected_ids=None,
+        round_idx: int | None = None,
+    ) -> Dict[Union[int, str], Dict[str, Any]] | None:
+        """
+        Optionally provide extra per-client payloads alongside the shared global model.
+        Algorithms such as SCAFFOLD can override this to broadcast auxiliary state.
+        """
+        del selected_ids, round_idx
+        return None
+
     @classmethod
     def required_data_fields(cls) -> set[str]:
         """

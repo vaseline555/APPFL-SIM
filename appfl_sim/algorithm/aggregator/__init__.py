@@ -1,7 +1,9 @@
 from .base_aggregator import BaseAggregator
 from .fedavg_aggregator import FedavgAggregator
-from .swts_aggregator import SwtsAggregator
-from .swucb_aggregator import SwucbAggregator
+from .fedprox_aggregator import FedproxAggregator
+from .fednova_aggregator import FednovaAggregator
+from .fedadam_aggregator import FedadamAggregator
+from .scaffold_aggregator import ScaffoldAggregator
 from .dsucb_aggregator import DsucbAggregator
 from .dsts_aggregator import DstsAggregator
 from .dslinucb_r_aggregator import DslinucbRAggregator
@@ -12,8 +14,10 @@ from .dslints_c_aggregator import DslintsCAggregator
 __all__ = [
     "BaseAggregator",
     "FedavgAggregator",
-    "SwtsAggregator",
-    "SwucbAggregator",
+    "FedproxAggregator",
+    "FednovaAggregator",
+    "FedadamAggregator",
+    "ScaffoldAggregator",
     "DsucbAggregator",
     "DstsAggregator",
     "DslinucbRAggregator",

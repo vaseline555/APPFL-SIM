@@ -52,6 +52,54 @@ class FedavgAggregator(BaseAggregator):
 
         self.step = {}
 
+    @staticmethod
+    def _unwrap_local_model_payload(payload):
+        if isinstance(payload, tuple) and len(payload) > 0:
+            candidate = payload[0]
+            if isinstance(candidate, (dict, OrderedDict)):
+                return candidate
+        return payload
+
+    def _normalize_local_models(
+        self, local_models: Dict[Union[str, int], Union[Dict, OrderedDict, tuple]]
+    ) -> Dict[Union[str, int], Union[Dict, OrderedDict]]:
+        normalized = {}
+        for client_id, payload in local_models.items():
+            model_state = self._unwrap_local_model_payload(payload)
+            if isinstance(model_state, (dict, OrderedDict)):
+                normalized[client_id] = model_state
+        return normalized
+
+    def _initialize_global_state(
+        self,
+        local_models: Dict[Union[str, int], Union[Dict, OrderedDict]],
+    ) -> None:
+        if self.global_state is not None or not local_models:
+            return
+        if self.model is not None:
+            self.global_state = {}
+            model_state = self.model.state_dict()
+            first_model = list(local_models.values())[0]
+            with torch.no_grad():
+                for name, tensor in first_model.items():
+                    source = model_state[name] if name in model_state else tensor
+                    self.global_state[name] = source.detach().clone()
+            gc.collect()
+            return
+
+        if self.optimize_memory:
+            self.global_state = {}
+            with torch.no_grad():
+                for name, tensor in list(local_models.values())[0].items():
+                    self.global_state[name] = tensor.detach().clone()
+            gc.collect()
+            return
+
+        self.global_state = {
+            name: tensor.detach().clone()
+            for name, tensor in list(local_models.values())[0].items()
+        }
+
     def _client_weight(self, client_id, total_clients: int) -> float:
         mode = str(self.client_weights_mode).strip().lower()
         if mode == "uniform":
@@ -100,6 +148,7 @@ class FedavgAggregator(BaseAggregator):
         """
         Take the weighted average of local models from clients and return the global model.
         """
+        local_models = self._normalize_local_models(local_models)
         if not local_models:
             return self.get_parameters()
 
@@ -166,28 +215,7 @@ class FedavgAggregator(BaseAggregator):
                 return {k: v.clone() for k, v in self.global_state.items()}
 
         # Memory optimization: Initialize global state efficiently
-        if self.global_state is None:
-            if self.model is not None:
-                self.global_state = {}
-                model_state = self.model.state_dict()
-                first_model = list(local_models.values())[0]
-                with torch.no_grad():
-                    for name, tensor in first_model.items():
-                        source = model_state[name] if name in model_state else tensor
-                        self.global_state[name] = source.detach().clone()
-                gc.collect()
-            else:
-                if self.optimize_memory:
-                    self.global_state = {}
-                    with torch.no_grad():
-                        for name, tensor in list(local_models.values())[0].items():
-                            self.global_state[name] = tensor.detach().clone()
-                    gc.collect()
-                else:
-                    self.global_state = {
-                        name: tensor.detach().clone()
-                        for name, tensor in list(local_models.values())[0].items()
-                    }
+        self._initialize_global_state(local_models)
 
         self.compute_steps(local_models)
 

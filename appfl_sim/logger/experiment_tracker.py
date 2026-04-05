@@ -104,19 +104,20 @@ class ExperimentTracker:
         self._metrics_json_path = None
         self._metrics_records: list[dict[str, Any]] = []
 
+        run_dir = Path(cfg.log_dir) / cfg.project_name / cfg.run_name / run_id_text
+        run_dir.mkdir(parents=True, exist_ok=True)
+        self._metrics_json_path = run_dir / "metrics.json"
+        if self._metrics_json_path.exists():
+            try:
+                content = json.loads(
+                    self._metrics_json_path.read_text(encoding="utf-8")
+                )
+                if isinstance(content, list):
+                    self._metrics_records = content
+            except Exception:
+                self._metrics_records = []
+
         if self.backend in {"none", "file", "console"}:
-            run_dir = Path(cfg.log_dir) / cfg.project_name / cfg.run_name / run_id_text
-            run_dir.mkdir(parents=True, exist_ok=True)
-            self._metrics_json_path = run_dir / "metrics.json"
-            if self._metrics_json_path.exists():
-                try:
-                    content = json.loads(
-                        self._metrics_json_path.read_text(encoding="utf-8")
-                    )
-                    if isinstance(content, list):
-                        self._metrics_records = content
-                except Exception:
-                    self._metrics_records = []
             return
 
         if self.backend == "tensorboard":
@@ -128,8 +129,6 @@ class ExperimentTracker:
                     "Install with: pip install tensorboard"
                 ) from e
 
-            run_dir = Path(cfg.log_dir) / cfg.project_name / cfg.run_name / run_id_text
-            run_dir.mkdir(parents=True, exist_ok=True)
             self._writer = SummaryWriter(log_dir=str(run_dir))
             return
 
@@ -220,9 +219,7 @@ class ExperimentTracker:
     def log_metrics(self, step: int, metrics: Dict[str, Any]) -> None:
         if not metrics:
             return
-        if self.backend in {"none", "file", "console"}:
-            if self._metrics_json_path is None:
-                return
+        if self._metrics_json_path is not None:
             payload = {
                 "round": int(step),
                 "metrics": self._to_json_compatible(metrics),
@@ -232,6 +229,7 @@ class ExperimentTracker:
                 json.dumps(self._metrics_records, indent=4, ensure_ascii=False),
                 encoding="utf-8",
             )
+        if self.backend in {"none", "file", "console"}:
             return
         if self.backend == "tensorboard" and self._writer is not None:
             for key, val in self._flatten_numeric_metrics(metrics).items():

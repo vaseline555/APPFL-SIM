@@ -1,6 +1,6 @@
 import math
 import numbers
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Union
 
 from omegaconf import DictConfig
 
@@ -9,48 +9,6 @@ from appfl_sim.algorithm.scheduler.fedavg_scheduler import FedavgScheduler
 
 
 class _AdaptiveLocalStepSupport:
-    @staticmethod
-    def _clamp_reward_value(value: float) -> float:
-        return float(min(0.1, max(-0.1, float(value))))
-
-    def _apply_cost_reward(
-        self,
-        reward_value: float,
-        selected_steps: int | Sequence[int] | None,
-    ) -> float:
-        adjusted = float(reward_value)
-        if not bool(self.scheduler_configs.get("add_cost_reward", False)):
-            return self._clamp_reward_value(adjusted)
-        cost_reward_lambda = float(
-            self.scheduler_configs.get("cost_reward_lambda", 0.01)
-        )
-        if cost_reward_lambda <= 0.0:
-            return self._clamp_reward_value(adjusted)
-
-        action_space = getattr(self, "action_space", None)
-        if not isinstance(action_space, Sequence) or len(action_space) == 0:
-            return self._clamp_reward_value(adjusted)
-        tau_max = max(int(x) for x in action_space if int(x) > 0)
-        if tau_max <= 0:
-            return self._clamp_reward_value(adjusted)
-
-        if selected_steps is None:
-            return self._clamp_reward_value(adjusted)
-        if isinstance(selected_steps, Sequence) and not isinstance(
-            selected_steps, (str, bytes)
-        ):
-            values = [int(x) for x in selected_steps if int(x) > 0]
-            if not values:
-                return self._clamp_reward_value(adjusted)
-            tau_value = float(sum(values)) / float(len(values))
-        else:
-            tau_value = float(int(selected_steps))
-            if tau_value <= 0.0:
-                return self._clamp_reward_value(adjusted)
-
-        adjusted -= cost_reward_lambda * (float(tau_value) / float(tau_max))
-        return self._clamp_reward_value(adjusted)
-
     @classmethod
     def required_data_fields(cls) -> set[str]:
         return {"eval.configs.dataset_ratio"}
@@ -136,7 +94,13 @@ class _AdaptiveLocalStepSupport:
         self,
         *,
         round_metrics: Dict[str, Any],
+        client_train_stats: Optional[Dict[Union[str, int], Dict[str, Any]]] = None,
+        sample_sizes: Optional[Dict[Union[str, int], int]] = None,
     ) -> Dict[str, Any]:
+        self._store_client_context_feedback(
+            client_train_stats=client_train_stats,
+            sample_sizes=sample_sizes,
+        )
         pre_val_error = round_metrics.get("pre_val_loss", None)
         round_reward = None
         if isinstance(pre_val_error, (int, float)) and hasattr(self, "adapt"):
@@ -245,9 +209,6 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             self.prev_pre_val_error = current
         else:
             reward_value = float(reward)
-
-        chosen = int(self.C) if self.C is not None else None
-        reward_value = self._apply_cost_reward(reward_value, chosen)
 
         self.last_reward = float(reward_value)
 

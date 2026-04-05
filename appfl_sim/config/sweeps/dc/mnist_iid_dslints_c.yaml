@@ -18,7 +18,7 @@ parameters:
   noise_beta:
     values: [1e-3, 1e-2, 1e-1]
   context_dim:
-    value: 1
+    value: 2
 
   seed:
     values: [0]

@@ -1,7 +1,9 @@
 from .base_scheduler import BaseScheduler
 from .fedavg_scheduler import FedavgScheduler
-from .swucb_scheduler import SwucbScheduler
-from .swts_scheduler import SwtsScheduler
+from .fedprox_scheduler import FedproxScheduler
+from .fednova_scheduler import FednovaScheduler
+from .fedadam_scheduler import FedadamScheduler
+from .scaffold_scheduler import ScaffoldScheduler
 from .dsucb_scheduler import DsucbScheduler
 from .dsts_scheduler import DstsScheduler
 from .dslinucb_r_scheduler import DslinucbRScheduler
@@ -12,8 +14,10 @@ from .dslints_c_scheduler import DslintsCScheduler
 __all__ = [
     "BaseScheduler",
     "FedavgScheduler",
-    "SwucbScheduler",
-    "SwtsScheduler",
+    "FedproxScheduler",
+    "FednovaScheduler",
+    "FedadamScheduler",
+    "ScaffoldScheduler",
     "DsucbScheduler",
     "DstsScheduler",
     "DslinucbRScheduler",

@@ -185,6 +185,22 @@ def _get_scheduler_round_metrics(server: Any, round_local_steps: Any) -> dict[st
     return metrics if isinstance(metrics, dict) else {}
 
 
+def _get_scheduler_client_contexts(
+    server: Any,
+    *,
+    selected_ids: list[int],
+    round_idx: int,
+) -> dict[int, dict[str, Any]] | None:
+    scheduler = getattr(server, "scheduler", None)
+    if scheduler is None or not hasattr(scheduler, "get_client_contexts"):
+        return None
+    contexts = scheduler.get_client_contexts(
+        selected_ids=selected_ids,
+        round_idx=int(round_idx),
+    )
+    return contexts if isinstance(contexts, dict) and contexts else None
+
+
 def _resolve_round_tau_increment(
     scheduler_round_metrics: Optional[dict[str, Any]],
 ) -> int:
@@ -497,13 +513,22 @@ def run_serial(config) -> None:
                 train_client_ids=train_client_ids,
                 num_sampled_clients=int(num_sampled_clients),
             )
-            raw_round_local_steps = _select_round_local_steps(server, round_idx)
+            raw_round_local_steps = _select_round_local_steps(
+                server,
+                round_idx,
+                selected_ids=selected_ids,
+            )
             round_local_steps = _resolve_round_local_steps_by_client(
                 getattr(server, "scheduler", None),
                 raw_round_local_steps,
                 selected_ids,
             )
             global_state = server.model.state_dict()
+            client_contexts = _get_scheduler_client_contexts(
+                server,
+                selected_ids=selected_ids,
+                round_idx=round_idx,
+            )
 
             _assert_stateful_dataloaders_unchanged(
                 persistent_clients=persistent_clients,
@@ -524,6 +549,7 @@ def run_serial(config) -> None:
                 round_idx=round_idx,
                 round_local_steps=round_local_steps,
                 global_state=global_state,
+                client_contexts=client_contexts,
                 chunk_size=chunk_size,
                 num_workers_override=on_demand_workers["train"],
             )
@@ -552,6 +578,8 @@ def run_serial(config) -> None:
                         **round_feedback_metrics,
                         **round_logging_metrics,
                     },
+                    client_train_stats=stats,
+                    sample_sizes=sample_sizes,
                 )
                 if getattr(server, "scheduler", None) is not None
                 and hasattr(server.scheduler, "update_round_feedback")
@@ -827,13 +855,26 @@ def run_distributed(config, backend: str) -> None:
                     train_client_ids=train_client_ids,
                     num_sampled_clients=int(num_sampled_clients),
                 )
-                raw_local_steps = _select_round_local_steps(server, round_idx)
+                raw_local_steps = _select_round_local_steps(
+                    server,
+                    round_idx,
+                    selected_ids=selected_ids,
+                )
                 local_steps = _resolve_round_local_steps_by_client(
                     getattr(server, "scheduler", None),
                     raw_local_steps,
                     selected_ids,
                 )
-                payload = {"selected_ids": selected_ids, "local_steps": local_steps}
+                client_contexts = _get_scheduler_client_contexts(
+                    server,
+                    selected_ids=selected_ids,
+                    round_idx=round_idx,
+                )
+                payload = {
+                    "selected_ids": selected_ids,
+                    "local_steps": local_steps,
+                    "client_contexts": client_contexts,
+                }
             else:
                 payload = None
             bcast_obj = [payload]
@@ -841,6 +882,7 @@ def run_distributed(config, backend: str) -> None:
             payload = bcast_obj[0]
             selected_ids = list(payload["selected_ids"])
             round_local_steps = payload.get("local_steps", None)
+            client_contexts = payload.get("client_contexts", None)
             sync_model = server.model if rank == 0 else model
             _broadcast_model_state_inplace(sync_model, src=0)
             if on_demand_model is not None and sync_model is not on_demand_model:
@@ -867,6 +909,7 @@ def run_distributed(config, backend: str) -> None:
                 round_idx=round_idx,
                 round_local_steps=round_local_steps,
                 global_state=global_state,
+                client_contexts=client_contexts,
                 chunk_size=chunk_size,
                 num_workers_override=on_demand_workers["train"],
             )
@@ -915,6 +958,8 @@ def run_distributed(config, backend: str) -> None:
                             **round_feedback_metrics,
                             **round_logging_metrics,
                         },
+                        client_train_stats=stats,
+                        sample_sizes=sample_sizes,
                     )
                     if getattr(server, "scheduler", None) is not None
                     and hasattr(server.scheduler, "update_round_feedback")

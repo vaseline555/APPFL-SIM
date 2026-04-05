@@ -143,6 +143,8 @@ def _remap_server_wandb_payload(flat_payload: Dict[str, float]) -> Dict[str, flo
         elif root in test_roots:
             normalized_parts = [parts[0].removeprefix("local_"), *parts[1:]]
             dst = _format_wandb_panel_key("test", normalized_parts)
+        elif root == "policy":
+            dst = _format_wandb_panel_key("orchestration", parts[1:])
         elif root == "gen_reward":
             leaf_alias = {
                 "round": "reward",
@@ -623,6 +625,15 @@ def _render_round_summary_lines(round_metrics: _RoundMetricsPayload) -> List[str
     policy = round_metrics.get("policy", {})
     if isinstance(policy, dict) and "tau_t" in policy:
         lines.append(_entity_line("Policy:", f"tau_t={int(policy['tau_t'])}"))
+    elif isinstance(policy, dict) and isinstance(policy.get("tau_t_mean"), (int, float)):
+        parts = [f"tau_t_mean={float(policy['tau_t_mean']):.4f}"]
+        if isinstance(policy.get("tau_t_min"), (int, float)):
+            parts.append(f"min={int(policy['tau_t_min'])}")
+        if isinstance(policy.get("tau_t_max"), (int, float)):
+            parts.append(f"max={int(policy['tau_t_max'])}")
+        if isinstance(policy.get("tau_t_clients"), (int, float)):
+            parts.append(f"clients={int(policy['tau_t_clients'])}")
+        lines.append(_entity_line("Policy:", _join_metric_parts(parts)))
     if isinstance(round_metrics.get("cumulative_tau_t"), (int, float)):
         lines.append(
             _entity_line(

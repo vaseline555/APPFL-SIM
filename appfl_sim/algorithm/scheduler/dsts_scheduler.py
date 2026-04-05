@@ -92,9 +92,6 @@ class DstsScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         else:
             reward_value = float(reward)
 
-        chosen = int(self.C) if self.C is not None else None
-        reward_value = self._apply_cost_reward(reward_value, chosen)
-
         self.last_reward = float(reward_value)
 
         if self.C is None:

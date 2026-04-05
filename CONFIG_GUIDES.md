@@ -87,6 +87,10 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `aggregator_kwargs` (default: `{}`): configs forwarded to aggregator class construction.
 - `scheduler_kwargs` (default: `{}`): configs forwarded to scheduler class construction.
 - `trainer_kwargs` (default: `{}`): configs forwarded to trainer class construction.
+  - `fedprox`: `mu` (default: `0.001`) sets the proximal regularization strength.
+  - `fedadam` (`aggregator_kwargs`): `server_learning_rate` (default: `1.0`), `beta1` (default: `0.9`), `beta2` (default: `0.99`), `tau` (default: `0.001`).
+  - `fednova`: no extra scalar hyperparameter is required in the plain algorithm; the server-side normalization uses the realized local optimizer-step count from each client update.
+  - `scaffold`: no extra scalar hyperparameter is required in the plain algorithm; scheduler/trainer state tracks control variates automatically.
 
 ## Loss (`loss`)
 - `path` (default: `""`): loss root path.

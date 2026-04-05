@@ -28,12 +28,41 @@ LOGGER = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from appfl_sim.agent import ClientAgent, ServerAgent
 
-def _select_round_local_steps(server, round_idx: int):
+def _select_round_local_steps(server, round_idx: int, selected_ids: Optional[Sequence[int]] = None):
     scheduler = getattr(server, "scheduler", None)
     if scheduler is None or not hasattr(scheduler, "pull"):
         return None
+    pull_kwargs: Dict[str, Any] = {}
+    if hasattr(scheduler, "get_pull_kwargs"):
+        try:
+            raw_kwargs = scheduler.get_pull_kwargs(
+                selected_ids=selected_ids,
+                round_idx=int(round_idx),
+            )
+            if isinstance(raw_kwargs, dict):
+                pull_kwargs = raw_kwargs
+        except Exception as exc:
+            LOGGER.debug("Scheduler.get_pull_kwargs failed: %s", exc)
     try:
+        if pull_kwargs:
+            return scheduler.pull(round_idx=int(round_idx), **pull_kwargs)
         return scheduler.pull(round_idx=int(round_idx))
+    except TypeError as exc:
+        if pull_kwargs:
+            LOGGER.debug(
+                "Scheduler.pull rejected contextual kwargs; falling back without them: %s",
+                exc,
+            )
+            try:
+                return scheduler.pull(round_idx=int(round_idx))
+            except (TypeError, ValueError, AttributeError) as fallback_exc:
+                LOGGER.debug(
+                    "Scheduler.pull failed to provide local-step policy: %s",
+                    fallback_exc,
+                )
+                return None
+        LOGGER.debug("Scheduler.pull failed to provide local-step policy: %s", exc)
+        return None
     except (TypeError, ValueError, AttributeError) as exc:
         LOGGER.debug("Scheduler.pull failed to provide local-step policy: %s", exc)
         return None
@@ -43,10 +72,16 @@ def _run_local_client_update(
     client,
     *,
     global_state,
+    client_contexts,
     round_idx: int,
     round_local_steps: Any,
 ):
-    client.load_parameters(global_state)
+    client_payload = global_state
+    if isinstance(client_contexts, dict):
+        context = client_contexts.get(int(client.id), client_contexts.get(str(int(client.id))))
+        if isinstance(context, dict) and context:
+            client_payload = (global_state, context)
+    client.load_parameters(client_payload)
     local_steps = None
     if isinstance(round_local_steps, dict):
         value = round_local_steps.get(int(client.id), round_local_steps.get(str(int(client.id))))
@@ -79,6 +114,7 @@ def _collect_local_training_payload(
     round_idx: int,
     round_local_steps: Any,
     global_state,
+    client_contexts: Optional[Dict[int, Dict[str, Any]]],
     chunk_size: int,
     num_workers_override: Optional[int],
 ) -> Dict[int, Dict[str, Any]]:
@@ -91,6 +127,7 @@ def _collect_local_training_payload(
             train_result, state = _run_local_client_update(
                 client,
                 global_state=global_state,
+                client_contexts=client_contexts,
                 round_idx=round_idx,
                 round_local_steps=round_local_steps,
             )
@@ -128,6 +165,7 @@ def _collect_local_training_payload(
             train_result, state = _run_local_client_update(
                 client,
                 global_state=global_state,
+                client_contexts=client_contexts,
                 round_idx=round_idx,
                 round_local_steps=round_local_steps,
             )

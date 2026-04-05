@@ -35,8 +35,6 @@ algorithm:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
     action_space: [25, 50, 200, 400]
-    add_cost_reward: false
-    cost_reward_lambda: 0.01
     discount_gamma: 0.99
     likelihood_variance: 1.0
     prior_variance: 1.0

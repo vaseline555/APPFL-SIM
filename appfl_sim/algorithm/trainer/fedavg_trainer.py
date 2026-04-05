@@ -244,6 +244,30 @@ class FedavgTrainer(BaseTrainer):
             )
         return result
 
+    @staticmethod
+    def _current_optimizer_lr(optimizer: torch.optim.Optimizer) -> Optional[float]:
+        param_groups = getattr(optimizer, "param_groups", None)
+        if not isinstance(param_groups, list) or len(param_groups) == 0:
+            return None
+        values: List[float] = []
+        for group in param_groups:
+            value = group.get("lr", None)
+            if isinstance(value, (int, float)):
+                values.append(float(value))
+        if not values:
+            return None
+        return float(values[0])
+
+    def _post_update_parameter_l2_norm(self) -> float:
+        total_sq = 0.0
+        with torch.no_grad():
+            for param in self.model.parameters():
+                tensor = param.detach()
+                if tensor.numel() == 0:
+                    continue
+                total_sq += float(torch.sum(tensor.float() * tensor.float()).item())
+        return float(math.sqrt(max(0.0, total_sq)))
+
     def _resolve_eval_split(
         self,
         split: Optional[str] = None,
@@ -565,6 +589,7 @@ class FedavgTrainer(BaseTrainer):
             self.model.parameters(),
         )
         self._apply_round_lr_decay(optimizer)
+        current_lr = self._current_optimizer_lr(optimizer)
 
         # Identify local budget (epoch vs iteration)
         round_local_budget = kwargs.get("local_steps", None)
@@ -683,6 +708,9 @@ class FedavgTrainer(BaseTrainer):
         self._offload_model_to_cpu()
 
         result = train_metrics_manager.aggregate(total_len=total_examples)
+        if isinstance(current_lr, (int, float)):
+            result["current_lr"] = float(current_lr)
+        result["post_update_param_norm"] = float(self._post_update_parameter_l2_norm())
         self._attach_split_result(result, split="val", phase="pre")
         if "pre_train_loss" in self.eval_results:
             result["pre_train_loss"] = float(self.eval_results["pre_train_loss"])

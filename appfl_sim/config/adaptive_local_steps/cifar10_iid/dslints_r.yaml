@@ -35,12 +35,10 @@ algorithm:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
     action_space: [25, 50, 200, 400]
-    add_cost_reward: false
-    cost_reward_lambda: 0.01
     discount_gamma: 0.99
     ridge_alpha: 10
     noise_beta: 0.001
-    context_dim: 1
+    context_dim: 2
     seed: 42
   trainer_kwargs: {}
 loss:

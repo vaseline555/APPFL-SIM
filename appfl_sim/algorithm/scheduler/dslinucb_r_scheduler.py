@@ -29,7 +29,7 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             self.action_space = [1]
 
         self.num_clients = max(1, int(scheduler_configs.get("num_clients", 1)))
-        self.context_dim = max(1, int(scheduler_configs.get("context_dim", 1)))
+        self.context_dim = max(2, int(scheduler_configs.get("context_dim", 2)))
         self.feature_dim = int(self.context_dim + 1)
 
         self.discount_gamma = float(scheduler_configs.get("discount_gamma", 0.99))
@@ -127,6 +127,33 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         self.last_selected_action = int(chosen)
         return int(chosen)
 
+    def get_pull_kwargs(
+        self,
+        *,
+        selected_ids: Optional[Sequence[int]] = None,
+        round_idx: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        client_ids = (
+            [int(cid) for cid in selected_ids]
+            if selected_ids is not None
+            else list(range(self.num_clients))
+        )
+        current_lr = self._resolve_round_learning_rate(1 if round_idx is None else int(round_idx))
+        client_contexts = []
+        client_weights = []
+        for cid in client_ids:
+            post_norm = float(self._latest_client_post_update_param_norms.get(int(cid), 0.0))
+            client_contexts.append(
+                self._coerce_context_vector([float(current_lr), post_norm]).tolist()
+            )
+            client_weights.append(
+                float(self._latest_client_context_weights.get(int(cid), 1.0))
+            )
+        return {
+            "client_contexts": client_contexts,
+            "client_weights": client_weights,
+        }
+
     def adapt(
         self,
         pre_val_error: Optional[float] = None,
@@ -144,9 +171,6 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             self.prev_pre_val_error = current
         else:
             reward_value = float(reward)
-
-        selected_tau = int(self.last_selected_action) if self.C is not None else None
-        reward_value = self._apply_cost_reward(reward_value, selected_tau)
 
         self.last_reward = float(reward_value)
 

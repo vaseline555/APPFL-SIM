@@ -12,3 +12,9 @@ Notes:
   should still follow the same class naming prefix for clarity/reuse.
 - Users do not need to edit `runner.py` when adding new algorithms that follow this convention.
 - Evaluation-focused examples are under `appfl_sim/config/algorithms/evaluation/`.
+- Included starter configs:
+  - `fedavg.yaml`
+  - `fedprox.yaml`
+  - `fednova.yaml`
+  - `scaffold.yaml`
+  - `fedadam.yaml`

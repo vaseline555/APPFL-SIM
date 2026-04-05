@@ -521,6 +521,38 @@ def _resolve_algorithm_components(config: DictConfig) -> Dict[str, Any]:
         "track_gen_rewards",
         _cfg_bool(config, "logging.configs.track_gen_rewards", False),
     )
+    update_base = str(_cfg_get(config, "train.update_base", "epoch")).strip().lower()
+    if update_base == "iter":
+        fixed_local_steps = int(_cfg_get(config, "train.local_iters", 1))
+    else:
+        fixed_local_steps = int(_cfg_get(config, "train.local_epochs", 1))
+    scheduler_kwargs.setdefault("fixed_local_steps", max(0, fixed_local_steps))
+    raw_scheduler_lr_milestones = _cfg_get(config, "optimizer.lr_decay.milestones", [])
+    if isinstance(raw_scheduler_lr_milestones, str):
+        scheduler_lr_milestones = [
+            token.strip()
+            for token in raw_scheduler_lr_milestones.split(",")
+            if token.strip()
+        ]
+    elif isinstance(raw_scheduler_lr_milestones, (list, tuple)):
+        scheduler_lr_milestones = list(raw_scheduler_lr_milestones)
+    else:
+        scheduler_lr_milestones = []
+    scheduler_kwargs.setdefault("base_lr", float(_cfg_get(config, "optimizer.lr", 0.01)))
+    scheduler_kwargs.setdefault(
+        "lr_decay",
+        {
+            "enable": _cfg_bool(config, "optimizer.lr_decay.enable", False),
+            "type": str(_cfg_get(config, "optimizer.lr_decay.type", "none")),
+            "gamma": float(_cfg_get(config, "optimizer.lr_decay.gamma", 0.99)),
+            "step_size": int(_cfg_get(config, "optimizer.lr_decay.step_size", 1)),
+            "milestones": scheduler_lr_milestones,
+            "t_max": int(_cfg_get(config, "optimizer.lr_decay.t_max", 0)),
+            "eta_min": float(_cfg_get(config, "optimizer.lr_decay.eta_min", 0.0)),
+            "min_lr": float(_cfg_get(config, "optimizer.lr_decay.min_lr", 0.0)),
+        },
+    )
+    scheduler_kwargs.setdefault("num_rounds", int(_cfg_get(config, "train.num_rounds", 20)))
 
     if aggregator_name == "FedavgAggregator":
         aggregator_kwargs.setdefault("client_weights_mode", "sample_ratio")

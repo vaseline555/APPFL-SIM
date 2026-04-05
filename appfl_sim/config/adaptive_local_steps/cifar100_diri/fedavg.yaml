@@ -13,8 +13,8 @@ dataset:
 split:
   type: dirichlet
   configs:
-    dirichlet_alpha: 0.01
-    dirichlet_min_size: 1000
+    dirichlet_alpha: 0.1
+    dirichlet_min_size: 10
 model:
   name: resnet18
   backend: torchvision
@@ -23,7 +23,7 @@ model:
     norm_layer: groupnorm
     norm_num_groups: 2
 train:
-  num_rounds: 200
+  num_rounds: 100
   num_clients: 10
   num_sampled_clients: 10
   update_base: epoch
@@ -45,18 +45,18 @@ algorithm:
 loss:
   name: CrossEntropyLoss
   backend: torch
-optimizer:
+optimizer: 
   name: SGD
   backend: auto
   lr: 0.01
   lr_decay:
     enable: true
     type: multistep
-    milestones: "120,160"
-    gamma: 0.5
+    milestones: "50,75"
+    gamma: 0.7
   clip_grad_norm: 0.0
   configs:
-    weight_decay: 0.003
+    weight_decay: 0.0005
     momentum: 0.0
 eval:
   every: 10

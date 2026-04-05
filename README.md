@@ -21,8 +21,12 @@
 Examples:
 
 - `fedavg` -> `FedavgAggregator`, `FedavgScheduler`, `FedavgTrainer`
-- `swts` -> `SwtsAggregator`, `SwtsScheduler`, `SwtsTrainer`
-- `swucb` -> `SwucbAggregator`, `SwucbScheduler`, `SwucbTrainer`
+- `fedprox` -> `FedproxAggregator`, `FedproxScheduler`, `FedproxTrainer`
+- `fednova` -> `FednovaAggregator`, `FednovaScheduler`, `FednovaTrainer`
+- `scaffold` -> `ScaffoldAggregator`, `ScaffoldScheduler`, `ScaffoldTrainer`
+- `fedadam` -> `FedadamAggregator`, `FedadamScheduler`, `FedadamTrainer`
+- `dsucb` -> `DsucbAggregator`, `DsucbScheduler`, `DsucbTrainer`
+- `dsts` -> `DstsAggregator`, `DstsScheduler`, `DstsTrainer`
 
 New algorithms should provide all three classes, even when scheduler/trainer just inherit defaults.
 
@@ -53,13 +57,6 @@ python -m appfl_sim.runner \
 ## Configuration references
 
 - Main guide: `CONFIG_GUIDES.md`
-- Simulation notes: `SIMULATION_GUIDE.md`
-- Algorithm implementation playbook: `ALGORITHM_PLAYBOOK.md`
-
-## Export to APPFL-main
-
-- Exporter script: `tools/export_appfl_plugin.py`
-- Exporter guide: `tools/EXPORT_APPFL_PLUGIN_GUIDE.md`
 
 ## Config examples
 

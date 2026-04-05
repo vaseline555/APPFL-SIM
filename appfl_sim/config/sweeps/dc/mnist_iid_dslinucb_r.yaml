@@ -18,7 +18,7 @@ parameters:
   exploration_beta:
     values: [1e-2, 1e-1, 1.0]
   context_dim:
-    value: 1
+    value: 2
 
   seed:
     values: [0]
