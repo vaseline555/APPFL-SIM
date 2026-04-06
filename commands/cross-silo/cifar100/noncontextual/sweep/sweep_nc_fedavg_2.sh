@@ -15,14 +15,13 @@ source .venv/bin/activate
 
 # 260403 - E=2 gamma=0.25
 # CIFAR-10 Dirichlet Non-IID
-for lr in 0.0031622 0.0017782 0.001 0.0005623 ; do
+for lr in 0.001 0.0031622 0.01 0.031622 0.1; do
   python -m appfl_sim.runner \
     --config appfl_sim/config/adaptive_local_steps/cifar100_diri/fedavg.yaml \
       logging.configs.wandb_entity=vaseline555 train.local_epochs=2 \
-        optimizer.lr=$lr optimizer.lr_decay.milestones="50,75" optimizer.lr_decay.gamma=0.5 \
-          experiment.name=GALE_NC_CIFAR100 logging.name="fedavg_2_${lr}" &
+        optimizer.lr=$lr optimizer.lr_decay.gamma=0.99 \
+          experiment.name=GALE_CIFAR100 logging.name="fedavg_2_${lr}" &
 done
 wait
-
 
 
