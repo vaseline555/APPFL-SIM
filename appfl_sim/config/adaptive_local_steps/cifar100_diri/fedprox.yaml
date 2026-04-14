@@ -23,7 +23,7 @@ model:
     norm_layer: groupnorm
     norm_num_groups: 2
 train:
-  num_rounds: 200
+  num_rounds: 100
   num_clients: 10
   num_sampled_clients: 10
   update_base: epoch
@@ -52,12 +52,11 @@ optimizer:
   lr: 0.01
   lr_decay:
     enable: true
-    type: step
-    step_size: 30
-    gamma: 0.7
+    type: exponential
+    gamma: 0.99
   clip_grad_norm: 0.0
   configs:
-    weight_decay: 0.0001
+    weight_decay: 0.0
     momentum: 0.0
 eval:
   every: 10

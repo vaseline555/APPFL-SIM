@@ -1,25 +1,33 @@
-#!/bin/bash
+#!/bin/bash -l
+#PBS -N GALE
+#PBS -A PPFL_FM
+#PBS -q preemptable
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -l walltime=4:00:00
+#PBS -l filesystems=home:eagle
+#PBS -r y
+#PBS -k doe
+#PBS -j oe
 
-#SBATCH -J GALE_FEDAVG
-#SBATCH --output=GALE_FEDAVG_%j.out
-#SBATCH --error=GALE_FEDAVG_%j.log
-#SBATCH -A m5073 
-#SBATCH -C gpu                    
-#SBATCH -q regular                 
-#SBATCH -N 1                   
-#SBATCH -G 2                       
-#SBATCH -t 2:00:00    
+set -euo pipefail
 
-# Load environment
-source .venv/bin/activate
+cd "${PBS_O_WORKDIR:-$PWD}"
 
-# 260403 - E=4 gamma=0.1
-# CIFAR-10 Dirichlet Non-IID
-for lr in 0.001 0.0031622 0.01 0.031622 0.1; do
+module use /soft/modulefiles
+module load conda
+conda activate base
+
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+export ftp_proxy="http://proxy.alcf.anl.gov:3128"
+
+# CIFAR-100 Dirichlet Non-IID
+for lr_decay in 0.98 0.97 0.96 0.95; do
   python -m appfl_sim.runner \
     --config appfl_sim/config/adaptive_local_steps/cifar100_diri/fedavg.yaml \
       logging.configs.wandb_entity=vaseline555 train.local_epochs=4 \
-        optimizer.lr=$lr optimizer.lr_decay.gamma=0.99 \
-          experiment.name=GALE_CIFAR100 logging.name="fedavg_4_${lr}" &
+        optimizer.lr=0.001 optimizer.lr_decay.gamma=$lr_decay \
+          experiment.name=GALE_CIFAR100_001 logging.name="fedavg_4_${lr_decay}" &
 done
 wait

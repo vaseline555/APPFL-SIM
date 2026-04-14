@@ -19,6 +19,7 @@ model:
   name: resnet18
   backend: torchvision
   configs:
+    pretrained: false
     norm_layer: groupnorm
     norm_num_groups: 2
 train:
@@ -31,23 +32,20 @@ train:
   shuffle: true
   eval_batch_size: 256
 algorithm:
-  name: dsucb
+  name: scaffold
   mix_coefs: sample_ratio
   optimize_memory: true
-  aggregator: DsucbAggregator
-  scheduler: DsucbScheduler
-  trainer: DsucbTrainer
+  aggregator: ScaffoldAggregator
+  scheduler: ScaffoldScheduler
+  trainer: ScaffoldTrainer
   aggregator_kwargs:
     client_weights_mode: sample_ratio
-  scheduler_kwargs:
-    action_space: [1, 2, 4, 8]
-    discount_gamma: null
-    exploration_alpha: null
+  scheduler_kwargs: {}
   trainer_kwargs: {}
 loss:
   name: CrossEntropyLoss
   backend: torch
-optimizer:
+optimizer: 
   name: SGD
   backend: auto
   lr: 0.01
@@ -77,7 +75,7 @@ eval:
     - 15
 logging:
   path: ./log
-  name: cifar100_diri_dsucb
+  name: cifar100_diri_fedprox
   backend: wandb
   type: server_only
   configs:

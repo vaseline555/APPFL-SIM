@@ -4,7 +4,7 @@
 #PBS -q preemptable
 #PBS -l select=1:system=polaris
 #PBS -l place=scatter
-#PBS -l walltime=2:00:00
+#PBS -l walltime=3:30:00
 #PBS -l filesystems=home:eagle
 #PBS -r y
 #PBS -k doe
@@ -23,12 +23,12 @@ export https_proxy="http://proxy.alcf.anl.gov:3128"
 export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 
 # CIFAR-100 Dirichlet Non-IID
-for lr_decay in 0.999 0.995 0.99 0.985; do
-  python -m appfl_sim.runner \
-    --config appfl_sim/config/adaptive_local_steps/cifar100_diri/fedavg.yaml \
-      logging.configs.wandb_entity=vaseline555 train.local_epochs=1 \
-        optimizer.lr=0.001 optimizer.lr_decay.gamma=$lr_decay \
-          experiment.name=GALE_CIFAR100_001 logging.name="fedavg_1_${lr_decay}" &
+for mu in 0.05 0.07 0.1 0.2 0.3; do
+    python -m appfl_sim.runner \
+      --config appfl_sim/config/adaptive_local_steps/cifar100_diri/fedprox.yaml \
+        logging.configs.wandb_entity=vaseline555 train.local_epochs=8 \
+          optimizer.lr=0.001 optimizer.lr_decay.gamma=0.95 \
+            algorithm.trainer_kwargs.mu=$mu \
+              experiment.name=GALE_CIFAR100_001 logging.name="fedprox_8_${mu}" &
 done
 wait
-

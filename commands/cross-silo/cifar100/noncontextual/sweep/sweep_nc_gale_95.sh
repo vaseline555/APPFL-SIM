@@ -28,10 +28,10 @@ for alpha in 0.0001 0.001 0.01 0.1 10; do
       --config appfl_sim/config/adaptive_local_steps/cifar100_diri/dsucb.yaml \
         logging.configs.wandb_entity=vaseline555 \
           optimizer.lr=0.001 optimizer.lr_decay.gamma=$gamma \
-            algorithm.scheduler_kwargs.discount_gamma=0.50 \
+            algorithm.scheduler_kwargs.discount_gamma=0.95 \
               algorithm.scheduler_kwargs.exploration_alpha="$alpha" \
                 algorithm.scheduler_kwargs.mul_factor=10 \
-                  experiment.name=GALE_CIFAR100_001 logging.name="GALE_50_${alpha}_${gamma}" &
+                  experiment.name=GALE_CIFAR100_001 logging.name="GALE_95_${alpha}_${gamma}" &
   done
   wait
 done

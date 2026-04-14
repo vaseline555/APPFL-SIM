@@ -1,26 +1,34 @@
-#!/bin/bash
+#!/bin/bash -l
+#PBS -N GALE
+#PBS -A PPFL_FM
+#PBS -q preemptable
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -l walltime=1:30:00
+#PBS -l filesystems=home:eagle
+#PBS -r y
+#PBS -k doe
+#PBS -j oe
 
-#SBATCH -J GALE_FEDPROX
-#SBATCH --output=GALE_FEDPROX_%j.out
-#SBATCH --error=GALE_FEDPROX_%j.log
-#SBATCH -A m5073 
-#SBATCH -C gpu                    
-#SBATCH -q regular                 
-#SBATCH -N 1                   
-#SBATCH -G 2                       
-#SBATCH -t 2:00:00    
+set -euo pipefail
 
-# Load environment
-source .venv/bin/activate
+cd "${PBS_O_WORKDIR:-$PWD}"
 
-# 260403 - E=2 gamma=0.25
-# CIFAR-10 Dirichlet Non-IID
-for mu in 0.0001 0.001 0.01 0.1; do
+module use /soft/modulefiles
+module load conda
+conda activate base
+
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+export ftp_proxy="http://proxy.alcf.anl.gov:3128"
+
+# CIFAR-100 Dirichlet Non-IID
+for mu in 0.05 0.07 0.1 0.2 0.3; do
     python -m appfl_sim.runner \
       --config appfl_sim/config/adaptive_local_steps/cifar100_diri/fedprox.yaml \
         logging.configs.wandb_entity=vaseline555 train.local_epochs=2 \
-          optimizer.lr=0.01 optimizer.lr_decay.step_size=10 optimizer.lr_decay.gamma=0.25 \
+         optimizer.lr=0.001 optimizer.lr_decay.gamma=0.985 \
             algorithm.trainer_kwargs.mu=$mu \
-              experiment.name=GALE_NC_CIFAR100 logging.name="fedprox_2_${mu}" &
+              experiment.name=GALE_CIFAR100_001 logging.name="fedprox_2_${mu}" &
 done
 wait

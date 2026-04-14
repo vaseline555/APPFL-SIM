@@ -1,38 +1,37 @@
-#!/bin/bash
+#!/bin/bash -l
+#PBS -N GALE
+#PBS -A PPFL_FM
+#PBS -q preemptable
+#PBS -l select=1:system=polaris
+#PBS -l place=scatter
+#PBS -l walltime=6:00:00
+#PBS -l filesystems=home:eagle
+#PBS -r y
+#PBS -k doe
+#PBS -j oe
 
-#SBATCH -J GALE
-#SBATCH --output=GALE_%j.out
-#SBATCH --error=GALE_%j.log
-#SBATCH -A m5073 
-#SBATCH -C gpu                    
-#SBATCH -q regular                 
-#SBATCH -N 1                   
-#SBATCH -G 2                       
-#SBATCH -t 2:00:00    
+set -euo pipefail
 
-LRS=(0.0017782 0.001 0.0005623 0.0003162)
+cd "${PBS_O_WORKDIR:-$PWD}"
 
-# Submit one Slurm job per learning rate, then let the child job handle alpha sweep.
-if [[ -z "${GALE_SWEEP_LR:-}" ]]; then
-  for lr in "${LRS[@]}"; do
-    sbatch --export=ALL,GALE_SWEEP_LR="$lr" "$0"
-  done
-  exit 0
-fi
+module use /soft/modulefiles
+module load conda
+conda activate base
 
-# Load environment
-source .venv/bin/activate
-
-# CIFAR-10 Dirichlet Non-IID
-lr="${GALE_SWEEP_LR}"
+export http_proxy="http://proxy.alcf.anl.gov:3128"
+export https_proxy="http://proxy.alcf.anl.gov:3128"
+export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 
 for alpha in 0.0001 0.001 0.01 0.1 10; do
+  for gamma in 0.98 0.99 0.995; do
     python -m appfl_sim.runner \
       --config appfl_sim/config/adaptive_local_steps/cifar100_diri/dsucb.yaml \
         logging.configs.wandb_entity=vaseline555 \
-          optimizer.lr=$lr optimizer.lr_decay.milestones="50,75" optimizer.lr_decay.gamma=0.5 \
+          optimizer.lr=0.001 optimizer.lr_decay.gamma=$gamma \
             algorithm.scheduler_kwargs.discount_gamma=0.90 \
-              algorithm.scheduler_kwargs.exploration_alpha=$alpha \
-                experiment.name=GALE_NC_CIFAR100 logging.name="GALE_90_${alpha}_${lr}" &
+              algorithm.scheduler_kwargs.exploration_alpha="$alpha" \
+                algorithm.scheduler_kwargs.mul_factor=10 \
+                  experiment.name=GALE_CIFAR100_001 logging.name="GALE_90_${alpha}_${gamma}" &
+  done
+  wait
 done
-wait
