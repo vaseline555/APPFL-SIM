@@ -233,17 +233,17 @@ def _get_round_client_contexts(
 
 def _resolve_round_tau_increment(
     scheduler_round_metrics: Optional[dict[str, Any]],
-) -> int:
+) -> float:
     if not isinstance(scheduler_round_metrics, dict):
-        return 0
+        return 0.0
     policy_metrics = scheduler_round_metrics.get("policy", {})
     if not isinstance(policy_metrics, dict):
-        return 0
-    for key in ("tau_t_max", "tau_t"):
+        return 0.0
+    for key in ("tau_t_mean", "tau_t"):
         value = policy_metrics.get(key)
         if isinstance(value, (int, float, np.integer, np.floating)):
-            return max(0, int(value))
-    return 0
+            return max(0.0, float(value))
+    return 0.0
 
 
 def _run_federated_eval_serial_round(
@@ -536,7 +536,7 @@ def run_serial(config) -> None:
     )
 
     interrupted = False
-    cumulative_tau_t = 0
+    cumulative_tau_t = 0.0
     try:
         for round_idx in range(1, num_rounds + 1):
             selected_ids = _sample_train_clients(
@@ -626,7 +626,7 @@ def run_serial(config) -> None:
             extra_round_metrics = {
                 **round_logging_metrics,
                 **scheduler_logging_metrics,
-                "cumulative_tau_t": int(cumulative_tau_t),
+                "cumulative_tau_t": float(cumulative_tau_t),
             }
             global_eval_metrics = None
             if enable_global_eval and _should_eval_round(
@@ -877,7 +877,7 @@ def run_distributed(config, backend: str) -> None:
 
     t0 = time.time()
     interrupted = False
-    cumulative_tau_t = 0
+    cumulative_tau_t = 0.0
     try:
         for round_idx in range(1, num_rounds + 1):
             if rank == 0:
@@ -1006,7 +1006,7 @@ def run_distributed(config, backend: str) -> None:
                 extra_round_metrics = {
                     **round_logging_metrics,
                     **scheduler_logging_metrics,
-                    "cumulative_tau_t": int(cumulative_tau_t),
+                    "cumulative_tau_t": float(cumulative_tau_t),
                 }
     
             sync_model = server.model if rank == 0 else model

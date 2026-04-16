@@ -30,7 +30,8 @@ class DslinucbCScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
 
         self.num_clients = max(1, int(scheduler_configs.get("num_clients", 1)))
         self.context_dim = max(1, int(len(self.context_subjects)))
-        self.feature_dim = int(self.context_dim + 1)
+        self.tau_scale = max(1.0, float(max(self.action_space)))
+        self.feature_dim = int((2 * self.context_dim) + 2)
 
         self.discount_gamma = float(scheduler_configs.get("discount_gamma", 0.99))
         self.discount_gamma = min(max(self.discount_gamma, 1e-8), 1.0)
@@ -100,7 +101,16 @@ class DslinucbCScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         return client_ids, contexts
 
     def _phi(self, x: np.ndarray, tau: int) -> np.ndarray:
-        return np.concatenate([x.astype(float), np.array([float(tau)], dtype=float)])
+        context = x.astype(float).reshape(-1)
+        tau_ratio = float(tau) / float(self.tau_scale)
+        return np.concatenate(
+            [
+                np.array([1.0], dtype=float),
+                context,
+                np.array([tau_ratio], dtype=float),
+                context * tau_ratio,
+            ]
+        )
 
     def pull(
         self,

@@ -78,7 +78,6 @@ class _AdaptiveLocalStepSupport:
             return {}
 
         return {
-            "tau_t_clients": int(len(values)),
             "tau_t_mean": float(sum(values) / float(len(values))),
             "tau_t_min": int(min(values)),
             "tau_t_max": int(max(values)),

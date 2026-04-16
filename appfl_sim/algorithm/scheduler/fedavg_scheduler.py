@@ -13,7 +13,7 @@ from appfl_sim.algorithm.aggregator import BaseAggregator
 
 
 class FedavgScheduler(BaseScheduler):
-    _SUPPORTED_CONTEXT_SUBJECTS = {"l", "d", "t", "v"}
+    _SUPPORTED_CONTEXT_SUBJECTS = {"l", "d"}
 
     def __init__(
         self, scheduler_configs: DictConfig, aggregator: BaseAggregator, logger: Any
@@ -32,8 +32,6 @@ class FedavgScheduler(BaseScheduler):
         self._fixed_tau_t = self._resolve_fixed_tau_t()
         self.context_subjects = self._resolve_context_subjects()
         self._latest_client_local_displacements: Dict[int, float] = {}
-        self._latest_client_pre_train_losses: Dict[int, float] = {}
-        self._latest_client_pre_val_losses: Dict[int, float] = {}
         self._latest_client_post_update_param_norms: Dict[int, float] = {}
         self._latest_client_context_weights: Dict[int, float] = {}
 
@@ -129,7 +127,7 @@ class FedavgScheduler(BaseScheduler):
             if text == "":
                 raise ValueError(
                     "scheduler_kwargs.contexts must contain at least one supported "
-                    "context subject: l, d, t, v."
+                    "context subject: l, d."
                 )
             if "," in text:
                 values = [item.strip().lower() for item in text.split(",") if item.strip()]
@@ -155,7 +153,7 @@ class FedavgScheduler(BaseScheduler):
         if not unique_values:
             raise ValueError(
                 "scheduler_kwargs.contexts must contain at least one supported "
-                "context subject: l, d, t, v."
+                "context subject: l, d."
             )
 
         invalid = [
@@ -164,7 +162,7 @@ class FedavgScheduler(BaseScheduler):
         if invalid:
             raise ValueError(
                 "Unsupported scheduler context subjects: "
-                f"{', '.join(invalid)}. Supported values are: l, d, t, v."
+                f"{', '.join(invalid)}. Supported values are: l, d."
             )
         return unique_values
 
@@ -204,7 +202,6 @@ class FedavgScheduler(BaseScheduler):
             return {}
 
         return {
-            "tau_t_clients": int(len(values)),
             "tau_t_mean": float(sum(values) / float(len(values))),
             "tau_t_min": int(min(values)),
             "tau_t_max": int(max(values)),
@@ -290,14 +287,6 @@ class FedavgScheduler(BaseScheduler):
         if isinstance(local_displacement, (int, float)):
             features["d"] = float(local_displacement)
 
-        pre_train_loss = client_stats.get("pre_train_loss", None)
-        if isinstance(pre_train_loss, (int, float)):
-            features["t"] = float(pre_train_loss)
-
-        pre_val_loss = client_stats.get("pre_val_loss", None)
-        if isinstance(pre_val_loss, (int, float)):
-            features["v"] = float(pre_val_loss)
-
         param_norm = client_stats.get("post_update_param_norm", None)
         if not isinstance(param_norm, (int, float)):
             param_norm = None
@@ -316,10 +305,6 @@ class FedavgScheduler(BaseScheduler):
             return float(self._resolve_round_learning_rate(int(round_idx)))
         if subject == "d":
             return float(self._latest_client_local_displacements.get(int(client_id), 0.0))
-        if subject == "t":
-            return float(self._latest_client_pre_train_losses.get(int(client_id), 0.0))
-        if subject == "v":
-            return float(self._latest_client_pre_val_losses.get(int(client_id), 0.0))
         raise ValueError(f"Unsupported context subject: {subject}")
 
     def _build_client_context_vector(
@@ -348,8 +333,6 @@ class FedavgScheduler(BaseScheduler):
         if not isinstance(client_train_stats, dict):
             return
         local_displacements: Dict[int, float] = {}
-        pre_train_losses: Dict[int, float] = {}
-        pre_val_losses: Dict[int, float] = {}
         param_norms: Dict[int, float] = {}
         weights: Dict[int, float] = {}
         for cid, client_stats in client_train_stats.items():
@@ -360,10 +343,6 @@ class FedavgScheduler(BaseScheduler):
             features = self._extract_context_features(client_stats)
             if "d" in features:
                 local_displacements[client_id] = float(features["d"])
-            if "t" in features:
-                pre_train_losses[client_id] = float(features["t"])
-            if "v" in features:
-                pre_val_losses[client_id] = float(features["v"])
             if "post_update_param_norm" in features:
                 param_norms[client_id] = float(features["post_update_param_norm"])
             if isinstance(sample_sizes, dict):
@@ -375,10 +354,6 @@ class FedavgScheduler(BaseScheduler):
             weights[client_id] = float(weight)
         if local_displacements:
             self._latest_client_local_displacements = local_displacements
-        if pre_train_losses:
-            self._latest_client_pre_train_losses = pre_train_losses
-        if pre_val_losses:
-            self._latest_client_pre_val_losses = pre_val_losses
         if param_norms:
             self._latest_client_post_update_param_norms = param_norms
         if weights:

@@ -43,6 +43,6 @@ for i in "${!SEEDS[@]}"; do
       logging.configs.wandb_entity=vaseline555 train.local_epochs=1 \
         optimizer.lr=0.001 optimizer.lr_decay.gamma=0.999 \
           "experiment.seed=${SEEDS[$i]}" \
-            experiment.name=GALE logging.name="main_cifar100_fedavg_1_${SEEDS[$i]}" &
+            experiment.name=GALE_CIFAR100 logging.name="main_cifar100_fedavg_1_${SEEDS[$i]}" &
 done
 wait

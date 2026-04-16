@@ -32,7 +32,7 @@ export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 #
 #     for ridge_alpha in 0.1 1.0 10.0; do
 #       python -m appfl_sim.runner \
-#         --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+#         --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
 #           optimizer.lr=0.001 optimizer.lr_decay.gamma=$lr_decay \
 #             algorithm.scheduler_kwargs.discount_gamma=0.80 \
 #               algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -40,14 +40,14 @@ export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 #                 algorithm.scheduler_kwargs.reward_scale=10 \
 #                   "algorithm.scheduler_kwargs.contexts=${contexts}" \
 #                     experiment.name=GALE_TINYIMAGENET_SWEEP \
-#                       logging.name="sweep_gale_avg_r_80_0.0001_${lr_decay}_${context_tag}_${ridge_alpha}" &
+#                       logging.name="sweep_gale_adam_r_80_0.0001_${lr_decay}_${context_tag}_${ridge_alpha}" &
 #     done
 #   done
 #   wait
 # done
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -55,10 +55,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_l_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_l_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -66,10 +66,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_l_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_l_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -77,10 +77,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_l_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_l_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -88,10 +88,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_d_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_d_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -99,10 +99,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_d_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_d_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -110,10 +110,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_d_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_d_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -121,10 +121,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_ld_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_ld_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -132,10 +132,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_ld_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_ld_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -143,10 +143,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.98_ld_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.98_ld_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -154,10 +154,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_l_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_l_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -165,10 +165,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_l_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_l_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -176,10 +176,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_l_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_l_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -187,10 +187,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_d_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_d_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -198,10 +198,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_d_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_d_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -209,10 +209,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_d_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_d_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -220,10 +220,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_ld_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_ld_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -231,10 +231,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_ld_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_ld_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -242,10 +242,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.99_ld_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.99_ld_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -253,10 +253,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_l_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_l_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -264,10 +264,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_l_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_l_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -275,10 +275,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_l_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_l_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -286,10 +286,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_d_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_d_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -297,10 +297,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_d_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_d_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -308,10 +308,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_d_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_d_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -319,10 +319,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_ld_0.1"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_ld_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -330,10 +330,10 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_ld_1.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_ld_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/gale_avg_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_adam_r.yaml \
     optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
@@ -341,4 +341,4 @@ python -m appfl_sim.runner \
           algorithm.scheduler_kwargs.reward_scale=10 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
-                logging.name="sweep_gale_avg_r_80_0.0001_0.995_ld_10.0"
+                logging.name="sweep_gale_adam_r_80_0.0001_0.995_ld_10.0"

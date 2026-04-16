@@ -4,7 +4,7 @@
 #PBS -q preemptable
 #PBS -l select=1:system=polaris
 #PBS -l place=scatter
-#PBS -l walltime=4:30:00
+#PBS -l walltime=1:00:00
 #PBS -l filesystems=home:eagle
 #PBS -r y
 #PBS -k doe
@@ -23,40 +23,40 @@ export https_proxy="http://proxy.alcf.anl.gov:3128"
 export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 
 # TinyImageNet Dirichlet Non-IID
-# for lr_decay in 0.995 0.99 0.985 0.98; do
+# for lr_decay in 0.98 0.975 0.97 0.965; do
 #   python -m appfl_sim.runner \
-#     --config appfl_sim/config/cross-device/tinyimagenet/fedavg.yaml \
+#     --config appfl_sim/config/cross-device/tinyimagenet/fedadam.yaml \
 #       train.local_epochs=2 \
-#         optimizer.lr=0.1 optimizer.lr_decay.gamma=$lr_decay \
+#         optimizer.lr=0.001 optimizer.lr_decay.gamma=$lr_decay \
 #           experiment.name=GALE_TINYIMAGENET_SWEEP \
-#             logging.name="sweep_fedavg_2_${lr_decay}" &
+#             logging.name="sweep_fedadam_2_${lr_decay}" &
 # done
 # wait
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/fedavg.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/fedadam.yaml \
     train.local_epochs=2 \
-      optimizer.lr=0.1 optimizer.lr_decay.gamma=0.995 \
+      optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         experiment.name=GALE_TINYIMAGENET_SWEEP \
-          logging.name="sweep_fedavg_2_0.995"
+          logging.name="sweep_fedadam_2_0.98"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/fedavg.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/fedadam.yaml \
     train.local_epochs=2 \
-      optimizer.lr=0.1 optimizer.lr_decay.gamma=0.99 \
+      optimizer.lr=0.001 optimizer.lr_decay.gamma=0.975 \
         experiment.name=GALE_TINYIMAGENET_SWEEP \
-          logging.name="sweep_fedavg_2_0.99"
+          logging.name="sweep_fedadam_2_0.975"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/fedavg.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/fedadam.yaml \
     train.local_epochs=2 \
-      optimizer.lr=0.1 optimizer.lr_decay.gamma=0.985 \
+      optimizer.lr=0.001 optimizer.lr_decay.gamma=0.97 \
         experiment.name=GALE_TINYIMAGENET_SWEEP \
-          logging.name="sweep_fedavg_2_0.985"
+          logging.name="sweep_fedadam_2_0.97"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-device/tinyimagenet/fedavg.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/fedadam.yaml \
     train.local_epochs=2 \
-      optimizer.lr=0.1 optimizer.lr_decay.gamma=0.98 \
+      optimizer.lr=0.001 optimizer.lr_decay.gamma=0.965 \
         experiment.name=GALE_TINYIMAGENET_SWEEP \
-          logging.name="sweep_fedavg_2_0.98"
+          logging.name="sweep_fedadam_2_0.965"

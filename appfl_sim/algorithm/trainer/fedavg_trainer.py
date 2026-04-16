@@ -49,6 +49,7 @@ class FedavgTrainer(BaseTrainer):
         Users need to specify which training model to use in the configuration,
         as well as the number of local epochs or steps.
     """
+    _LOCAL_DISPLACEMENT_NORM_EPS = 1e-12
 
     def __init__(
         self,
@@ -295,6 +296,24 @@ class FedavgTrainer(BaseTrainer):
                     continue
                 total_sq += float(torch.sum(diff * diff).item())
         return float(math.sqrt(max(0.0, total_sq)))
+
+    def _round_start_parameter_l2_norm(self) -> float:
+        if not self._round_start_model_cpu:
+            return 0.0
+        total_sq = 0.0
+        with torch.no_grad():
+            for reference in self._round_start_model_cpu.values():
+                tensor = reference.float()
+                if tensor.numel() == 0:
+                    continue
+                total_sq += float(torch.sum(tensor * tensor).item())
+        return float(math.sqrt(max(0.0, total_sq)))
+
+    def _normalized_local_displacement(self) -> float:
+        displacement = float(self._local_displacement_l2_norm())
+        reference_norm = float(self._round_start_parameter_l2_norm())
+        denom = max(reference_norm, float(self._LOCAL_DISPLACEMENT_NORM_EPS))
+        return float(displacement / denom)
 
     def _resolve_eval_split(
         self,
@@ -738,7 +757,7 @@ class FedavgTrainer(BaseTrainer):
         result = train_metrics_manager.aggregate(total_len=total_examples)
         if isinstance(current_lr, (int, float)):
             result["current_lr"] = float(current_lr)
-        result["local_displacement"] = float(self._local_displacement_l2_norm())
+        result["local_displacement"] = float(self._normalized_local_displacement())
         result["post_update_param_norm"] = float(self._post_update_parameter_l2_norm())
         self._attach_split_result(result, split="val", phase="pre")
         if "pre_train_loss" in self.eval_results:

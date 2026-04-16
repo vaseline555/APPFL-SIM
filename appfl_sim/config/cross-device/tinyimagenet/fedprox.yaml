@@ -83,7 +83,7 @@ eval:
 logging:
   path: ./log
   name: tinyimagenet_fedprox
-  backend: file
+  backend: wandb
   type: server_only
   configs:
     track_gen_rewards: true

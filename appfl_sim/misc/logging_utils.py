@@ -21,7 +21,6 @@ class _ClientsSummary(TypedDict):
 
 class _PolicySummary(TypedDict, total=False):
     tau_t: int
-    tau_t_clients: int
     tau_t_mean: float
     tau_t_min: int
     tau_t_max: int
@@ -632,8 +631,6 @@ def _render_round_summary_lines(round_metrics: _RoundMetricsPayload) -> List[str
             parts.append(f"min={int(policy['tau_t_min'])}")
         if isinstance(policy.get("tau_t_max"), (int, float)):
             parts.append(f"max={int(policy['tau_t_max'])}")
-        if isinstance(policy.get("tau_t_clients"), (int, float)):
-            parts.append(f"clients={int(policy['tau_t_clients'])}")
         lines.append(_entity_line("Policy:", _join_metric_parts(parts)))
     assigned_local_steps = round_metrics.get("assigned_local_steps", {})
     if isinstance(assigned_local_steps, dict) and assigned_local_steps:
@@ -656,7 +653,7 @@ def _render_round_summary_lines(round_metrics: _RoundMetricsPayload) -> List[str
         lines.append(
             _entity_line(
                 "Cumulative Tau:",
-                f"{int(round_metrics['cumulative_tau_t'])}",
+                f"{float(round_metrics['cumulative_tau_t']):.4f}",
             )
         )
 

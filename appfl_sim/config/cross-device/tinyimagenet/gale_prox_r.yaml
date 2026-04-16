@@ -88,7 +88,7 @@ eval:
 logging:
   path: ./log
   name: tinyimagenet_gale_prox_r
-  backend: file
+  backend: wandb
   type: server_only
   configs:
     track_gen_rewards: true

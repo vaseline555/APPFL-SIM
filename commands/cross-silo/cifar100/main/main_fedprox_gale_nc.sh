@@ -46,6 +46,6 @@ for i in "${!SEEDS[@]}"; do
             algorithm.scheduler_kwargs.exploration_alpha=0.001 \
               algorithm.scheduler_kwargs.reward_scale=10 algorithm.trainer_kwargs.mu=0.3 \
                 "experiment.seed=${SEEDS[$i]}" \
-                  experiment.name=GALE logging.name="main_cifar100_fedprox_gale_nc_${SEEDS[$i]}" &
+                  experiment.name=GALE_CIFAR100 logging.name="main_cifar100_fedprox_gale_nc_${SEEDS[$i]}" &
 done
 wait

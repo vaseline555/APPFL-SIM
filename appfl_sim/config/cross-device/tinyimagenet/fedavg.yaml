@@ -4,7 +4,7 @@ experiment:
   device: cuda
   server_device: cuda
   backend: nccl
-  stateful: true
+  stateful: false
 dataset:
   path: ./data
   name: zh-plus/tiny-imagenet
@@ -54,7 +54,7 @@ loss:
 optimizer:
   name: SGD
   backend: auto
-  lr: 0.01
+  lr: 0.001
   lr_decay:
     enable: true
     type: exponential
@@ -82,7 +82,7 @@ eval:
 logging:
   path: ./log
   name: tinyimagenet_fedavg
-  backend: file
+  backend: wandb
   type: server_only
   configs:
     track_gen_rewards: true
