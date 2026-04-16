@@ -201,6 +201,8 @@ class ExperimentTracker:
         flat: Dict[str, float] = {}
         for key, val in metrics.items():
             name = f"{prefix}/{key}" if prefix else str(key)
+            if name == "assigned_local_steps" or name.startswith("assigned_local_steps/"):
+                continue
             if isinstance(val, dict):
                 flat.update(ExperimentTracker._flatten_numeric_metrics(val, prefix=name))
                 continue

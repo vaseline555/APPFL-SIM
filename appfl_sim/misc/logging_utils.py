@@ -37,6 +37,7 @@ class _MinMaxMetric(TypedDict):
 class _RoundMetricsPayload(TypedDict, total=False):
     clients: _ClientsSummary
     policy: _PolicySummary
+    assigned_local_steps: Dict[str, int]
     training: Dict[str, _AvgStdMetric]
     local_pre_val: Dict[str, _AvgStdMetric]
     local_post_val: Dict[str, _AvgStdMetric]
@@ -634,6 +635,23 @@ def _render_round_summary_lines(round_metrics: _RoundMetricsPayload) -> List[str
         if isinstance(policy.get("tau_t_clients"), (int, float)):
             parts.append(f"clients={int(policy['tau_t_clients'])}")
         lines.append(_entity_line("Policy:", _join_metric_parts(parts)))
+    assigned_local_steps = round_metrics.get("assigned_local_steps", {})
+    if isinstance(assigned_local_steps, dict) and assigned_local_steps:
+        ordered: List[Tuple[int, int]] = []
+        for raw_client_id, raw_local_steps in assigned_local_steps.items():
+            try:
+                client_id = int(raw_client_id)
+                local_steps = int(raw_local_steps)
+            except Exception:
+                continue
+            ordered.append((int(client_id), int(local_steps)))
+        ordered.sort(key=lambda item: item[0])
+        if ordered:
+            shown = ordered[:12]
+            parts = [f"c{client_id}={local_steps}" for client_id, local_steps in shown]
+            if len(ordered) > len(shown):
+                parts.append(f"...(+{len(ordered) - len(shown)} more)")
+            lines.append(_entity_line("Client Steps:", _join_metric_parts(parts)))
     if isinstance(round_metrics.get("cumulative_tau_t"), (int, float)):
         lines.append(
             _entity_line(

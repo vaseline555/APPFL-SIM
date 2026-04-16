@@ -145,11 +145,11 @@ def _encode_text_features(texts: List[str], args) -> Tuple[torch.Tensor, int]:
 
 def _to_image_tensor(value: Any) -> torch.Tensor:
     if isinstance(value, Image.Image):
-        arr = np.asarray(value)
+        arr = np.array(value, copy=True)
     elif isinstance(value, dict) and "bytes" in value:
-        arr = np.asarray(Image.open(BytesIO(value["bytes"])))
+        arr = np.array(Image.open(BytesIO(value["bytes"])), copy=True)
     else:
-        arr = np.asarray(value)
+        arr = np.array(value, copy=True)
 
     if arr.ndim == 2:
         arr = np.expand_dims(arr, axis=-1)
@@ -171,7 +171,7 @@ def _to_image_tensor(value: Any) -> torch.Tensor:
     elif channels >= 4:
         hwc = hwc[..., :3]
 
-    chw = np.transpose(hwc, (2, 0, 1))
+    chw = np.transpose(hwc, (2, 0, 1)).copy()
     tensor = torch.from_numpy(chw).float()
     if tensor.max() > 1.0:
         tensor = tensor / 255.0

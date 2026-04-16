@@ -6,11 +6,8 @@ from .fedadam_trainer import FedadamTrainer
 from .scaffold_trainer import ScaffoldTrainer
 from .privacy_trainer import PrivacyFutureTrainer
 from .dsucb_trainer import DsucbTrainer
-from .dsts_trainer import DstsTrainer
 from .dslinucb_r_trainer import DslinucbRTrainer
-from .dslints_r_trainer import DslintsRTrainer
 from .dslinucb_c_trainer import DslinucbCTrainer
-from .dslints_c_trainer import DslintsCTrainer
 
 __all__ = [
     "BaseTrainer",
@@ -20,10 +17,7 @@ __all__ = [
     "FedadamTrainer",
     "ScaffoldTrainer",
     "DsucbTrainer",
-    "DstsTrainer",
     "DslinucbRTrainer",
-    "DslintsRTrainer",
     "DslinucbCTrainer",
-    "DslintsCTrainer",
     "PrivacyFutureTrainer",
 ]

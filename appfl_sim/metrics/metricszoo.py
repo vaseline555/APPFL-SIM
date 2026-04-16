@@ -15,7 +15,6 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
     roc_curve,
-    top_k_accuracy_score,
 )
 
 from .basemetric import BaseMetric
@@ -58,19 +57,23 @@ class Acc1(BaseMetric):
 
     def summarize(self):
         scores = torch.cat(self.scores)
-        answers = _flatten_targets(torch.cat(self.answers))
+        answers = torch.cat(self.answers).reshape(-1)
 
         if _is_multiclass_logits(scores):  # multi-class
-            labels = scores.argmax(-1).numpy()
+            labels = scores.argmax(dim=-1).reshape(-1)
         else:
-            scores = _binary_probs_from_logits(scores)
+            probs = torch.as_tensor(_binary_probs_from_logits(scores))
             if self._use_youdenj: # binary - use Youden's J to determine a label
-                fpr, tpr, thresholds = roc_curve(answers, scores)
+                answers_np = answers.numpy()
+                probs_np = probs.numpy()
+                fpr, tpr, thresholds = roc_curve(answers_np, probs_np)
                 cutoff = thresholds[np.argmax(tpr - fpr)]
             else:
                 cutoff = 0.5
-            labels = np.where(scores > cutoff, 1, 0)
-        return accuracy_score(answers, labels)
+            labels = (probs > float(cutoff)).long().reshape(-1)
+        if answers.numel() == 0:
+            return 0.0
+        return float((labels == answers).float().mean().item())
 
 class Acc5(BaseMetric):
     def __init__(self):
@@ -84,11 +87,23 @@ class Acc5(BaseMetric):
         self.answers.append(t)
 
     def summarize(self):
-        scores = torch.cat(self.scores).softmax(-1).numpy()
-        answers = torch.cat(self.answers).numpy()
-        num_classes = scores.shape[-1]
+        scores = torch.cat(self.scores)
+        answers = torch.cat(self.answers).reshape(-1)
+
+        if not _is_multiclass_logits(scores):
+            probs = torch.as_tensor(_binary_probs_from_logits(scores))
+            labels = (probs > 0.5).long().reshape(-1)
+            if answers.numel() == 0:
+                return 0.0
+            return float((labels == answers).float().mean().item())
+
+        num_classes = int(scores.shape[-1])
         k = min(5, num_classes)
-        return top_k_accuracy_score(answers, scores, k=k, labels=np.arange(num_classes))
+        topk = scores.topk(k=k, dim=-1).indices
+        correct = (topk == answers.unsqueeze(1)).any(dim=1)
+        if correct.numel() == 0:
+            return 0.0
+        return float(correct.float().mean().item())
 
 class Auroc(BaseMetric):
     def __init__(self):

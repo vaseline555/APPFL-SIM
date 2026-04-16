@@ -185,20 +185,50 @@ def _get_scheduler_round_metrics(server: Any, round_local_steps: Any) -> dict[st
     return metrics if isinstance(metrics, dict) else {}
 
 
-def _get_scheduler_client_contexts(
+def _merge_client_context_maps(
+    *context_maps: dict[int, dict[str, Any]] | None,
+) -> dict[int, dict[str, Any]] | None:
+    merged: dict[int, dict[str, Any]] = {}
+    for context_map in context_maps:
+        if not isinstance(context_map, dict):
+            continue
+        for raw_client_id, payload in context_map.items():
+            if not isinstance(payload, dict) or not payload:
+                continue
+            client_id = int(raw_client_id)
+            if client_id not in merged:
+                merged[client_id] = {}
+            merged[client_id].update(payload)
+    return merged or None
+
+
+def _get_round_client_contexts(
     server: Any,
     *,
     selected_ids: list[int],
     round_idx: int,
 ) -> dict[int, dict[str, Any]] | None:
+    scheduler_contexts = None
     scheduler = getattr(server, "scheduler", None)
-    if scheduler is None or not hasattr(scheduler, "get_client_contexts"):
-        return None
-    contexts = scheduler.get_client_contexts(
-        selected_ids=selected_ids,
-        round_idx=int(round_idx),
-    )
-    return contexts if isinstance(contexts, dict) and contexts else None
+    if scheduler is not None and hasattr(scheduler, "get_client_contexts"):
+        contexts = scheduler.get_client_contexts(
+            selected_ids=selected_ids,
+            round_idx=int(round_idx),
+        )
+        if isinstance(contexts, dict) and contexts:
+            scheduler_contexts = contexts
+
+    aggregator_contexts = None
+    aggregator = getattr(server, "aggregator", None)
+    if aggregator is not None and hasattr(aggregator, "get_client_contexts"):
+        contexts = aggregator.get_client_contexts(
+            selected_ids=selected_ids,
+            round_idx=int(round_idx),
+        )
+        if isinstance(contexts, dict) and contexts:
+            aggregator_contexts = contexts
+
+    return _merge_client_context_maps(scheduler_contexts, aggregator_contexts)
 
 
 def _resolve_round_tau_increment(
@@ -524,7 +554,7 @@ def run_serial(config) -> None:
                 selected_ids,
             )
             global_state = server.model.state_dict()
-            client_contexts = _get_scheduler_client_contexts(
+            client_contexts = _get_round_client_contexts(
                 server,
                 selected_ids=selected_ids,
                 round_idx=round_idx,
@@ -865,7 +895,7 @@ def run_distributed(config, backend: str) -> None:
                     raw_local_steps,
                     selected_ids,
                 )
-                client_contexts = _get_scheduler_client_contexts(
+                client_contexts = _get_round_client_contexts(
                     server,
                     selected_ids=selected_ids,
                     round_idx=round_idx,
@@ -1058,10 +1088,13 @@ def parse_config(argv: list[str] | None = None) -> tuple[str, DictConfig]:
     config_path, backend_override, dotlist = _parse_cli_tokens(argv)
 
     default_path = _default_config_path()
-    if not default_path.exists():
+    if default_path.exists():
+        cfg = OmegaConf.load(default_path)
+    elif config_path:
+        cfg = OmegaConf.create({})
+    else:
         raise FileNotFoundError(f"Default config not found: {default_path}")
 
-    cfg = OmegaConf.load(default_path)
     if config_path:
         cfg_path = _resolve_config_path(config_path)
         cfg = OmegaConf.merge(cfg, OmegaConf.load(cfg_path))

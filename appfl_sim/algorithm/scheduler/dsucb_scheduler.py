@@ -151,7 +151,8 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         self.discount_gamma = float(scheduler_configs.get("discount_gamma", 0.99))
         self.discount_gamma = min(max(self.discount_gamma, 1e-8), 1.0)
         self.exploration_alpha = float(scheduler_configs.get("exploration_alpha", 0.1))
-        self.mul_factor = float(scheduler_configs.get("mul_factor", 10.0))
+        self.reward_scale = self._resolve_reward_scale(default=10.0)
+        self.mul_factor = float(self.reward_scale)
 
         self.N: Dict[int, float] = {a: 0.0 for a in self.action_space}
         self.S: Dict[int, float] = {a: 0.0 for a in self.action_space}
@@ -206,12 +207,12 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
                 self.prev_pre_val_error = current
                 reward_value = -1.0
             else:
-                reward_value = float(self.prev_pre_val_error - current) * float(
-                    self.mul_factor
+                reward_value = float(
+                    self._scale_reward(float(self.prev_pre_val_error - current))
                 )
                 self.prev_pre_val_error = current
         else:
-            reward_value = float(reward) * float(self.mul_factor)
+            reward_value = float(self._scale_reward(float(reward)))
 
         self.last_reward = float(reward_value)
 
@@ -236,5 +237,6 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             "last_action": int(self.last_selected_action),
             "last_reward": self.last_reward,
             "discount_gamma": float(self.discount_gamma),
+            "reward_scale": float(self.reward_scale),
             "mul_factor": float(self.mul_factor),
         }

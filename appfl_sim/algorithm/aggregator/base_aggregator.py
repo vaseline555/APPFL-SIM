@@ -1,5 +1,5 @@
 import abc
-from typing import Any, Dict, Union, OrderedDict, Tuple
+from typing import Any, Dict, Optional, Union, OrderedDict, Tuple
 
 
 class BaseAggregator:
@@ -34,3 +34,12 @@ class BaseAggregator:
     ) -> Dict[str, Any]:
         del client_train_stats, sample_sizes
         return {}
+
+    def get_client_contexts(
+        self,
+        *,
+        selected_ids=None,
+        round_idx: Optional[int] = None,
+    ) -> Optional[Dict[Union[str, int], Dict[str, Any]]]:
+        del selected_ids, round_idx
+        return None

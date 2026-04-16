@@ -29,7 +29,7 @@ class DslinucbCScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             self.action_space = [1]
 
         self.num_clients = max(1, int(scheduler_configs.get("num_clients", 1)))
-        self.context_dim = max(2, int(scheduler_configs.get("context_dim", 2)))
+        self.context_dim = max(1, int(len(self.context_subjects)))
         self.feature_dim = int(self.context_dim + 1)
 
         self.discount_gamma = float(scheduler_configs.get("discount_gamma", 0.99))
@@ -46,6 +46,23 @@ class DslinucbCScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         self.last_selected_actions: Dict[int, int] = {}
         self.last_reward: Optional[float] = None
 
+    @staticmethod
+    def _normalize_assigned_local_steps(round_local_steps: Any) -> Dict[str, int]:
+        if not isinstance(round_local_steps, dict):
+            return {}
+        assignments: Dict[int, int] = {}
+        for raw_client_id, raw_local_steps in round_local_steps.items():
+            try:
+                client_id = int(raw_client_id)
+            except Exception:
+                continue
+            if not isinstance(raw_local_steps, (int, float, np.integer, np.floating)):
+                continue
+            assignments[int(client_id)] = max(0, int(raw_local_steps))
+        return {
+            str(int(client_id)): int(assignments[client_id])
+            for client_id in sorted(assignments)
+        }
 
     def _coerce_context_vector(self, x: Sequence[float]) -> np.ndarray:
         arr = np.asarray(list(x), dtype=float).reshape(-1)
@@ -131,14 +148,23 @@ class DslinucbCScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             if selected_ids is not None
             else list(range(self.num_clients))
         )
-        current_lr = self._resolve_round_learning_rate(1 if round_idx is None else int(round_idx))
+        current_round = 1 if round_idx is None else int(round_idx)
         client_contexts: Dict[int, List[float]] = {}
         for cid in client_ids:
-            post_norm = float(self._latest_client_post_update_param_norms.get(int(cid), 0.0))
             client_contexts[int(cid)] = self._coerce_context_vector(
-                [float(current_lr), post_norm]
+                self._build_client_context_vector(
+                    client_id=int(cid),
+                    round_idx=current_round,
+                )
             ).tolist()
         return {"client_contexts": client_contexts}
+
+    def get_round_metrics(self, *, round_local_steps: Any) -> Dict[str, Any]:
+        metrics = super().get_round_metrics(round_local_steps=round_local_steps)
+        assignments = self._normalize_assigned_local_steps(round_local_steps)
+        if assignments:
+            metrics["assigned_local_steps"] = assignments
+        return metrics
 
     def adapt(
         self,
@@ -153,10 +179,12 @@ class DslinucbCScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
                 self.prev_pre_val_error = current
                 self.last_reward = None
                 return None
-            reward_value = float(self.prev_pre_val_error - current)
+            reward_value = float(
+                self._scale_reward(float(self.prev_pre_val_error - current))
+            )
             self.prev_pre_val_error = current
         else:
-            reward_value = float(reward)
+            reward_value = float(self._scale_reward(float(reward)))
 
         self.last_reward = float(reward_value)
 
@@ -178,6 +206,7 @@ class DslinucbCScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         return {
             "name": "dslinucb_c",
             "round": int(self.current_round),
+            "contexts": list(self.context_subjects),
             "last_action_count": int(len(self.last_selected_actions)),
             "last_reward": self.last_reward,
             "discount_gamma": float(self.discount_gamma),

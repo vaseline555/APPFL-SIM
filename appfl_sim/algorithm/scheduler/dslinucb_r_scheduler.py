@@ -29,7 +29,7 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             self.action_space = [1]
 
         self.num_clients = max(1, int(scheduler_configs.get("num_clients", 1)))
-        self.context_dim = max(2, int(scheduler_configs.get("context_dim", 2)))
+        self.context_dim = max(1, int(len(self.context_subjects)))
         self.feature_dim = int(self.context_dim + 1)
 
         self.discount_gamma = float(scheduler_configs.get("discount_gamma", 0.99))
@@ -138,13 +138,17 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
             if selected_ids is not None
             else list(range(self.num_clients))
         )
-        current_lr = self._resolve_round_learning_rate(1 if round_idx is None else int(round_idx))
+        current_round = 1 if round_idx is None else int(round_idx)
         client_contexts = []
         client_weights = []
         for cid in client_ids:
-            post_norm = float(self._latest_client_post_update_param_norms.get(int(cid), 0.0))
             client_contexts.append(
-                self._coerce_context_vector([float(current_lr), post_norm]).tolist()
+                self._coerce_context_vector(
+                    self._build_client_context_vector(
+                        client_id=int(cid),
+                        round_idx=current_round,
+                    )
+                ).tolist()
             )
             client_weights.append(
                 float(self._latest_client_context_weights.get(int(cid), 1.0))
@@ -167,10 +171,12 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
                 self.prev_pre_val_error = current
                 self.last_reward = None
                 return None
-            reward_value = float(self.prev_pre_val_error - current)
+            reward_value = float(
+                self._scale_reward(float(self.prev_pre_val_error - current))
+            )
             self.prev_pre_val_error = current
         else:
-            reward_value = float(reward)
+            reward_value = float(self._scale_reward(float(reward)))
 
         self.last_reward = float(reward_value)
 
@@ -192,6 +198,7 @@ class DslinucbRScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         return {
             "name": "dslinucb_r",
             "round": int(self.current_round),
+            "contexts": list(self.context_subjects),
             "last_action": int(self.last_selected_action),
             "last_reward": self.last_reward,
             "discount_gamma": float(self.discount_gamma),

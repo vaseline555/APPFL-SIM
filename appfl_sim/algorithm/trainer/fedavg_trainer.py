@@ -99,6 +99,7 @@ class FedavgTrainer(BaseTrainer):
             self.train_configs.get("eval_metrics", None)
         )
         self.model_state = None
+        self._round_start_model_cpu: Dict[str, torch.Tensor] = {}
         self.eval_results: Optional[Dict[str, Any]] = None
 
         # Resolve device routing
@@ -187,6 +188,18 @@ class FedavgTrainer(BaseTrainer):
             else self.model_state
         )
 
+    def load_parameters(self, params):
+        model_state = params[0] if isinstance(params, tuple) else params
+        super().load_parameters(model_state)
+
+        reference: Dict[str, torch.Tensor] = {}
+        for name, _ in self.model.named_parameters():
+            tensor = model_state.get(name, None) if hasattr(model_state, "get") else None
+            if tensor is None:
+                continue
+            reference[name] = tensor.detach().cpu().clone()
+        self._round_start_model_cpu = reference
+
 
     def _validate_train_config(self):
         """
@@ -266,6 +279,21 @@ class FedavgTrainer(BaseTrainer):
                 if tensor.numel() == 0:
                     continue
                 total_sq += float(torch.sum(tensor.float() * tensor.float()).item())
+        return float(math.sqrt(max(0.0, total_sq)))
+
+    def _local_displacement_l2_norm(self) -> float:
+        if not self._round_start_model_cpu:
+            return 0.0
+        total_sq = 0.0
+        with torch.no_grad():
+            for name, param in self.model.named_parameters():
+                reference = self._round_start_model_cpu.get(name, None)
+                if reference is None:
+                    continue
+                diff = param.detach().cpu().float() - reference.float()
+                if diff.numel() == 0:
+                    continue
+                total_sq += float(torch.sum(diff * diff).item())
         return float(math.sqrt(max(0.0, total_sq)))
 
     def _resolve_eval_split(
@@ -710,6 +738,7 @@ class FedavgTrainer(BaseTrainer):
         result = train_metrics_manager.aggregate(total_len=total_examples)
         if isinstance(current_lr, (int, float)):
             result["current_lr"] = float(current_lr)
+        result["local_displacement"] = float(self._local_displacement_l2_norm())
         result["post_update_param_norm"] = float(self._post_update_parameter_l2_norm())
         self._attach_split_result(result, split="val", phase="pre")
         if "pre_train_loss" in self.eval_results:

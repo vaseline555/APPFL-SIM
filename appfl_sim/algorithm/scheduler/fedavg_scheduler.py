@@ -13,6 +13,8 @@ from appfl_sim.algorithm.aggregator import BaseAggregator
 
 
 class FedavgScheduler(BaseScheduler):
+    _SUPPORTED_CONTEXT_SUBJECTS = {"l", "d", "t", "v"}
+
     def __init__(
         self, scheduler_configs: DictConfig, aggregator: BaseAggregator, logger: Any
     ):
@@ -26,7 +28,12 @@ class FedavgScheduler(BaseScheduler):
         self.optimize_memory = bool(scheduler_configs.get("optimize_memory", True))
         self._prev_pre_val_error = None
         self._cumulative_gen_reward = 0.0
+        self.reward_scale = self._resolve_reward_scale(default=1.0)
         self._fixed_tau_t = self._resolve_fixed_tau_t()
+        self.context_subjects = self._resolve_context_subjects()
+        self._latest_client_local_displacements: Dict[int, float] = {}
+        self._latest_client_pre_train_losses: Dict[int, float] = {}
+        self._latest_client_pre_val_losses: Dict[int, float] = {}
         self._latest_client_post_update_param_norms: Dict[int, float] = {}
         self._latest_client_context_weights: Dict[int, float] = {}
 
@@ -86,6 +93,83 @@ class FedavgScheduler(BaseScheduler):
         if client_id in aggregated_model:
             return aggregated_model[client_id]
         return aggregated_model
+
+    def get_num_global_epochs(self) -> int:
+        for key in ("num_global_epochs", "num_rounds", "global_epochs"):
+            value = self.scheduler_configs.get(key, None)
+            if isinstance(value, (int, float)):
+                return max(0, int(value))
+        return 0
+
+    def _resolve_reward_scale(self, default: float = 1.0) -> float:
+        raw_value = self.scheduler_configs.get(
+            "reward_scale",
+            self.scheduler_configs.get("mul_factor", default),
+        )
+        try:
+            value = float(raw_value)
+        except Exception:
+            value = float(default)
+        if not math.isfinite(value):
+            value = float(default)
+        return float(value)
+
+    def _scale_reward(self, reward_value: Optional[float]) -> Optional[float]:
+        if not isinstance(reward_value, (int, float)):
+            return None
+        return float(reward_value) * float(self.reward_scale)
+
+    @classmethod
+    def _parse_context_subjects(cls, raw: Any) -> list[str]:
+        if raw is None:
+            return ["l", "d"]
+
+        if isinstance(raw, str):
+            text = raw.strip().lower()
+            if text == "":
+                raise ValueError(
+                    "scheduler_kwargs.contexts must contain at least one supported "
+                    "context subject: l, d, t, v."
+                )
+            if "," in text:
+                values = [item.strip().lower() for item in text.split(",") if item.strip()]
+            else:
+                values = [text]
+        elif isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, dict)):
+            values = []
+            for item in raw:
+                if item is None:
+                    continue
+                name = str(item).strip().lower()
+                if name:
+                    values.append(name)
+        else:
+            value = str(raw).strip().lower()
+            values = [value] if value else []
+
+        unique_values: list[str] = []
+        for value in values:
+            if value not in unique_values:
+                unique_values.append(value)
+
+        if not unique_values:
+            raise ValueError(
+                "scheduler_kwargs.contexts must contain at least one supported "
+                "context subject: l, d, t, v."
+            )
+
+        invalid = [
+            value for value in unique_values if value not in cls._SUPPORTED_CONTEXT_SUBJECTS
+        ]
+        if invalid:
+            raise ValueError(
+                "Unsupported scheduler context subjects: "
+                f"{', '.join(invalid)}. Supported values are: l, d, t, v."
+            )
+        return unique_values
+
+    def _resolve_context_subjects(self) -> list[str]:
+        return self._parse_context_subjects(self.scheduler_configs.get("contexts", None))
 
     @staticmethod
     def _coerce_nonnegative_int(value: Any):
@@ -192,16 +276,68 @@ class FedavgScheduler(BaseScheduler):
         return float(lr_value)
 
     @staticmethod
-    def _extract_context_features(client_stats: Dict[str, Any]) -> Optional[tuple[float, float]]:
+    def _extract_context_features(client_stats: Dict[str, Any]) -> Dict[str, float]:
         if not isinstance(client_stats, dict):
-            return None
+            return {}
+        features: Dict[str, float] = {}
         lr_value = client_stats.get("current_lr", None)
-        param_norm = client_stats.get("post_update_param_norm", None)
         if not isinstance(lr_value, (int, float)):
-            return None
+            lr_value = None
+        if isinstance(lr_value, (int, float)):
+            features["l"] = float(lr_value)
+
+        local_displacement = client_stats.get("local_displacement", None)
+        if isinstance(local_displacement, (int, float)):
+            features["d"] = float(local_displacement)
+
+        pre_train_loss = client_stats.get("pre_train_loss", None)
+        if isinstance(pre_train_loss, (int, float)):
+            features["t"] = float(pre_train_loss)
+
+        pre_val_loss = client_stats.get("pre_val_loss", None)
+        if isinstance(pre_val_loss, (int, float)):
+            features["v"] = float(pre_val_loss)
+
+        param_norm = client_stats.get("post_update_param_norm", None)
         if not isinstance(param_norm, (int, float)):
-            return None
-        return float(lr_value), float(param_norm)
+            param_norm = None
+        if isinstance(param_norm, (int, float)):
+            features["post_update_param_norm"] = float(param_norm)
+        return features
+
+    def _resolve_client_context_value(
+        self,
+        *,
+        subject: str,
+        client_id: int,
+        round_idx: int,
+    ) -> float:
+        if subject == "l":
+            return float(self._resolve_round_learning_rate(int(round_idx)))
+        if subject == "d":
+            return float(self._latest_client_local_displacements.get(int(client_id), 0.0))
+        if subject == "t":
+            return float(self._latest_client_pre_train_losses.get(int(client_id), 0.0))
+        if subject == "v":
+            return float(self._latest_client_pre_val_losses.get(int(client_id), 0.0))
+        raise ValueError(f"Unsupported context subject: {subject}")
+
+    def _build_client_context_vector(
+        self,
+        *,
+        client_id: int,
+        round_idx: int,
+    ) -> list[float]:
+        return [
+            float(
+                self._resolve_client_context_value(
+                    subject=subject,
+                    client_id=int(client_id),
+                    round_idx=int(round_idx),
+                )
+            )
+            for subject in self.context_subjects
+        ]
 
     def _store_client_context_feedback(
         self,
@@ -211,7 +347,10 @@ class FedavgScheduler(BaseScheduler):
     ) -> None:
         if not isinstance(client_train_stats, dict):
             return
-        contexts: Dict[int, float] = {}
+        local_displacements: Dict[int, float] = {}
+        pre_train_losses: Dict[int, float] = {}
+        pre_val_losses: Dict[int, float] = {}
+        param_norms: Dict[int, float] = {}
         weights: Dict[int, float] = {}
         for cid, client_stats in client_train_stats.items():
             try:
@@ -219,10 +358,14 @@ class FedavgScheduler(BaseScheduler):
             except Exception:
                 continue
             features = self._extract_context_features(client_stats)
-            if features is None:
-                continue
-            _, post_update_param_norm = features
-            contexts[client_id] = float(post_update_param_norm)
+            if "d" in features:
+                local_displacements[client_id] = float(features["d"])
+            if "t" in features:
+                pre_train_losses[client_id] = float(features["t"])
+            if "v" in features:
+                pre_val_losses[client_id] = float(features["v"])
+            if "post_update_param_norm" in features:
+                param_norms[client_id] = float(features["post_update_param_norm"])
             if isinstance(sample_sizes, dict):
                 weight = sample_sizes.get(cid, sample_sizes.get(client_id, 1))
             else:
@@ -230,8 +373,14 @@ class FedavgScheduler(BaseScheduler):
             if not isinstance(weight, (int, float)) or float(weight) <= 0.0:
                 weight = 1.0
             weights[client_id] = float(weight)
-        if contexts:
-            self._latest_client_post_update_param_norms = contexts
+        if local_displacements:
+            self._latest_client_local_displacements = local_displacements
+        if pre_train_losses:
+            self._latest_client_pre_train_losses = pre_train_losses
+        if pre_val_losses:
+            self._latest_client_pre_val_losses = pre_val_losses
+        if param_norms:
+            self._latest_client_post_update_param_norms = param_norms
         if weights:
             self._latest_client_context_weights = weights
 
@@ -271,7 +420,9 @@ class FedavgScheduler(BaseScheduler):
         if isinstance(current, (int, float)):
             current_value = float(current)
             if isinstance(self._prev_pre_val_error, (int, float)):
-                round_reward = float(self._prev_pre_val_error - current_value)
+                round_reward = self._scale_reward(
+                    float(self._prev_pre_val_error - current_value)
+                )
                 self._cumulative_gen_reward = float(self._cumulative_gen_reward) + float(
                     round_reward
                 )

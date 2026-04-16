@@ -1,0 +1,77 @@
+experiment:
+  name: GenFL_Shakespeare
+  seed: 42
+  device: cpu
+  server_device: cpu
+  backend: serial
+  stateful: false
+dataset:
+  path: ./data
+  name: shakespeare
+  backend: leaf
+  download: true
+  configs:
+    raw_data_fraction: 1.0
+    min_samples_per_client: 2
+split:
+  type: pre
+  configs:
+    pre_infer_num_clients: true
+model:
+  name: StackedLSTM
+  backend: auto
+  configs:
+    embedding_size: 8
+    hidden_size: 256
+    num_layers: 2
+    dropout: 0.2
+    is_seq2seq: false
+train:
+  num_rounds: 200
+  num_sampled_clients: 10
+  update_base: epoch
+  local_epochs: 1
+  batch_size: 10
+  shuffle: true
+  eval_batch_size: 64
+algorithm:
+  name: fedavg
+  mix_coefs: sample_ratio
+  optimize_memory: true
+  aggregator: FedavgAggregator
+  scheduler: FedavgScheduler
+  trainer: FedavgTrainer
+  aggregator_kwargs:
+    client_weights_mode: sample_ratio
+  scheduler_kwargs:
+    reward_scale: 10.0
+  trainer_kwargs: {}
+loss:
+  name: CrossEntropyLoss
+  backend: torch
+optimizer:
+  name: SGD
+  backend: auto
+  lr: 0.8
+  lr_decay:
+    enable: false
+  clip_grad_norm: 0.0
+  configs:
+    weight_decay: 0.0
+    momentum: 0.0
+eval:
+  every: 10
+  metrics:
+  - acc1
+  do_pre_evaluation: true
+  do_post_evaluation: true
+  show_eval_progress: true
+  enable_global_eval: false
+  enable_federated_eval: true
+logging:
+  path: ./log
+  name: shakespeare_fedavg
+  backend: file
+  type: server_only
+  configs:
+    track_gen_rewards: true

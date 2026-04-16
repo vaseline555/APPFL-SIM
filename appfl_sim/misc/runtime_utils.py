@@ -193,6 +193,30 @@ def _payload_to_updates(local_payload: Dict[int, Dict[str, Any]]):
     return updates, sample_sizes, stats
 
 
+def _validate_scheduler_sampling_policy(
+    *,
+    algorithm_components: Dict[str, Any],
+    train_client_ids: Sequence[int],
+    num_sampled_clients: int,
+) -> None:
+    scheduler_name = str(algorithm_components.get("scheduler_name", "")).strip()
+    train_client_count = int(len(train_client_ids))
+    sampled_client_count = int(num_sampled_clients)
+
+    if (
+        scheduler_name == "DslinucbCScheduler"
+        and train_client_count > 0
+        and sampled_client_count < train_client_count
+    ):
+        raise ValueError(
+            "DslinucbCScheduler requires full participation across training clients "
+            "(`train.num_sampled_clients` must equal the number of trainable clients) "
+            "because delayed client-wise contextual feedback becomes stale under partial "
+            f"participation. Got num_sampled_clients={sampled_client_count} and "
+            f"trainable_clients={train_client_count}."
+        )
+
+
 def _resolve_runtime_policies(config: DictConfig, runtime_cfg: Dict[str, Any]) -> Dict[str, Any]:
     num_clients = int(runtime_cfg["num_clients"])
     algorithm_components = _resolve_algorithm_components(config)
@@ -203,6 +227,11 @@ def _resolve_runtime_policies(config: DictConfig, runtime_cfg: Dict[str, Any]) -
     train_client_ids, holdout_client_ids = _build_client_groups(config, num_clients)
     num_sampled_clients = _resolve_num_sampled_clients(
         config, num_clients=len(train_client_ids)
+    )
+    _validate_scheduler_sampling_policy(
+        algorithm_components=algorithm_components,
+        train_client_ids=train_client_ids,
+        num_sampled_clients=num_sampled_clients,
     )
     logging_policy = _resolve_client_logging_policy(
         config,

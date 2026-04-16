@@ -12,7 +12,7 @@
 
 ## Algorithm naming convention
 
-`algorithm.name` is resolved strictly as:
+`algorithm.name` resolves by convention unless explicit component overrides are set:
 
 - `<PascalCase(name)>Aggregator`
 - `<PascalCase(name)>Scheduler`
@@ -23,10 +23,11 @@ Examples:
 - `fedavg` -> `FedavgAggregator`, `FedavgScheduler`, `FedavgTrainer`
 - `fedprox` -> `FedproxAggregator`, `FedproxScheduler`, `FedproxTrainer`
 - `fednova` -> `FednovaAggregator`, `FednovaScheduler`, `FednovaTrainer`
-- `scaffold` -> `ScaffoldAggregator`, `ScaffoldScheduler`, `ScaffoldTrainer`
+- `scaffold` -> `ScaffoldAggregator`, `FedavgScheduler`, `ScaffoldTrainer` (via explicit scheduler override in configs; `ScaffoldScheduler` remains a compatibility alias)
 - `fedadam` -> `FedadamAggregator`, `FedadamScheduler`, `FedadamTrainer`
 - `dsucb` -> `DsucbAggregator`, `DsucbScheduler`, `DsucbTrainer`
-- `dsts` -> `DstsAggregator`, `DstsScheduler`, `DstsTrainer`
+- `gale_avg` -> explicit override to `FedavgAggregator` plus adaptive GALE scheduler/trainer components
+- `gale_prox` -> explicit override to `FedproxAggregator` plus adaptive GALE scheduler/trainer components
 
 New algorithms should provide all three classes, even when scheduler/trainer just inherit defaults.
 
