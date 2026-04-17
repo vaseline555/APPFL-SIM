@@ -44,7 +44,7 @@ for i in "${!SEEDS[@]}"; do
         optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
           algorithm.scheduler_kwargs.discount_gamma=0.80 \
             algorithm.scheduler_kwargs.exploration_alpha=0.001 \
-              algorithm.scheduler_kwargs.reward_scale=10 algorithm.trainer_kwargs.mu=0.3 \
+              algorithm.scheduler_kwargs.reward_scale=1 algorithm.trainer_kwargs.mu=0.3 \
                 "experiment.seed=${SEEDS[$i]}" \
                   experiment.name=GALE_CIFAR100 logging.name="main_cifar100_fedprox_gale_nc_${SEEDS[$i]}" &
 done

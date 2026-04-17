@@ -37,6 +37,7 @@ class _RoundMetricsPayload(TypedDict, total=False):
     clients: _ClientsSummary
     policy: _PolicySummary
     assigned_local_steps: Dict[str, int]
+    local_displacement_by_client: Dict[str, float]
     training: Dict[str, _AvgStdMetric]
     local_pre_val: Dict[str, _AvgStdMetric]
     local_post_val: Dict[str, _AvgStdMetric]
@@ -412,6 +413,20 @@ def _collect_client_values(
         values.append(float(value))
     return values
 
+
+def _collect_client_metric_map(
+    all_stats: Dict[int, Dict[str, Any]],
+    candidates: List[str],
+) -> Dict[str, float]:
+    values: Dict[str, float] = {}
+    for raw_client_id, row in all_stats.items():
+        hit = _pick_numeric(row, candidates)
+        if hit is None:
+            continue
+        _, value = hit
+        values[str(int(raw_client_id))] = float(value)
+    return values
+
 def _summarize_client_metric_block(
     stats: Dict[int, Dict[str, Any]],
     eval_metric_order: List[str],
@@ -572,6 +587,13 @@ def _build_round_metrics_payload(
                 "std": float(np.std(vals)),
             }
 
+        local_displacement_by_client = _collect_client_metric_map(
+            stats,
+            ["local_displacement"],
+        )
+        if local_displacement_by_client:
+            round_metrics["local_displacement_by_client"] = local_displacement_by_client
+
     if isinstance(extra_round_metrics, dict):
         for key, value in extra_round_metrics.items():
             if isinstance(value, dict):
@@ -644,11 +666,8 @@ def _render_round_summary_lines(round_metrics: _RoundMetricsPayload) -> List[str
             ordered.append((int(client_id), int(local_steps)))
         ordered.sort(key=lambda item: item[0])
         if ordered:
-            shown = ordered[:12]
-            parts = [f"c{client_id}={local_steps}" for client_id, local_steps in shown]
-            if len(ordered) > len(shown):
-                parts.append(f"...(+{len(ordered) - len(shown)} more)")
-            lines.append(_entity_line("Client Steps:", _join_metric_parts(parts)))
+            step_values = [int(local_steps) for _, local_steps in ordered]
+            lines.append(_entity_line("Client Steps:", str(step_values)))
     if isinstance(round_metrics.get("cumulative_tau_t"), (int, float)):
         lines.append(
             _entity_line(

@@ -29,7 +29,7 @@ export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 #         optimizer.lr=0.001 optimizer.lr_decay.gamma=$lr_decay \
 #           algorithm.scheduler_kwargs.discount_gamma=0.80 \
 #             algorithm.scheduler_kwargs.exploration_alpha=0.001 \
-#               algorithm.scheduler_kwargs.reward_scale=10 \
+#               algorithm.scheduler_kwargs.reward_scale=1 \
 #                 experiment.name=GALE_CIFAR100_SWEEP logging.name="sweep_gale_scaffold_80_0.001_${lr_decay}" &
 # done
 # wait
@@ -40,7 +40,7 @@ python -m appfl_sim.runner \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.93 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
           algorithm.scheduler_kwargs.exploration_alpha=0.001 \
-            algorithm.scheduler_kwargs.reward_scale=10 \
+            algorithm.scheduler_kwargs.reward_scale=1 \
               experiment.name=GALE_CIFAR100_SWEEP logging.name="sweep_gale_scaffold_80_0.001_0.93"
 
 python -m appfl_sim.runner \
@@ -49,7 +49,7 @@ python -m appfl_sim.runner \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.95 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
           algorithm.scheduler_kwargs.exploration_alpha=0.001 \
-            algorithm.scheduler_kwargs.reward_scale=10 \
+            algorithm.scheduler_kwargs.reward_scale=1 \
               experiment.name=GALE_CIFAR100_SWEEP logging.name="sweep_gale_scaffold_80_0.001_0.95"
 
 python -m appfl_sim.runner \
@@ -58,7 +58,7 @@ python -m appfl_sim.runner \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.97 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
           algorithm.scheduler_kwargs.exploration_alpha=0.001 \
-            algorithm.scheduler_kwargs.reward_scale=10 \
+            algorithm.scheduler_kwargs.reward_scale=1 \
               experiment.name=GALE_CIFAR100_SWEEP logging.name="sweep_gale_scaffold_80_0.001_0.97"
 
 python -m appfl_sim.runner \
@@ -67,5 +67,5 @@ python -m appfl_sim.runner \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
           algorithm.scheduler_kwargs.exploration_alpha=0.001 \
-            algorithm.scheduler_kwargs.reward_scale=10 \
+            algorithm.scheduler_kwargs.reward_scale=1 \
               experiment.name=GALE_CIFAR100_SWEEP logging.name="sweep_gale_scaffold_80_0.001_0.99"

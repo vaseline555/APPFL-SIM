@@ -37,7 +37,7 @@ export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 #             algorithm.scheduler_kwargs.discount_gamma=0.80 \
 #               algorithm.scheduler_kwargs.exploration_beta=0.0001 \
 #                 algorithm.scheduler_kwargs.ridge_alpha=$ridge_alpha \
-#                 algorithm.scheduler_kwargs.reward_scale=10 \
+#                 algorithm.scheduler_kwargs.reward_scale=1 \
 #                   "algorithm.scheduler_kwargs.contexts=${contexts}" \
 #                     experiment.name=GALE_TINYIMAGENET_SWEEP \
 #                       logging.name="sweep_gale_avg_r_80_0.0001_${lr_decay}_${context_tag}_${ridge_alpha}" &
@@ -52,7 +52,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_l_0.1"
@@ -63,7 +63,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_l_1.0"
@@ -74,7 +74,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_l_10.0"
@@ -85,7 +85,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_d_0.1"
@@ -96,7 +96,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_d_1.0"
@@ -107,7 +107,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_d_10.0"
@@ -118,7 +118,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_ld_0.1"
@@ -129,7 +129,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_ld_1.0"
@@ -140,7 +140,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.98_ld_10.0"
@@ -151,7 +151,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_l_0.1"
@@ -162,7 +162,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_l_1.0"
@@ -173,7 +173,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_l_10.0"
@@ -184,7 +184,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_d_0.1"
@@ -195,7 +195,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_d_1.0"
@@ -206,7 +206,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_d_10.0"
@@ -217,7 +217,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_ld_0.1"
@@ -228,7 +228,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_ld_1.0"
@@ -239,7 +239,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.99_ld_10.0"
@@ -250,7 +250,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_l_0.1"
@@ -261,7 +261,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_l_1.0"
@@ -272,7 +272,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_l_10.0"
@@ -283,7 +283,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_d_0.1"
@@ -294,7 +294,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_d_1.0"
@@ -305,7 +305,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_d_10.0"
@@ -316,7 +316,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=0.1 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_ld_0.1"
@@ -327,7 +327,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=1.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_ld_1.0"
@@ -338,7 +338,7 @@ python -m appfl_sim.runner \
       algorithm.scheduler_kwargs.discount_gamma=0.80 \
         algorithm.scheduler_kwargs.exploration_beta=0.0001 \
           algorithm.scheduler_kwargs.ridge_alpha=10.0 \
-          algorithm.scheduler_kwargs.reward_scale=10 \
+          algorithm.scheduler_kwargs.reward_scale=1 \
             "algorithm.scheduler_kwargs.contexts=[l,d]" \
               experiment.name=GALE_TINYIMAGENET_SWEEP \
                 logging.name="sweep_gale_avg_r_80_0.0001_0.995_ld_10.0"

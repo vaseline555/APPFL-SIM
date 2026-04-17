@@ -1,3 +1,4 @@
+import numpy as np
 from omegaconf import OmegaConf
 
 from appfl_sim.algorithm.scheduler.dslinucb_c_scheduler import DslinucbCScheduler
@@ -84,3 +85,61 @@ def test_dslinucb_c_round_metrics_include_assigned_local_steps():
         "1": 2,
         "3": 8,
     }
+
+
+def test_dslinucb_c_phi_uses_descending_action_one_hot_encoding():
+    scheduler = DslinucbCScheduler(
+        scheduler_configs=OmegaConf.create(
+            {
+                "num_clients": 4,
+                "action_space": [1, 2, 4, 8],
+                "contexts": "d",
+                "base_lr": 0.25,
+                "lr_decay": {"enable": False, "type": "none"},
+            }
+        ),
+        aggregator=object(),
+        logger=None,
+    )
+
+    phi = scheduler._phi(np.asarray([0.5], dtype=float), 1)
+
+    assert scheduler.feature_dim == 10
+    assert phi.tolist() == [1.0, 0.5, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.5]
+
+
+def test_dslinucb_r_phi_uses_descending_action_one_hot_encoding():
+    scheduler = DslinucbRScheduler(
+        scheduler_configs=OmegaConf.create(
+            {
+                "num_clients": 4,
+                "action_space": [1, 2, 4, 8],
+                "contexts": ["l", "d"],
+                "base_lr": 0.25,
+                "lr_decay": {"enable": False, "type": "none"},
+            }
+        ),
+        aggregator=object(),
+        logger=None,
+    )
+
+    phi = scheduler._phi(np.asarray([0.25, 0.5], dtype=float), 4)
+
+    assert scheduler.feature_dim == 15
+    assert phi.tolist() == [
+        1.0,
+        0.25,
+        0.5,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.25,
+        0.5,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
