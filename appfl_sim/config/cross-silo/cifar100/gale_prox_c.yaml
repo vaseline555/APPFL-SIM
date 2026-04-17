@@ -1,0 +1,90 @@
+experiment:
+  name: GenFL_Discounted
+  seed: 42
+  device: cuda
+  server_device: cuda
+  backend: nccl
+  stateful: true
+dataset:
+  path: ./data
+  name: CIFAR100
+  backend: torchvision
+  download: true
+split:
+  type: dirichlet
+  configs:
+    dirichlet_alpha: 0.1
+    dirichlet_min_size: 10
+model:
+  name: resnet18
+  backend: torchvision
+  configs:
+    norm_layer: groupnorm
+    norm_num_groups: 2
+train:
+  num_rounds: 100
+  num_clients: 10
+  num_sampled_clients: 10
+  update_base: epoch
+  local_epochs: 1
+  batch_size: 32
+  shuffle: true
+  eval_batch_size: 256
+algorithm:
+  name: gale_prox_c
+  mix_coefs: sample_ratio
+  optimize_memory: true
+  aggregator: FedproxAggregator
+  scheduler: DslinucbCScheduler
+  trainer: FedproxTrainer
+  aggregator_kwargs:
+    client_weights_mode: sample_ratio
+  scheduler_kwargs:
+    reward_scale: 10.0
+    action_space: [1, 2, 4, 8]
+    discount_gamma: 0.99
+    ridge_alpha: 1.0
+    exploration_beta: 1.0
+    contexts: [l, d]
+  trainer_kwargs:
+    mu: 0.001
+loss:
+  name: CrossEntropyLoss
+  backend: torch
+optimizer:
+  name: SGD
+  backend: auto
+  lr: 0.01
+  lr_decay:
+    enable: true
+    type: exponential
+    gamma: 0.99
+  clip_grad_norm: 0.0
+  configs:
+    weight_decay: 0.0
+    momentum: 0.0
+eval:
+  every: 10
+  metrics:
+  - acc1
+  - acc5
+  do_pre_evaluation: true
+  do_post_evaluation: true
+  show_eval_progress: true
+  enable_global_eval: true
+  enable_federated_eval: true
+  configs:
+    scheme: dataset
+    dataset_ratio:
+    - 70
+    - 15
+    - 15
+logging:
+  path: ./log
+  name: cifar100_diri_gale_prox_c
+  backend: wandb
+  type: server_only
+  configs:
+    track_gen_rewards: true
+    wandb_mode: online
+    wandb_entity: ""

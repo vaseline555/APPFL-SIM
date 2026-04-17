@@ -1,0 +1,66 @@
+import abc
+from omegaconf import DictConfig
+from concurrent.futures import Future
+from typing import Union, Dict, Any, Tuple, OrderedDict
+from appfl_sim.algorithm.aggregator import BaseAggregator
+
+
+class BaseScheduler:
+    def __init__(
+        self, scheduler_configs: DictConfig, aggregator: BaseAggregator, logger: Any
+    ):
+        self.scheduler_configs = scheduler_configs
+        self.aggregator = aggregator
+        self.logger = logger
+
+    @abc.abstractmethod
+    def schedule(
+        self,
+        client_id: Union[int, str],
+        local_model: Union[Dict, OrderedDict],
+        **kwargs,
+    ) -> Union[Future, Dict, OrderedDict, Tuple[Union[Dict, OrderedDict], Dict]]:
+        """
+        Schedule the global aggregation for the local model from a client.
+        :param local_model: the local model from a client
+        :param client_idx: the index of the client
+        :param kwargs: additional keyword arguments for the scheduler
+        :return: the aggregated model or a future object for the aggregated model
+        """
+        pass
+
+    @abc.abstractmethod
+    def get_num_global_epochs(self) -> int:
+        """
+        Return the total number of global epochs/rounds tracked by the scheduler.
+        """
+        pass
+
+    def get_parameters(
+        self, **kwargs
+    ) -> Union[Future, Dict, OrderedDict, Tuple[Union[Dict, OrderedDict], Dict]]:
+        """
+        Return the global model to the clients.
+        """
+        del kwargs
+        return self.aggregator.get_parameters()
+
+    def get_client_contexts(
+        self,
+        *,
+        selected_ids=None,
+        round_idx: int | None = None,
+    ) -> Dict[Union[int, str], Dict[str, Any]] | None:
+        """
+        Optionally provide extra per-client payloads alongside the shared global model.
+        Algorithms such as SCAFFOLD can override this to broadcast auxiliary state.
+        """
+        del selected_ids, round_idx
+        return None
+
+    @classmethod
+    def required_data_fields(cls) -> set[str]:
+        """
+        Declare additional config/data fields required by this scheduler.
+        """
+        return set()
