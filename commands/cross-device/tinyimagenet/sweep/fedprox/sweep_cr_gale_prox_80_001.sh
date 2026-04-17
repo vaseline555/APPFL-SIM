@@ -26,7 +26,7 @@ export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 #   for contexts in "[l]" "[d]" "[l,d]"; do
 #     for ridge_alpha in 0.1 1.0 10.0; do
 #       python -m appfl_sim.runner \
-#         --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+#         --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
 #           logging.configs.wandb_entity=vaseline555 \
 #             optimizer.lr=0.001 optimizer.lr_decay.gamma=$lr_decay \
 #               algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -42,7 +42,7 @@ export ftp_proxy="http://proxy.alcf.anl.gov:3128"
 # done
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -54,7 +54,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[l]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -66,7 +66,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[l]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -78,7 +78,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[l]_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -90,7 +90,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[d]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -102,7 +102,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[d]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -114,7 +114,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[d]_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -126,7 +126,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[l,d]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -138,7 +138,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[l,d]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -150,7 +150,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.98_[l,d]_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -162,7 +162,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[l]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -174,7 +174,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[l]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -186,7 +186,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[l]_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -198,7 +198,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[d]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -210,7 +210,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[d]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -222,7 +222,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[d]_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -234,7 +234,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[l,d]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -246,7 +246,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[l,d]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -258,7 +258,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.99_[l,d]_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -270,7 +270,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.995_[l]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -282,7 +282,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.995_[l]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -294,7 +294,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.995_[l]_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -306,7 +306,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.995_[d]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -318,7 +318,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.995_[d]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -330,7 +330,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.995_[d]_10.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -342,7 +342,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.995_[l,d]_0.1"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
@@ -354,7 +354,7 @@ python -m appfl_sim.runner \
                   experiment.name=GALE_TINYIMAGENET_SWEEP logging.name="GALE_PROX_R_80_0.001_0.995_[l,d]_1.0"
 
 python -m appfl_sim.runner \
-  --config appfl_sim/config/cross-silo/cifar100/gale_prox_r.yaml \
+  --config appfl_sim/config/cross-device/tinyimagenet/gale_prox_r.yaml \
     logging.configs.wandb_entity=vaseline555 \
       optimizer.lr=0.001 optimizer.lr_decay.gamma=0.995 \
         algorithm.scheduler_kwargs.discount_gamma=0.80 \
