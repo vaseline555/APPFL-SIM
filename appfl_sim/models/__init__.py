@@ -15,6 +15,7 @@ MODEL_REGISTRY = {
     "M5": ("m5", "M5"),
     "Sent140LSTM": ("sent140lstm", "Sent140LSTM"),
     "SimpleCNN": ("simplecnn", "SimpleCNN"),
+    "SmartMeterLSTM": ("smartmeterlstm", "SmartMeterLSTM"),
     "StackedGRU": ("stackedgru", "StackedGRU"),
     "StackedLSTM": ("stackedlstm", "StackedLSTM"),
     "StackedTransformer": ("stackedtransformer", "StackedTransformer"),

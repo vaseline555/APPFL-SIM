@@ -1,0 +1,96 @@
+experiment:
+  name: GenFL_LondonSmartMeter
+  seed: 42
+  device: cuda
+  server_device: cuda
+  backend: nccl
+  stateful: true
+dataset:
+  path: ./data
+  name: Sufiyan83/Low-Carbon-London-Smart-Meter-Cleaned-FeatureReady
+  backend: hf
+  download: true
+  configs:
+    train_split: train
+    test_split: ""
+    feature_key: KWH/hh (per half hour)
+    label_key: KWH/hh (per half hour)
+    regression_target: true
+    time_series_window: 24
+    time_series_horizon: 2
+    sort_key: DateTime
+    preserve_order_split: true
+split:
+  type: pre
+  configs:
+    pre_source: LCLid
+    pre_infer_num_clients: true
+model:
+  name: SmartMeterLSTM
+  backend: custom
+  configs:
+    input_size: 1
+    hidden_size: 32
+    hidden_size_2: 16
+    num_layers: 2
+    num_classes: 1
+train:
+  num_rounds: 1000
+  num_sampled_clients: 10
+  update_base: epoch
+  local_epochs: 1
+  batch_size: 64
+  shuffle: true
+  eval_batch_size: 256
+algorithm:
+  name: fedadam
+  mix_coefs: sample_ratio
+  optimize_memory: true
+  aggregator: FedadamAggregator
+  scheduler: FedadamScheduler
+  trainer: FedadamTrainer
+  aggregator_kwargs:
+    client_weights_mode: sample_ratio
+    server_learning_rate: 1.0
+    beta1: 0.9
+    beta2: 0.99
+    tau: 0.1
+  scheduler_kwargs:
+    reward_scale: 10.0
+  trainer_kwargs: {}
+loss:
+  name: MSELoss
+  backend: torch
+optimizer:
+  name: Adam
+  backend: auto
+  lr: 0.001
+  lr_decay:
+    enable: false
+  clip_grad_norm: 1.0
+  configs:
+    weight_decay: 0.0
+eval:
+  every: 10
+  metrics:
+  - rmse
+  - mae
+  - r2
+  do_pre_evaluation: true
+  do_post_evaluation: true
+  show_eval_progress: true
+  enable_global_eval: true
+  enable_federated_eval: true
+  configs:
+    scheme: dataset
+    dataset_ratio:
+    - 70
+    - 15
+    - 15
+logging:
+  path: ./log
+  name: londonsmartmeter_fedadam
+  backend: wandb
+  type: server_only
+  configs:
+    track_gen_rewards: true

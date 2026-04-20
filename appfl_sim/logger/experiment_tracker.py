@@ -19,6 +19,7 @@ class TrackerConfig:
     experiment_seed: str
     wandb_entity: str = ""
     wandb_mode: str = "online"
+    wandb_group: str = ""
     wandb_tags: list[str] | None = None
     wandb_notes: str = ""
 
@@ -50,6 +51,7 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
     experiment_seed = str(_cfg_get(cfg, "experiment.seed", 0))
     wandb_entity = str(_cfg_get(cfg, "logging.configs.wandb_entity", ""))
     wandb_mode = str(_cfg_get(cfg, "logging.configs.wandb_mode", "online")).lower()
+    wandb_group = str(_cfg_get(cfg, "logging.configs.wandb_group", "")).strip()
     wandb_notes = str(_cfg_get(cfg, "logging.configs.wandb_notes", "")).strip()
     wandb_tags_cfg = _cfg_get(cfg, "logging.configs.wandb_tags", None)
     wandb_tags: list[str] | None
@@ -71,6 +73,7 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
         experiment_seed=experiment_seed,
         wandb_entity=wandb_entity,
         wandb_mode=wandb_mode,
+        wandb_group=wandb_group,
         wandb_tags=wandb_tags,
         wandb_notes=wandb_notes,
     )
@@ -165,6 +168,8 @@ class ExperimentTracker:
             )
             if cfg.wandb_entity:
                 init_kwargs["entity"] = cfg.wandb_entity
+            if cfg.wandb_group:
+                init_kwargs["group"] = cfg.wandb_group
 
             self._wandb = wandb
             self._run = wandb.init(**init_kwargs)

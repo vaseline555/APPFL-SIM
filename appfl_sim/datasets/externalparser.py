@@ -112,10 +112,15 @@ def _as_text(value: Any) -> str:
     return str(value)
 
 
-def _normalize_labels(raw_labels: Iterable[Any]) -> torch.Tensor:
+def _normalize_labels(raw_labels: Iterable[Any], regression: bool = False) -> torch.Tensor:
     values = list(raw_labels)
     if not values:
-        return torch.zeros(0, dtype=torch.long)
+        dtype = torch.float32 if regression else torch.long
+        empty = torch.zeros(0, dtype=dtype)
+        return empty.unsqueeze(-1) if regression else empty
+
+    if regression:
+        return torch.tensor([float(v) for v in values], dtype=torch.float32).unsqueeze(-1)
 
     if all(isinstance(v, (int, np.integer)) for v in values):
         return torch.tensor([int(v) for v in values], dtype=torch.long)
@@ -124,14 +129,42 @@ def _normalize_labels(raw_labels: Iterable[Any]) -> torch.Tensor:
     return torch.tensor([mapping[str(v)] for v in values], dtype=torch.long)
 
 
+def _resolve_column_selector(
+    columns: List[str],
+    selector: str,
+    field_name: str,
+    *,
+    allow_empty: bool = False,
+) -> str:
+    text = str(selector).strip()
+    if text == "":
+        if allow_empty:
+            return ""
+        raise ValueError(f"{field_name} cannot be empty.")
+
+    special_indices = {
+        "__first_column__": 0,
+        "__second_column__": 1,
+        "__second_last_column__": len(columns) - 2,
+        "__last_column__": len(columns) - 1,
+    }
+    if text in special_indices:
+        index = int(special_indices[text])
+        if index < 0 or index >= len(columns):
+            raise ValueError(
+                f"{field_name}='{text}' is invalid for columns: {columns}"
+            )
+        return columns[index]
+
+    if text not in columns:
+        raise ValueError(f"{field_name}='{text}' not found in dataset columns: {columns}")
+    return text
+
+
 def _pick_label_key(columns: List[str], args) -> str:
     user_key = str(getattr(args, "ext_label_key", "")).strip()
     if user_key:
-        if user_key not in columns:
-            raise ValueError(
-                f"dataset.configs.label_key='{user_key}' not found in dataset columns: {columns}"
-            )
-        return user_key
+        return _resolve_column_selector(columns, user_key, "dataset.configs.label_key")
 
     for cand in ["label", "labels", "target", "y", "class"]:
         if cand in columns:
@@ -145,11 +178,7 @@ def _pick_label_key(columns: List[str], args) -> str:
 def _pick_feature_key(columns: List[str], label_key: str, args) -> str:
     user_key = str(getattr(args, "ext_feature_key", "")).strip()
     if user_key:
-        if user_key not in columns:
-            raise ValueError(
-                f"dataset.configs.feature_key='{user_key}' not found in dataset columns: {columns}"
-            )
-        return user_key
+        return _resolve_column_selector(columns, user_key, "dataset.configs.feature_key")
 
     preferred = [
         "image",
@@ -273,11 +302,126 @@ def _to_audio_tensor(value: Any, num_frames: int) -> torch.Tensor:
     return torch.from_numpy(arr).unsqueeze(0)
 
 
+def _resolve_pre_source(columns: List[str], args) -> str:
+    source = str(getattr(args, "pre_source", "")).strip()
+    if source:
+        resolved = _resolve_column_selector(columns, source, "split.configs.pre_source")
+        args.pre_source = resolved
+        return resolved
+
+    pre_index = int(getattr(args, "pre_index", -1))
+    if pre_index < 0:
+        return ""
+    if pre_index >= len(columns):
+        raise ValueError(
+            f"split.configs.pre_index={pre_index} is out of range for HF columns: {columns}"
+        )
+    resolved = columns[pre_index]
+    args.pre_source = resolved
+    return resolved
+
+
+def _split_hf_dataset_by_order(dataset, test_size: float):
+    nrows = int(len(dataset))
+    if nrows <= 1:
+        return dataset, dataset.select([])
+
+    n_test = int(nrows * float(test_size))
+    n_test = max(1, min(n_test, nrows - 1))
+    split_at = nrows - n_test
+    return dataset.select(range(split_at)), dataset.select(range(split_at, nrows))
+
+
+def _coerce_regression_value(value: Any) -> float | None:
+    text = str(value).strip() if isinstance(value, str) else value
+    if text in {"", None}:
+        return None
+    try:
+        number = float(text)
+    except Exception:
+        return None
+    if not np.isfinite(number):
+        return None
+    return float(number)
+
+
+def _rows_to_windowed_timeseries_dataset(rows, feature_key: str, label_key: str, args, name: str):
+    row_count = len(rows)
+    window = max(1, int(getattr(args, "time_series_window", 1)))
+    horizon = max(1, int(getattr(args, "time_series_horizon", 1)))
+    pre_source = str(getattr(args, "pre_source", "")).strip()
+    sort_key = str(getattr(args, "time_series_sort_key", "")).strip()
+
+    if row_count == 0:
+        ds = BasicTensorDataset(
+            torch.zeros((0, window, 1), dtype=torch.float32),
+            torch.zeros((0, 1), dtype=torch.float32),
+            name=name,
+        )
+        if pre_source:
+            setattr(ds, pre_source, np.asarray([], dtype=object))
+        return ds
+
+    grouped_rows: Dict[str, List[Tuple[Any, float, float]]] = {}
+    for idx in range(row_count):
+        row = rows[idx]
+        group_id = str(row[pre_source]) if pre_source else "__all__"
+        order_token = row[sort_key] if sort_key else idx
+        feature_value = _coerce_regression_value(row[feature_key])
+        label_value = _coerce_regression_value(row[label_key])
+        if feature_value is None or label_value is None:
+            continue
+        grouped_rows.setdefault(group_id, []).append((order_token, feature_value, label_value))
+
+    windows: List[List[float]] = []
+    targets: List[List[float]] = []
+    client_ids: List[str] = []
+    for group_id, items in grouped_rows.items():
+        if sort_key:
+            items.sort(key=lambda item: item[0])
+        feature_values = [item[1] for item in items]
+        label_values = [item[2] for item in items]
+        for target_idx in range(window + horizon - 1, len(items)):
+            start = target_idx - horizon - window + 1
+            end = target_idx - horizon + 1
+            if start < 0 or end <= start:
+                continue
+            windows.append(feature_values[start:end])
+            targets.append([label_values[target_idx]])
+            client_ids.append(group_id)
+
+    x_tensor = (
+        torch.tensor(windows, dtype=torch.float32).unsqueeze(-1)
+        if windows
+        else torch.zeros((0, window, 1), dtype=torch.float32)
+    )
+    y_tensor = (
+        torch.tensor(targets, dtype=torch.float32)
+        if targets
+        else torch.zeros((0, 1), dtype=torch.float32)
+    )
+    args.need_embedding = False
+    args.seq_len = int(window)
+    args.num_embeddings = None
+    ds = BasicTensorDataset(x_tensor, y_tensor, name=name)
+    if pre_source:
+        setattr(ds, pre_source, np.asarray(client_ids, dtype=object))
+    return ds
+
+
 def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: str):
     row_count = len(rows)
     split_type = str(getattr(args, "split_type", "")).strip().lower()
     pre_source = str(getattr(args, "pre_source", "")).strip()
     pre_values = [] if (split_type == "pre" and pre_source != "") else None
+    if int(getattr(args, "time_series_window", 1)) > 1:
+        return _rows_to_windowed_timeseries_dataset(
+            rows,
+            feature_key=feature_key,
+            label_key=label_key,
+            args=args,
+            name=name,
+        )
     if row_count == 0:
         ds = BasicTensorDataset(
             torch.zeros(0, 1, dtype=torch.float32),
@@ -290,6 +434,7 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
 
     features = []
     raw_labels = []
+    regression_target = bool(getattr(args, "regression_target", False))
     for idx in range(row_count):
         row = rows[idx]
         features.append(row[feature_key])
@@ -300,7 +445,7 @@ def _rows_to_tensor_dataset(rows, feature_key: str, label_key: str, args, name: 
                     f"split.configs.pre_source='{pre_source}' not found in HF row columns."
                 )
             pre_values.append(row[pre_source])
-    labels = _normalize_labels(raw_labels)
+    labels = _normalize_labels(raw_labels, regression=regression_target)
 
     first = features[0]
     if isinstance(first, str) or (
@@ -370,6 +515,7 @@ def _fetch_hf_dataset(args, dataset_name: str):
     config_name = str(getattr(args, "ext_config_name", "")).strip()
     train_split = str(getattr(args, "ext_train_split", "train")).strip()
     test_split = str(getattr(args, "ext_test_split", "test")).strip()
+    preserve_order_split = bool(getattr(args, "preserve_order_split", False))
 
     kwargs: Dict[str, Any] = {
         "cache_dir": str(getattr(args, "data_dir", "./data")),
@@ -396,20 +542,32 @@ def _fetch_hf_dataset(args, dataset_name: str):
             first = list(ds_obj.keys())[0]
             train_hf = ds_obj[first]
 
-        if test_split in ds_obj:
+        if test_split and test_split in ds_obj:
             test_hf = ds_obj[test_split]
         else:
-            split = train_hf.train_test_split(
+            if preserve_order_split:
+                train_hf, test_hf = _split_hf_dataset_by_order(
+                    train_hf,
+                    test_size=float(getattr(args, "test_size", 0.2)),
+                )
+            else:
+                split = train_hf.train_test_split(
+                    test_size=float(getattr(args, "test_size", 0.2)),
+                    seed=int(getattr(args, "seed", 42)),
+                )
+                train_hf, test_hf = split["train"], split["test"]
+    else:
+        if preserve_order_split:
+            train_hf, test_hf = _split_hf_dataset_by_order(
+                ds_obj,
+                test_size=float(getattr(args, "test_size", 0.2)),
+            )
+        else:
+            split = ds_obj.train_test_split(
                 test_size=float(getattr(args, "test_size", 0.2)),
                 seed=int(getattr(args, "seed", 42)),
             )
             train_hf, test_hf = split["train"], split["test"]
-    else:
-        split = ds_obj.train_test_split(
-            test_size=float(getattr(args, "test_size", 0.2)),
-            seed=int(getattr(args, "seed", 42)),
-        )
-        train_hf, test_hf = split["train"], split["test"]
 
     if len(train_hf) == 0:
         raise ValueError(f"External HF dataset '{dataset_name}' has empty training split.")
@@ -418,14 +576,10 @@ def _fetch_hf_dataset(args, dataset_name: str):
     label_key = _pick_label_key(columns, args)
     feature_key = _pick_feature_key(columns, label_key, args)
     if str(getattr(args, "split_type", "")).strip().lower() == "pre":
-        pre_source = str(getattr(args, "pre_source", "")).strip()
+        pre_source = _resolve_pre_source(columns, args)
         if pre_source == "":
             raise ValueError(
-                "split.type='pre' requires split.configs.pre_source for HF backend."
-            )
-        if pre_source not in columns:
-            raise ValueError(
-                f"split.configs.pre_source='{pre_source}' not found in HF columns: {columns}"
+                "split.type='pre' requires split.configs.pre_source or split.configs.pre_index for HF backend."
             )
 
     raw_train = _rows_to_tensor_dataset(
@@ -451,7 +605,10 @@ def _fetch_hf_dataset(args, dataset_name: str):
         dataset_meta=args,
         raw_train=raw_train,
     )
-    dataset_meta.num_classes = int(infer_num_classes(raw_train))
+    if bool(getattr(args, "regression_target", False)):
+        dataset_meta.num_classes = 1
+    else:
+        dataset_meta.num_classes = int(infer_num_classes(raw_train))
     active_logger.info(
         "[%s] finished loading (%d clients).", tag, int(dataset_meta.num_clients)
     )

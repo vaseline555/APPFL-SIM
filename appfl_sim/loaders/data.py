@@ -8,6 +8,7 @@ from appfl_sim.datasets import (
     fetch_hf_dataset,
     fetch_leaf,
     fetch_medmnist_dataset,
+    fetch_sklearn_dataset,
     fetch_tff_dataset,
     fetch_torchaudio_dataset,
     fetch_torchtext_dataset,
@@ -60,7 +61,7 @@ def load_dataset(args: Any):
     - `auto`: infer parser by dataset name/library.
     - `custom`: local path or callable parser (`dataset.path` / `dataset.configs.entrypoint`).
     - `hf`: first-class HuggingFace dataset backend (supports plain repo id in `dataset.name`).
-    - built-ins: `torchvision`, `torchtext`, `torchaudio`, `medmnist`, `flamby`, `leaf`, `tff`.
+    - built-ins: `torchvision`, `torchtext`, `torchaudio`, `medmnist`, `flamby`, `leaf`, `sklearn`, `tff`.
     """
     args = to_namespace(args)
     mode = str(getattr(args, "dataset_backend", "torchvision")).strip().lower()
@@ -84,12 +85,14 @@ def load_dataset(args: Any):
         return fetch_flamby(args)
     if mode == "leaf":
         return fetch_leaf(args)
+    if mode == "sklearn":
+        return fetch_sklearn_dataset(args)
     if mode == "tff":
         return fetch_tff_dataset(args)
     if mode != "auto":
         raise ValueError(
             "dataset.backend must be one of: auto, custom, hf, "
-            "torchvision, torchtext, torchaudio, medmnist, flamby, leaf, tff"
+            "torchvision, torchtext, torchaudio, medmnist, flamby, leaf, sklearn, tff"
         )
 
     # auto mode
@@ -99,6 +102,8 @@ def load_dataset(args: Any):
         return fetch_leaf(args)
     if dataset_upper in FLAMBY_DATASET_KEYS:
         return fetch_flamby(args)
+    if dataset_lower.replace("_", "") in {"20newsgroups", "twentynewsgroups"}:
+        return fetch_sklearn_dataset(args)
     if dataset_lower.startswith("tff:"):
         return fetch_tff_dataset(args)
 

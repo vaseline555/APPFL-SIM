@@ -1,31 +1,42 @@
 experiment:
-  name: GenFL_Discounted
+  name: GenFL_20NewsGroups
   seed: 42
   device: cuda
   server_device: cuda
   backend: nccl
-  stateful: false
+  stateful: true
 dataset:
   path: ./data
-  name: MNIST
-  backend: torchvision
+  name: 20NewsGroups
+  backend: sklearn
   download: true
-split:
-  type: pathological
   configs:
-    min_classes: 2
+    remove:
+    - headers
+    - footers
+    - quotes
+split:
+  type: dirichlet
+  configs:
+    dirichlet_alpha: 0.1
+    dirichlet_min_size: 10
 model:
-  name: TwoNN
-  backend: custom
+  name: distilbert-base-uncased
+  backend: hf
+  configs:
+    pretrained: true
+    hf_task: sequence_classification
+    use_model_tokenizer: true
+    seq_len: 256
 train:
-  num_rounds: 500
-  num_clients: 10
-  num_sampled_clients: 10
-  update_base: iter
-  local_iters: 100
-  batch_size: 32
+  num_rounds: 100
+  num_clients: 20
+  num_sampled_clients: 20
+  update_base: epoch
+  local_epochs: 1
+  batch_size: 8
   shuffle: true
-  eval_batch_size: 256
+  eval_batch_size: 16
 algorithm:
   name: gale_avg_c
   mix_coefs: sample_ratio
@@ -37,7 +48,7 @@ algorithm:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
     reward_scale: 10.0
-    action_space: [25, 50, 200, 400]
+    action_space: [1, 2, 4, 8]
     discount_gamma: 0.99
     ridge_alpha: 1.0
     exploration_beta: 1.0
@@ -47,21 +58,19 @@ loss:
   name: CrossEntropyLoss
   backend: torch
 optimizer:
-  name: SGD
+  name: AdamW
   backend: auto
-  lr: 0.01
+  lr: 5.0e-5
   lr_decay:
-    enable: true
-    type: exponential
-    gamma: 0.9975
-  clip_grad_norm: 0.0
+    enable: false
+  clip_grad_norm: 1.0
   configs:
-    weight_decay: 0.0
-    momentum: 0.0
+    weight_decay: 0.01
 eval:
   every: 10
   metrics:
   - acc1
+  - acc5
   do_pre_evaluation: true
   do_post_evaluation: true
   show_eval_progress: true
@@ -70,14 +79,14 @@ eval:
   configs:
     scheme: dataset
     dataset_ratio:
-    - 80
-    - 10
-    - 10
+    - 70
+    - 15
+    - 15
 logging:
-  path: ./logs
-  name: mnist_patho_gale_avg_c
+  path: ./log
+  name: 20newsgroups_diri_gale_avg_c
   backend: wandb
-  type: both
+  type: server_only
   configs:
     track_gen_rewards: true
     wandb_mode: online
