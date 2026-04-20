@@ -13,7 +13,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `device` (default: `cpu`): device for clients. 
 - `server_device` (default: `cpu`): device for server.
 - `backend` (default: `serial`): execution backend (`serial`, `nccl`, `gloo`).
-- `stateful` (default: `false`): keep client states across rounds (`true`; cross-silo FL) or stateless/sporadic clients (`false`; cross-device FL). (prev `stateful_clients`)
+- `stateful` (default: `false`): keep client runtime state across rounds (`true`; cross-silo FL) or rebuild client runtime on demand (`false`; cross-device FL). Dataset partitions still persist in memory either way; this flag only controls client-side model/trainer/dataloader persistence. (prev `stateful_clients`)
 
 ## Dataset (`dataset`)
 - `path` (default: `./data`): dataset root path. (prev. `dataset_dir`)

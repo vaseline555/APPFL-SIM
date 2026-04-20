@@ -1,5 +1,3 @@
-import gc
-import copy
 import time
 import math
 import torch
@@ -17,7 +15,9 @@ from appfl_sim.misc.logging_utils import (
     _build_trainer_log_title,
 )
 from appfl_sim.misc.system_utils import (
+    flatten_tensor_buffer,
     extract_model_state_optimized,
+    slice_nonfloat_state,
 )
 
 def _make_dataloader(
@@ -100,7 +100,9 @@ class FedavgTrainer(BaseTrainer):
             self.train_configs.get("eval_metrics", None)
         )
         self.model_state = None
-        self._round_start_model_cpu: Dict[str, torch.Tensor] = {}
+        self._round_start_state: Optional[Dict[str, torch.Tensor]] = None
+        self._round_start_device: Optional[Dict[str, torch.Tensor]] = None
+        self._round_start_device_name: Optional[str] = None
         self.eval_results: Optional[Dict[str, Any]] = None
 
         # Resolve device routing
@@ -189,17 +191,50 @@ class FedavgTrainer(BaseTrainer):
             else self.model_state
         )
 
+    def get_buffer(self, layout, device: Optional[str] = None):
+        state = self.model.state_dict()
+        flat = flatten_tensor_buffer(state, layout, device=device)
+        other = slice_nonfloat_state(state, layout)
+        return flat, other
+
     def load_parameters(self, params):
         model_state = params[0] if isinstance(params, tuple) else params
         super().load_parameters(model_state)
+        self.model_state = None
+        self._round_start_state = self._parameter_state(model_state)
+        self._round_start_device = None
+        self._round_start_device_name = None
 
+    def _parameter_state(
+        self,
+        state: Optional[Dict[str, torch.Tensor]],
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        if not hasattr(state, "get"):
+            return None
         reference: Dict[str, torch.Tensor] = {}
         for name, _ in self.model.named_parameters():
-            tensor = model_state.get(name, None) if hasattr(model_state, "get") else None
-            if tensor is None:
-                continue
-            reference[name] = tensor.detach().cpu().clone()
-        self._round_start_model_cpu = reference
+            tensor = state.get(name, None)
+            if torch.is_tensor(tensor):
+                reference[name] = tensor.detach()
+        return reference or None
+
+    def _round_start_state_for_device(
+        self,
+        device: str,
+    ) -> Dict[str, torch.Tensor]:
+        if not self._round_start_state:
+            return {}
+        device_name = str(device)
+        if (
+            self._round_start_device is None
+            or self._round_start_device_name != device_name
+        ):
+            self._round_start_device = {
+                name: tensor.detach().to(device_name)
+                for name, tensor in self._round_start_state.items()
+            }
+            self._round_start_device_name = device_name
+        return self._round_start_device
 
 
     def _validate_train_config(self):
@@ -283,27 +318,28 @@ class FedavgTrainer(BaseTrainer):
         return float(math.sqrt(max(0.0, total_sq)))
 
     def _local_displacement_l2_norm(self) -> float:
-        if not self._round_start_model_cpu:
+        reference_state = self._round_start_state_for_device(self.device)
+        if not reference_state:
             return 0.0
         total_sq = 0.0
         with torch.no_grad():
             for name, param in self.model.named_parameters():
-                reference = self._round_start_model_cpu.get(name, None)
+                reference = reference_state.get(name, None)
                 if reference is None:
                     continue
-                diff = param.detach().cpu().float() - reference.float()
+                diff = param.detach().float() - reference.detach().float()
                 if diff.numel() == 0:
                     continue
                 total_sq += float(torch.sum(diff * diff).item())
         return float(math.sqrt(max(0.0, total_sq)))
 
     def _round_start_parameter_l2_norm(self) -> float:
-        if not self._round_start_model_cpu:
+        if not self._round_start_state:
             return 0.0
         total_sq = 0.0
         with torch.no_grad():
-            for reference in self._round_start_model_cpu.values():
-                tensor = reference.float()
+            for reference in self._round_start_state.values():
+                tensor = reference.detach().float()
                 if tensor.numel() == 0:
                     continue
                 total_sq += float(torch.sum(tensor * tensor).item())
@@ -549,6 +585,7 @@ class FedavgTrainer(BaseTrainer):
         if callable(set_round_label):
             set_round_label(f"Round {int(self.round):04d}")
         self.eval_results = {"round": self.round + 1}
+        offload_after = bool(kwargs.get("offload_after", True))
 
         # Check metrics
         metric_names_for_log = []
@@ -734,31 +771,18 @@ class FedavgTrainer(BaseTrainer):
             )
 
         self.round += 1
-        if self.optimize_memory:
-            self.model_state = extract_model_state_optimized(
-                self.model, include_buffers=True, cpu_transfer=False
-            )
-        else:
-            self.model_state = copy.deepcopy(self.model.state_dict())
+        self.model_state = None
+        local_displacement = float(self._normalized_local_displacement())
+        post_update_param_norm = float(self._post_update_parameter_l2_norm())
 
-        # Move model state to CPU for communication.
-        if "cuda" in str(self.train_configs.get("device", "cpu")):
-            if self.optimize_memory:
-                for k in self.model_state:
-                    if self.model_state[k].device.type != "cpu":
-                        self.model_state[k] = self.model_state[k].cpu()
-                gc.collect()
-            else:
-                for k in self.model_state:
-                    self.model_state[k] = self.model_state[k].cpu()
-
-        self._offload_model_to_cpu()
+        if offload_after:
+            self._offload_model_to_cpu()
 
         result = train_metrics_manager.aggregate(total_len=total_examples)
         if isinstance(current_lr, (int, float)):
             result["current_lr"] = float(current_lr)
-        result["local_displacement"] = float(self._normalized_local_displacement())
-        result["post_update_param_norm"] = float(self._post_update_parameter_l2_norm())
+        result["local_displacement"] = local_displacement
+        result["post_update_param_norm"] = post_update_param_norm
         self._attach_split_result(result, split="val", phase="pre")
         if "pre_train_loss" in self.eval_results:
             result["pre_train_loss"] = float(self.eval_results["pre_train_loss"])

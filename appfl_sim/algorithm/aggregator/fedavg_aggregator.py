@@ -1,9 +1,9 @@
-import gc
 import copy
+from collections import OrderedDict
 import torch
 from omegaconf import DictConfig
 from appfl_sim.algorithm.aggregator.base_aggregator import BaseAggregator
-from typing import Union, Dict, OrderedDict, Any, Optional
+from typing import Union, Dict, Any, Optional
 from appfl_sim.privacy.secure_aggregator import SecureAggregator
 from appfl_sim.misc.system_utils import (
     clone_state_dict_optimized,
@@ -55,17 +55,29 @@ class FedavgAggregator(BaseAggregator):
     @staticmethod
     def _unwrap_local_model_payload(payload):
         if isinstance(payload, tuple) and len(payload) > 0:
-            candidate = payload[0]
-            if isinstance(candidate, (dict, OrderedDict)):
-                return candidate
+            payload = payload[0]
         return payload
 
+    @staticmethod
+    def _live_state(model: torch.nn.Module) -> OrderedDict[str, torch.Tensor]:
+        state: OrderedDict[str, torch.Tensor] = OrderedDict()
+        with torch.no_grad():
+            for name, param in model.named_parameters():
+                state[name] = param.detach()
+            for name, buffer in model.named_buffers():
+                if buffer is not None:
+                    state[name] = buffer.detach()
+        return state
+
     def _normalize_local_models(
-        self, local_models: Dict[Union[str, int], Union[Dict, OrderedDict, tuple]]
+        self, local_models: Dict[Union[str, int], Union[Dict, OrderedDict, tuple, torch.nn.Module]]
     ) -> Dict[Union[str, int], Union[Dict, OrderedDict]]:
-        normalized = {}
+        normalized: Dict[Union[str, int], Union[Dict, OrderedDict]] = {}
         for client_id, payload in local_models.items():
             model_state = self._unwrap_local_model_payload(payload)
+            if isinstance(model_state, torch.nn.Module):
+                normalized[client_id] = self._live_state(model_state)
+                continue
             if isinstance(model_state, (dict, OrderedDict)):
                 normalized[client_id] = model_state
         return normalized
@@ -84,7 +96,6 @@ class FedavgAggregator(BaseAggregator):
                 for name, tensor in first_model.items():
                     source = model_state[name] if name in model_state else tensor
                     self.global_state[name] = source.detach().clone()
-            gc.collect()
             return
 
         if self.optimize_memory:
@@ -92,7 +103,6 @@ class FedavgAggregator(BaseAggregator):
             with torch.no_grad():
                 for name, tensor in list(local_models.values())[0].items():
                     self.global_state[name] = tensor.detach().clone()
-            gc.collect()
             return
 
         self.global_state = {
@@ -198,7 +208,6 @@ class FedavgAggregator(BaseAggregator):
                                 )
                             else:
                                 self.global_state[name] = tensor.detach().clone()
-                    gc.collect()
                 else:
                     for name, tensor in aggregated_state.items():
                         if name in self.global_state:
@@ -242,7 +251,6 @@ class FedavgAggregator(BaseAggregator):
                         )
                         del param_sum
 
-            gc.collect()
             self.step.clear()
         else:
             # Original behavior

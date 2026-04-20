@@ -160,6 +160,70 @@ def extract_model_state_optimized(
     return state
 
 
+def build_tensor_layout(state_dict) -> Dict[str, object]:
+    float_tensors = []
+    other_names = []
+    total_size = 0
+    for name, tensor in state_dict.items():
+        if tensor is None or not torch.is_tensor(tensor):
+            continue
+        if tensor.is_floating_point():
+            numel = int(tensor.numel())
+            float_tensors.append((name, tuple(tensor.shape), tensor.dtype, numel))
+            total_size += numel
+        else:
+            other_names.append(name)
+    return {
+        "float": float_tensors,
+        "other": other_names,
+        "size": int(total_size),
+    }
+
+
+def flatten_tensor_buffer(
+    state_dict,
+    layout: Dict[str, object],
+    device: Optional[Union[str, torch.device]] = None,
+) -> torch.Tensor:
+    target = torch.device(device) if device is not None else None
+    parts = []
+    for name, _, _, _ in layout.get("float", []):
+        tensor = state_dict[name].detach().reshape(-1).to(dtype=torch.float32)
+        if target is not None and tensor.device != target:
+            tensor = tensor.to(target)
+        parts.append(tensor)
+    if parts:
+        return torch.cat(parts, dim=0)
+    if target is None:
+        target = torch.device("cpu")
+    return torch.zeros(int(layout.get("size", 0)), device=target, dtype=torch.float32)
+
+
+def unflatten_tensor_buffer(
+    flat: torch.Tensor,
+    layout: Dict[str, object],
+    device: Optional[Union[str, torch.device]] = "cpu",
+) -> Dict[str, torch.Tensor]:
+    target = torch.device(device) if device is not None else flat.device
+    state: Dict[str, torch.Tensor] = {}
+    offset = 0
+    for name, shape, dtype, numel in layout.get("float", []):
+        chunk = flat[offset : offset + int(numel)]
+        state[name] = chunk.reshape(shape).to(device=target, dtype=dtype).clone()
+        offset += int(numel)
+    return state
+
+
+def slice_nonfloat_state(state_dict, layout: Dict[str, object]) -> Dict[str, torch.Tensor]:
+    state: Dict[str, torch.Tensor] = {}
+    for name in layout.get("other", []):
+        tensor = state_dict.get(name, None)
+        if tensor is None or not torch.is_tensor(tensor):
+            continue
+        state[name] = tensor.detach().cpu().clone()
+    return state
+
+
 def safe_inplace_operation(
     tensor: torch.Tensor,
     operation: str,

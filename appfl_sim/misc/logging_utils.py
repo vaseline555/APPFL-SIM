@@ -227,8 +227,13 @@ def _emit_client_state_policy_message(
     logger: Optional[ServerAgentFileLogger] = None,
 ) -> None:
     stateful = bool(policy.get("stateful", False))
-    mode = "stateful/persistent" if stateful else "stateless/sporadic"
-    msg = f"{mode.title()} clients because `stateful={stateful}`"
+    if stateful:
+        msg = "Persistent client runtime because `stateful=true`"
+    else:
+        msg = (
+            "On-demand client runtime because `stateful=false` "
+            "(dataset partitions still stay resident)"
+        )
     if logger is not None:
         logger.info(msg)
     else:

@@ -21,7 +21,11 @@ from appfl_sim.misc.data_utils import (
     _normalize_client_tuple,
     _resolve_num_sampled_clients,
 )
-from appfl_sim.misc.system_utils import _iter_id_chunks, _release_clients
+from appfl_sim.misc.system_utils import (
+    _iter_id_chunks,
+    _release_clients,
+    flatten_tensor_buffer,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,6 +79,10 @@ def _run_local_client_update(
     client_contexts,
     round_idx: int,
     round_local_steps: Any,
+    payload: str = "state",
+    buffer_layout: Optional[Dict[str, Any]] = None,
+    buffer_device: Optional[str] = None,
+    control_layout: Optional[Dict[str, Any]] = None,
 ):
     client_payload = global_state
     if isinstance(client_contexts, dict):
@@ -87,12 +95,45 @@ def _run_local_client_update(
         value = round_local_steps.get(int(client.id), round_local_steps.get(str(int(client.id))))
         if isinstance(value, (int, float, np.integer, np.floating)):
             local_steps = max(0, int(value))
-    if local_steps is None:
-        train_result = client.train(round=round_idx)
-    else:
-        train_result = client.train(
-            round=round_idx, local_steps=int(local_steps)
+    train_kwargs: Dict[str, Any] = {"round": round_idx}
+    if local_steps is not None:
+        train_kwargs["local_steps"] = int(local_steps)
+    if payload == "buffer":
+        train_kwargs["offload_after"] = False
+    train_result = client.train(**train_kwargs)
+    if payload == "model":
+        return train_result, client.model
+    if payload == "buffer":
+        if not hasattr(client.trainer, "get_buffer"):
+            raise AttributeError("Trainer does not implement get_buffer().")
+        state = client.trainer.get_buffer(
+            buffer_layout,
+            device=buffer_device,
         )
+        control = None
+        has_flat_control = (
+            isinstance(control_layout, dict)
+            and int(control_layout.get("size", 0)) > 0
+        )
+        control_state = (
+            train_result.pop("scaffold_client_control", None)
+            if has_flat_control
+            else None
+        )
+        if isinstance(control_state, dict):
+            control = flatten_tensor_buffer(
+                control_state,
+                control_layout,
+                device=buffer_device,
+            )
+        if getattr(client.trainer, "optimize_memory", False) and hasattr(
+            client.trainer, "_offload_model_to_cpu"
+        ):
+            client.trainer._offload_model_to_cpu()
+        if control is not None:
+            flat, other = state
+            return train_result, (flat, other, control)
+        return train_result, state
     uploaded = client.get_parameters()
     state = uploaded[0] if isinstance(uploaded, tuple) else uploaded
     return train_result, state
@@ -117,6 +158,10 @@ def _collect_local_training_payload(
     client_contexts: Optional[Dict[int, Dict[str, Any]]],
     chunk_size: int,
     num_workers_override: Optional[int],
+    payload: str = "state",
+    buffer_layout: Optional[Dict[str, Any]] = None,
+    buffer_device: Optional[str] = None,
+    control_layout: Optional[Dict[str, Any]] = None,
 ) -> Dict[int, Dict[str, Any]]:
     local_payload: Dict[int, Dict[str, Any]] = {}
     if persistent_clients is not None:
@@ -130,6 +175,10 @@ def _collect_local_training_payload(
                 client_contexts=client_contexts,
                 round_idx=round_idx,
                 round_local_steps=round_local_steps,
+                payload=payload,
+                buffer_layout=buffer_layout,
+                buffer_device=buffer_device,
+                control_layout=control_layout,
             )
             local_payload[int(client.id)] = {
                 "state": state,
@@ -138,9 +187,10 @@ def _collect_local_training_payload(
             }
         return local_payload
 
+    active_pool = None if payload == "model" else worker_pool
     for chunk_ids in _iter_id_chunks(selected_client_ids, chunk_size):
-        if worker_pool:
-            chunk_clients = worker_pool[: len(chunk_ids)]
+        if active_pool:
+            chunk_clients = active_pool[: len(chunk_ids)]
             for client, cid in zip(chunk_clients, chunk_ids):
                 _rebind_client_for_on_demand_job(
                     client,
@@ -158,7 +208,7 @@ def _collect_local_training_payload(
                 run_log_dir=run_log_dir,
                 client_logging_enabled=client_logging_enabled,
                 trainer_name=trainer_name,
-                share_model=True,
+                share_model=bool(payload != "model"),
                 num_workers_override=num_workers_override,
             )
         for client in chunk_clients:
@@ -168,13 +218,17 @@ def _collect_local_training_payload(
                 client_contexts=client_contexts,
                 round_idx=round_idx,
                 round_local_steps=round_local_steps,
+                payload=payload,
+                buffer_layout=buffer_layout,
+                buffer_device=buffer_device,
+                control_layout=control_layout,
             )
             local_payload[int(client.id)] = {
                 "state": state,
                 "num_examples": int(train_result.get("num_examples", 0)),
                 "stats": train_result,
             }
-        if not worker_pool:
+        if not active_pool:
             _release_clients(chunk_clients)
     return local_payload
 

@@ -7,7 +7,7 @@ import time
 import torch
 import numpy as np
 
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from omegaconf import DictConfig, OmegaConf
 
 from appfl_sim.agent import ClientAgent
@@ -17,9 +17,12 @@ from appfl_sim.misc.system_utils import (
     _client_processing_chunk_size,
     _force_server_cpu_when_global_eval_disabled,
     _release_clients,
+    build_tensor_layout,
+    flatten_tensor_buffer,
     get_local_rank,
     resolve_rank_device,
     set_seed_everything,
+    unflatten_tensor_buffer,
     validate_backend_device_consistency,
 )
 from appfl_sim.misc.config_utils import (
@@ -68,6 +71,7 @@ from appfl_sim.misc.runtime_utils import (
 )
 from appfl_sim.misc.dist_utils import (
     _broadcast_model_state_inplace,
+    _gather_buffer_updates,
     _load_dataset_distributed,
     _run_federated_eval_distributed,
     launch_or_run_distributed,
@@ -229,6 +233,103 @@ def _get_round_client_contexts(
             aggregator_contexts = contexts
 
     return _merge_client_context_maps(scheduler_contexts, aggregator_contexts)
+
+
+def _split_scaffold_contexts(
+    client_contexts: dict[int, dict[str, Any]] | None,
+    *,
+    control_layout: dict[str, Any] | None,
+    device: str,
+):
+    if not isinstance(client_contexts, dict) or not client_contexts:
+        return client_contexts, None, None, []
+    if not isinstance(control_layout, dict):
+        return client_contexts, None, None, []
+    control_size = int(control_layout.get("size", 0))
+    if control_size <= 0:
+        return client_contexts, None, None, []
+
+    target = torch.device(device)
+    meta: dict[int, dict[str, Any]] = {}
+    client_ids: list[int] = []
+    server_rows = []
+    client_rows = []
+    zero = torch.zeros(control_size, device=target, dtype=torch.float32)
+
+    for raw_client_id, raw_context in client_contexts.items():
+        if not isinstance(raw_context, dict) or not raw_context:
+            continue
+        client_id = int(raw_client_id)
+        context = dict(raw_context)
+        server_control = context.pop("scaffold_server_control", None)
+        client_control = context.pop("scaffold_client_control", None)
+        has_server = isinstance(server_control, dict)
+        has_client = isinstance(client_control, dict)
+        if has_server or has_client:
+            client_ids.append(client_id)
+            server_rows.append(
+                flatten_tensor_buffer(server_control, control_layout, device=target)
+                if has_server
+                else zero.clone()
+            )
+            client_rows.append(
+                flatten_tensor_buffer(client_control, control_layout, device=target)
+                if has_client
+                else zero.clone()
+            )
+        if context:
+            meta[client_id] = context
+
+    if not client_ids:
+        return client_contexts, None, None, []
+
+    return (
+        meta or None,
+        torch.stack(server_rows, dim=0),
+        torch.stack(client_rows, dim=0),
+        client_ids,
+    )
+
+
+def _merge_scaffold_contexts(
+    client_contexts: dict[int, dict[str, Any]] | None,
+    *,
+    client_ids: Sequence[int],
+    server_control: Optional[torch.Tensor],
+    client_control: Optional[torch.Tensor],
+    control_layout: dict[str, Any] | None,
+) -> dict[int, dict[str, Any]] | None:
+    if not client_ids:
+        return client_contexts
+    if (
+        server_control is None
+        or client_control is None
+        or not isinstance(control_layout, dict)
+    ):
+        return client_contexts
+
+    merged: dict[int, dict[str, Any]] = {}
+    if isinstance(client_contexts, dict):
+        for raw_client_id, raw_context in client_contexts.items():
+            if not isinstance(raw_context, dict) or not raw_context:
+                continue
+            merged[int(raw_client_id)] = dict(raw_context)
+
+    for row, client_id in enumerate(client_ids):
+        merged[int(client_id)] = {
+            **merged.get(int(client_id), {}),
+            "scaffold_server_control": unflatten_tensor_buffer(
+                server_control[row],
+                control_layout,
+                device="cpu",
+            ),
+            "scaffold_client_control": unflatten_tensor_buffer(
+                client_control[row],
+                control_layout,
+                device="cpu",
+            ),
+        }
+    return merged or None
 
 
 def _resolve_round_tau_increment(
@@ -485,23 +586,6 @@ def run_serial(config) -> None:
             client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
             trainer_name=str(algorithm_components["trainer_name"]),
         )
-    else:
-        if _allow_reusable_on_demand_pool(
-            config,
-            client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-        ):
-            worker_pool = _build_on_demand_worker_pool(
-                config=config,
-                model=on_demand_model if on_demand_model is not None else model,
-                client_datasets=client_datasets,
-                local_client_ids=np.arange(num_clients).astype(int),
-                device=client_device,
-                run_log_dir=run_log_dir,
-                client_logging_enabled=bool(logging_policy["client_logging_enabled"]),
-                trainer_name=str(algorithm_components["trainer_name"]),
-                pool_size=chunk_size,
-                num_workers_override=on_demand_workers["train"],
-            )
     if stateful_mode:
         if persistent_clients is None or worker_pool is not None:
             raise RuntimeError(
@@ -582,6 +666,7 @@ def run_serial(config) -> None:
                 client_contexts=client_contexts,
                 chunk_size=chunk_size,
                 num_workers_override=on_demand_workers["train"],
+                payload="model",
             )
             updates, sample_sizes, stats = _payload_to_updates(local_payload)
 
@@ -748,6 +833,10 @@ def run_distributed(config, backend: str) -> None:
         input_shape=tuple(runtime_cfg["input_shape"]),
         num_classes=int(runtime_cfg["num_classes"]),
     )
+    buffer_layout = build_tensor_layout(model.state_dict())
+    control_layout = None
+    if str(algorithm_components["trainer_name"]) == "ScaffoldTrainer":
+        control_layout = build_tensor_layout(dict(model.named_parameters()))
 
     client_device = resolve_rank_device(
         str(_cfg_get(config, "experiment.device", "cpu")),
@@ -822,6 +911,7 @@ def run_distributed(config, backend: str) -> None:
     tracker = None
     server = None
     server_logger = bootstrap_logger if rank == 0 else None
+    context_device = client_device if backend == "nccl" else "cpu"
     if rank == 0:
         _force_server_cpu_when_global_eval_disabled(
             config, enable_global_eval, logger=server_logger
@@ -880,6 +970,9 @@ def run_distributed(config, backend: str) -> None:
     cumulative_tau_t = 0.0
     try:
         for round_idx in range(1, num_rounds + 1):
+            server_control_buffer = None
+            client_control_buffer = None
+            control_client_ids: list[int] = []
             if rank == 0:
                 selected_ids = _sample_train_clients(
                     train_client_ids=train_client_ids,
@@ -900,10 +993,21 @@ def run_distributed(config, backend: str) -> None:
                     selected_ids=selected_ids,
                     round_idx=round_idx,
                 )
+                (
+                    client_contexts,
+                    server_control_buffer,
+                    client_control_buffer,
+                    control_client_ids,
+                ) = _split_scaffold_contexts(
+                    client_contexts,
+                    control_layout=control_layout,
+                    device=context_device,
+                )
                 payload = {
                     "selected_ids": selected_ids,
                     "local_steps": local_steps,
                     "client_contexts": client_contexts,
+                    "control_client_ids": control_client_ids,
                 }
             else:
                 payload = None
@@ -913,6 +1017,27 @@ def run_distributed(config, backend: str) -> None:
             selected_ids = list(payload["selected_ids"])
             round_local_steps = payload.get("local_steps", None)
             client_contexts = payload.get("client_contexts", None)
+            control_client_ids = [
+                int(cid) for cid in payload.get("control_client_ids", [])
+            ]
+            if control_layout is not None and control_client_ids:
+                control_shape = (len(control_client_ids), int(control_layout.get("size", 0)))
+                if rank != 0:
+                    server_control_buffer = torch.zeros(
+                        control_shape,
+                        device=context_device,
+                        dtype=torch.float32,
+                    )
+                    client_control_buffer = torch.zeros_like(server_control_buffer)
+                dist.broadcast(server_control_buffer, src=0)
+                dist.broadcast(client_control_buffer, src=0)
+                client_contexts = _merge_scaffold_contexts(
+                    client_contexts,
+                    client_ids=control_client_ids,
+                    server_control=server_control_buffer,
+                    client_control=client_control_buffer,
+                    control_layout=control_layout,
+                )
             sync_model = server.model if rank == 0 else model
             _broadcast_model_state_inplace(sync_model, src=0)
             if on_demand_model is not None and sync_model is not on_demand_model:
@@ -942,14 +1067,11 @@ def run_distributed(config, backend: str) -> None:
                 client_contexts=client_contexts,
                 chunk_size=chunk_size,
                 num_workers_override=on_demand_workers["train"],
+                payload="buffer",
+                buffer_layout=buffer_layout,
+                buffer_device=client_device if backend == "nccl" else "cpu",
+                control_layout=control_layout,
             )
-    
-            if rank == 0:
-                gathered = [None] * world_size
-                dist.gather_object(local_payload, object_gather_list=gathered, dst=0)
-            else:
-                dist.gather_object(local_payload, object_gather_list=None, dst=0)
-                gathered = None
             stats = {}
             scheduler_feedback = {}
             extra_round_metrics = {}
@@ -957,14 +1079,18 @@ def run_distributed(config, backend: str) -> None:
             if rank == 0:
                 updates: dict[int, Any] = {}
                 sample_sizes: dict[int, int] = {}
-                stats = {}
-                for payload_map in gathered or []:
-                    if not isinstance(payload_map, dict):
-                        continue
-                    part_updates, part_sizes, part_stats = _payload_to_updates(payload_map)
-                    updates.update(part_updates)
-                    sample_sizes.update(part_sizes)
-                    stats.update(part_stats)
+            gathered_updates, gathered_sample_sizes, gathered_stats = _gather_buffer_updates(
+                local_payload,
+                layout=buffer_layout,
+                control_layout=control_layout,
+                device=client_device if backend == "nccl" else "cpu",
+                rank=rank,
+                world_size=world_size,
+            )
+            if rank == 0:
+                updates = gathered_updates or {}
+                sample_sizes = gathered_sample_sizes or {}
+                stats = gathered_stats or {}
                 server.aggregate(
                     updates,
                     sample_sizes,

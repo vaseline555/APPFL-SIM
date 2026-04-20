@@ -33,20 +33,14 @@ class FedproxTrainer(FedavgTrainer):
             **kwargs,
         )
         self.mu = float(self.train_configs.get("mu", 0.001))
-        self._global_reference_cpu: Dict[str, torch.Tensor] = {}
+        self._global_reference_state: Optional[Dict[str, torch.Tensor]] = None
         self._global_reference_device: Optional[Dict[str, torch.Tensor]] = None
         self._global_reference_device_name: Optional[str] = None
 
     def load_parameters(self, params):
         model_state = params[0] if isinstance(params, tuple) else params
         super().load_parameters(model_state)
-        reference: Dict[str, torch.Tensor] = {}
-        for name, _ in self.model.named_parameters():
-            tensor = model_state.get(name, None)
-            if tensor is None:
-                continue
-            reference[name] = tensor.detach().cpu().clone()
-        self._global_reference_cpu = reference
+        self._global_reference_state = self._parameter_state(model_state)
         self._global_reference_device = None
         self._global_reference_device_name = None
 
@@ -57,8 +51,8 @@ class FedproxTrainer(FedavgTrainer):
             or self._global_reference_device_name != device_name
         ):
             self._global_reference_device = {
-                name: tensor.to(device_name)
-                for name, tensor in self._global_reference_cpu.items()
+                name: tensor.detach().to(device_name)
+                for name, tensor in (self._global_reference_state or {}).items()
             }
             self._global_reference_device_name = device_name
         return self._global_reference_device
@@ -66,7 +60,7 @@ class FedproxTrainer(FedavgTrainer):
     def _train_batch(
         self, optimizer: torch.optim.Optimizer, data, target
     ):
-        if self.mu <= 0.0 or not self._global_reference_cpu:
+        if self.mu <= 0.0 or not self._global_reference_state:
             return super()._train_batch(optimizer, data, target)
 
         device = self.device
@@ -101,4 +95,3 @@ class FedproxTrainer(FedavgTrainer):
             )
         optimizer.step()
         return loss.item(), output.detach().cpu().numpy(), target.detach().cpu().numpy()
-

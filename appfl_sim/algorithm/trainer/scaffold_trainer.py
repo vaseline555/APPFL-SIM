@@ -33,7 +33,7 @@ class ScaffoldTrainer(FedavgTrainer):
             **kwargs,
         )
         self._completed_optimizer_steps = 0
-        self._global_reference_cpu: Dict[str, torch.Tensor] = {}
+        self._global_reference_state: Optional[Dict[str, torch.Tensor]] = None
         self._server_control_cpu: Dict[str, torch.Tensor] = {}
         self._client_control_cpu: Dict[str, torch.Tensor] = {}
         self._server_control_device: Optional[Dict[str, torch.Tensor]] = None
@@ -48,14 +48,7 @@ class ScaffoldTrainer(FedavgTrainer):
             if len(params) > 1 and isinstance(params[1], dict):
                 context = params[1]
         super().load_parameters(model_state)
-
-        reference: Dict[str, torch.Tensor] = {}
-        for name, _ in self.model.named_parameters():
-            tensor = model_state.get(name, None)
-            if tensor is None:
-                continue
-            reference[name] = tensor.detach().cpu().clone()
-        self._global_reference_cpu = reference
+        self._global_reference_state = self._parameter_state(model_state)
         self._server_control_cpu = self._sanitize_control_state(
             context.get("scaffold_server_control", {})
         )
@@ -68,11 +61,11 @@ class ScaffoldTrainer(FedavgTrainer):
 
     def _sanitize_control_state(self, state: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         sanitized: Dict[str, torch.Tensor] = {}
-        for name, ref_tensor in self._global_reference_cpu.items():
+        for name, ref_tensor in (self._global_reference_state or {}).items():
             if isinstance(state, dict) and name in state and torch.is_tensor(state[name]):
                 sanitized[name] = state[name].detach().cpu().clone()
             else:
-                sanitized[name] = torch.zeros_like(ref_tensor)
+                sanitized[name] = torch.zeros_like(ref_tensor, device="cpu")
         return sanitized
 
     def _control_state_for_device(
@@ -162,15 +155,17 @@ class ScaffoldTrainer(FedavgTrainer):
             }
 
         denom = float(local_steps) * float(learning_rate)
+        current_state = self.model.state_dict()
         updated: Dict[str, torch.Tensor] = {}
-        for name, global_tensor in self._global_reference_cpu.items():
-            local_tensor = self.model_state.get(name, None)
+        for name, global_tensor in (self._global_reference_state or {}).items():
+            local_tensor = current_state.get(name, None)
             if local_tensor is None:
                 continue
-            client_control = self._client_control_cpu.get(name, torch.zeros_like(global_tensor))
-            server_control = self._server_control_cpu.get(name, torch.zeros_like(global_tensor))
+            global_cpu = global_tensor.detach().cpu()
+            client_control = self._client_control_cpu.get(name, torch.zeros_like(global_cpu))
+            server_control = self._server_control_cpu.get(name, torch.zeros_like(global_cpu))
             updated[name] = client_control - server_control + (
-                (global_tensor - local_tensor.detach().cpu()) / denom
+                (global_cpu - local_tensor.detach().cpu()) / denom
             )
         return updated
 

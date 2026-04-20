@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gc
 import uuid
 import torch
 import importlib
@@ -98,15 +97,7 @@ class ClientAgent:
 
     def train(self, **kwargs):
         """Train the model locally."""
-        result = self.trainer.train(**kwargs)
-
-        # Memory optimization: Garbage collection after training
-        if self.optimize_memory:
-            gc.collect()
-            # Clear CUDA cache if available
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        return result
+        return self.trainer.train(**kwargs)
 
     def get_parameters(
         self,
@@ -118,19 +109,11 @@ class ClientAgent:
         else:
             metadata = None
         # Compression path is intentionally disabled in appfl[sim].
-        # Memory optimization: Final cleanup
-        if self.optimize_memory:
-            gc.collect()
-
         return params if metadata is None else (params, metadata)
 
     def load_parameters(self, params) -> None:
         """Load parameters from the server."""
         self.trainer.load_parameters(params)
-
-        # Memory optimization: Garbage collection after parameter loading
-        if self.optimize_memory:
-            gc.collect()
 
     def evaluate(self, split: str = "test", **kwargs) -> Dict:
         if self.trainer is None:

@@ -12,6 +12,11 @@ from appfl_sim.misc.config_utils import build_loss_from_config
 from appfl_sim.metrics import parse_metric_names
 from appfl_sim.misc.data_utils import _resolve_client_eval_dataset
 from appfl_sim.misc.learning_utils import _aggregate_eval_stats, _evaluate_dataset_direct
+from appfl_sim.misc.system_utils import (
+    build_tensor_layout,
+    flatten_tensor_buffer,
+    unflatten_tensor_buffer,
+)
 
 
 def _find_free_port() -> int:
@@ -179,6 +184,113 @@ def _gather_to_rank0(payload, *, rank: int, world_size: int):
     dist.gather_object(payload, object_gather_list=None, dst=0)
     return None
 
+
+def _gather_buffer_updates(
+    local_payload: dict[int, dict],
+    *,
+    layout: dict,
+    control_layout: dict | None,
+    device: str,
+    rank: int,
+    world_size: int,
+):
+    import torch.distributed as dist
+
+    buffer_device = torch.device(device)
+    local_ids = sorted(int(cid) for cid in local_payload)
+    count_tensor = torch.tensor([len(local_ids)], device=buffer_device, dtype=torch.int64)
+    count_list = [torch.zeros_like(count_tensor) for _ in range(world_size)]
+    dist.all_gather(count_list, count_tensor)
+    counts = [int(item.item()) for item in count_list]
+    max_count = max(counts) if counts else 0
+    flat_size = int(layout.get("size", 0))
+    control_size = int(control_layout.get("size", 0)) if control_layout else 0
+
+    local_flat = torch.zeros((max_count, flat_size), device=buffer_device, dtype=torch.float32)
+    local_control = None
+    if control_size > 0:
+        local_control = torch.zeros(
+            (max_count, control_size),
+            device=buffer_device,
+            dtype=torch.float32,
+        )
+    local_meta = []
+    for row, cid in enumerate(local_ids):
+        state = local_payload[cid].get("state")
+        control = None
+        if isinstance(state, tuple):
+            flat = state[0]
+            other = state[1] if len(state) > 1 else {}
+            control = state[2] if len(state) > 2 else None
+        else:
+            flat, other = state, {}
+        if torch.is_tensor(flat) and flat.numel() > 0:
+            local_flat[row, : flat.numel()].copy_(flat.reshape(-1))
+        if local_control is not None and torch.is_tensor(control) and control.numel() > 0:
+            local_control[row, : control.numel()].copy_(control.reshape(-1))
+        local_meta.append(
+            {
+                "client_id": int(cid),
+                "num_examples": int(local_payload[cid].get("num_examples", 0)),
+                "stats": local_payload[cid].get("stats", {}),
+                "other": other if isinstance(other, dict) else {},
+            }
+        )
+
+    if rank == 0:
+        gathered_flat = [torch.zeros_like(local_flat) for _ in range(world_size)]
+        dist.gather(local_flat, gather_list=gathered_flat, dst=0)
+    else:
+        dist.gather(local_flat, gather_list=None, dst=0)
+        gathered_flat = None
+
+    if local_control is not None:
+        if rank == 0:
+            gathered_control = [torch.zeros_like(local_control) for _ in range(world_size)]
+            dist.gather(local_control, gather_list=gathered_control, dst=0)
+        else:
+            dist.gather(local_control, gather_list=None, dst=0)
+            gathered_control = None
+    else:
+        gathered_control = None
+
+    gathered_meta = _gather_to_rank0(local_meta, rank=rank, world_size=world_size)
+    if rank != 0:
+        return None, None, None
+
+    updates = {}
+    sample_sizes = {}
+    stats = {}
+    for src_rank, meta_items in enumerate(gathered_meta or []):
+        if not isinstance(meta_items, list):
+            continue
+        flat_rows = gathered_flat[src_rank]
+        for row, item in enumerate(meta_items):
+            if not isinstance(item, dict):
+                continue
+            cid = int(item["client_id"])
+            state = unflatten_tensor_buffer(flat_rows[row], layout, device="cpu")
+            other = item.get("other", {})
+            if isinstance(other, dict):
+                state.update(other)
+            updates[cid] = state
+            sample_sizes[cid] = int(item.get("num_examples", 0))
+            stats_item = item.get("stats", {})
+            if not isinstance(stats_item, dict):
+                stats_item = {}
+            else:
+                stats_item = dict(stats_item)
+            if gathered_control is not None and control_layout is not None:
+                control_state = unflatten_tensor_buffer(
+                    gathered_control[src_rank][row],
+                    control_layout,
+                    device="cpu",
+                )
+                if control_state:
+                    stats_item["scaffold_client_control"] = control_state
+            stats[cid] = stats_item
+    return updates, sample_sizes, stats
+
 def _run_federated_eval_distributed(
     config: DictConfig,
     model,
@@ -245,8 +357,35 @@ def _broadcast_model_state_inplace(model, *, src: int = 0) -> None:
 
     state = model.state_dict()
     backend = str(dist.get_backend()).strip().lower()
-    for key in sorted(state.keys()):
-        tensor = state[key]
+    rank = int(dist.get_rank())
+    layout = build_tensor_layout(state)
+    float_size = int(layout.get("size", 0))
+    target_device = torch.device("cpu")
+    for tensor in state.values():
+        if not torch.is_tensor(tensor):
+            continue
+        target_device = tensor.device
+        break
+
+    if float_size > 0:
+        buffer_device = target_device
+        if backend == "nccl" and target_device.type == "cpu":
+            buffer_device = torch.device("cuda", torch.cuda.current_device())
+        if rank == src:
+            flat = flatten_tensor_buffer(state, layout, device=buffer_device)
+        else:
+            flat = torch.zeros(float_size, device=buffer_device, dtype=torch.float32)
+        dist.broadcast(flat, src=src)
+        if rank != src:
+            if target_device.type == "cpu" and flat.device.type != "cpu":
+                flat = flat.cpu()
+            restored = unflatten_tensor_buffer(flat, layout, device=target_device)
+            with torch.no_grad():
+                for name, tensor in restored.items():
+                    state[name].copy_(tensor)
+
+    for key in layout.get("other", []):
+        tensor = state.get(key, None)
         if not torch.is_tensor(tensor):
             continue
         if backend == "nccl" and tensor.device.type == "cpu":
