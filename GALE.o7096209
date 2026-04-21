@@ -28859,3 +28859,414 @@ Due to MODULEPATH changes, the following have been reloaded:
   Local Gen. Error:  err.: -0.0001/0.0021
   Global Gen. Error: err.: -0.0004
   Gen. Reward:       round: 0.0187            | cumulative: 0.0075
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:35:57,233 | Server (Round 0396)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    396.0000
+  Training:          loss: 5.2979/0.0044      | acc1: 0.0055/0.0067      | acc5: 0.0289/0.0302
+  Local Pre-val.:    loss: 5.2978/0.0043      | acc1: 0.0000/0.0000      | acc5: 0.0172/0.0211
+  Local Post-val.:   loss: 5.2942/0.0043      | acc1: 0.0044/0.0089      | acc5: 0.0494/0.0266
+  Local Pre-test.:   loss: 5.2992/0.0053      | acc1: 0.0133/0.0267      | acc5: 0.0133/0.0267
+  Local Post-test.:  loss: 5.2944/0.0055      | acc1: 0.0133/0.0267      | acc5: 0.0344/0.0438
+  Local Gen. Error:  err.: -0.0011/0.0014
+  Global Gen. Error: err.: -0.0011
+  Gen. Reward:       round: -0.0005           | cumulative: 0.0070
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:35:58,679 | Server (Round 0397)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    397.0000
+  Training:          loss: 5.2992/0.0016      | acc1: 0.0072/0.0077      | acc5: 0.0233/0.0107
+  Local Pre-val.:    loss: 5.3001/0.0033      | acc1: 0.0053/0.0105      | acc5: 0.0183/0.0169
+  Local Post-val.:   loss: 5.2973/0.0034      | acc1: 0.0142/0.0183      | acc5: 0.0183/0.0169
+  Local Pre-test.:   loss: 5.2999/0.0044      | acc1: 0.0000/0.0000      | acc5: 0.0111/0.0222
+  Local Post-test.:  loss: 5.2957/0.0041      | acc1: 0.0111/0.0222      | acc5: 0.0111/0.0222
+  Local Gen. Error:  err.: 0.0002/0.0018
+  Global Gen. Error: err.: 0.0002
+  Gen. Reward:       round: -0.0230           | cumulative: -0.0160
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:00,099 | Server (Round 0398)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    398.0000
+  Training:          loss: 5.2979/0.0020      | acc1: 0.0000/0.0000      | acc5: 0.0154/0.0105
+  Local Pre-val.:    loss: 5.2987/0.0021      | acc1: 0.0000/0.0000      | acc5: 0.0050/0.0100
+  Local Post-val.:   loss: 5.2951/0.0015      | acc1: 0.0037/0.0074      | acc5: 0.0226/0.0160
+  Local Pre-test.:   loss: 5.3010/0.0026      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2961/0.0032      | acc1: 0.0000/0.0000      | acc5: 0.0095/0.0190
+  Local Gen. Error:  err.: 0.0003/0.0006
+  Global Gen. Error: err.: 0.0003
+  Gen. Reward:       round: 0.0128            | cumulative: -0.0032
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:01,479 | Server (Round 0399)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    399.0000
+  Training:          loss: 5.2955/0.0037      | acc1: 0.0147/0.0195      | acc5: 0.0428/0.0345
+  Local Pre-val.:    loss: 5.2961/0.0031      | acc1: 0.0000/0.0000      | acc5: 0.0240/0.0024
+  Local Post-val.:   loss: 5.2908/0.0069      | acc1: 0.0626/0.1036      | acc5: 0.1091/0.1369
+  Local Pre-test.:   loss: 5.2952/0.0017      | acc1: 0.0000/0.0000      | acc5: 0.0321/0.0393
+  Local Post-test.:  loss: 5.2883/0.0048      | acc1: 0.0575/0.0821      | acc5: 0.1268/0.1771
+  Local Gen. Error:  err.: -0.0013/0.0015
+  Global Gen. Error: err.: -0.0014
+  Gen. Reward:       round: 0.0290            | cumulative: 0.0259
+appfl-sim: ✅[Server (Round 0400) Evaluation (Global)]:   0%|          | 0/40 [00:00<?]appfl-sim: ✅[Server (Round 0400) Evaluation (Global)]:  35%|███▌      | 14/40 [00:00<00:00]appfl-sim: ✅[Server (Round 0400) Evaluation (Global)]:  72%|███████▎  | 29/40 [00:00<00:00]                                                                                            appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:   0%|          | 0/500 [00:00<?]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  11%|█         | 54/500 [00:00<00:02]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  22%|██▏       | 108/500 [00:00<00:02]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  32%|███▏      | 162/500 [00:00<00:01]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  43%|████▎     | 216/500 [00:01<00:01]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  54%|█████▍    | 270/500 [00:01<00:01]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  65%|██████▍   | 324/500 [00:01<00:01]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  76%|███████▌  | 378/500 [00:02<00:00]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  86%|████████▋ | 432/500 [00:02<00:00]appfl-sim: ✅[Server (Round 0400) | Evaluation (Fed.)]:  97%|█████████▋| 486/500 [00:02<00:00]                                                                                              [34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:06,059 | Server (Round 0400)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    400.0000
+  Training:          loss: 5.2981/0.0034      | acc1: 0.0040/0.0033      | acc5: 0.0344/0.0195
+  Local Pre-val.:    loss: 5.2990/0.0039      | acc1: 0.0040/0.0080      | acc5: 0.0232/0.0217
+  Local Post-val.:   loss: 5.2956/0.0040      | acc1: 0.0083/0.0102      | acc5: 0.0603/0.0445
+  Local Pre-test.:   loss: 5.3006/0.0063      | acc1: 0.0000/0.0000      | acc5: 0.0133/0.0267
+  Local Post-test.:  loss: 5.2961/0.0057      | acc1: 0.0000/0.0000      | acc5: 0.0567/0.0512
+  Local Gen. Error:  err.: -0.0005/0.0014
+  Global Gen. Error: err.: -0.0005
+  Gen. Reward:       round: -0.0325           | cumulative: -0.0067
+  Global Eval.:      loss: 5.2984             | acc1: 0.0057             | acc5: 0.0249
+  Federated Eval.:   loss: 5.2983/0.0050      | acc1: 0.0066/0.0257      | acc5: 0.0270/0.0512
+  Federated Extrema: loss[min,max]=[5.2795,5.3149] | acc1[min,max]=[0.0000,0.1875] | acc5[min,max]=[0.0000,0.3571]
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:07,413 | Server (Round 0401)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    401.0000
+  Training:          loss: 5.2978/0.0024      | acc1: 0.0114/0.0096      | acc5: 0.0385/0.0302
+  Local Pre-val.:    loss: 5.2992/0.0033      | acc1: 0.0089/0.0110      | acc5: 0.0354/0.0283
+  Local Post-val.:   loss: 5.2956/0.0040      | acc1: 0.0214/0.0323      | acc5: 0.0532/0.0369
+  Local Pre-test.:   loss: 5.2982/0.0045      | acc1: 0.0000/0.0000      | acc5: 0.0537/0.0274
+  Local Post-test.:  loss: 5.2937/0.0055      | acc1: 0.0250/0.0306      | acc5: 0.0787/0.0461
+  Local Gen. Error:  err.: 0.0003/0.0014
+  Global Gen. Error: err.: 0.0004
+  Gen. Reward:       round: -0.0000           | cumulative: -0.0067
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:08,844 | Server (Round 0402)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    402.0000
+  Training:          loss: 5.2978/0.0015      | acc1: 0.0000/0.0000      | acc5: 0.0154/0.0085
+  Local Pre-val.:    loss: 5.2978/0.0015      | acc1: 0.0000/0.0000      | acc5: 0.0051/0.0103
+  Local Post-val.:   loss: 5.2947/0.0017      | acc1: 0.0000/0.0000      | acc5: 0.0180/0.0092
+  Local Pre-test.:   loss: 5.2989/0.0018      | acc1: 0.0000/0.0000      | acc5: 0.0125/0.0250
+  Local Post-test.:  loss: 5.2943/0.0023      | acc1: 0.0000/0.0000      | acc5: 0.0125/0.0250
+  Local Gen. Error:  err.: -0.0005/0.0010
+  Global Gen. Error: err.: -0.0005
+  Gen. Reward:       round: 0.0127            | cumulative: 0.0060
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:10,093 | Server (Round 0403)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    403.0000
+  Training:          loss: 5.3007/0.0031      | acc1: 0.0026/0.0032      | acc5: 0.0208/0.0134
+  Local Pre-val.:    loss: 5.3013/0.0046      | acc1: 0.0000/0.0000      | acc5: 0.0263/0.0320
+  Local Post-val.:   loss: 5.2973/0.0026      | acc1: 0.0000/0.0000      | acc5: 0.0306/0.0403
+  Local Pre-test.:   loss: 5.3016/0.0073      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2960/0.0048      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Gen. Error:  err.: -0.0006/0.0024
+  Global Gen. Error: err.: -0.0003
+  Gen. Reward:       round: -0.0362           | cumulative: -0.0303
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:11,440 | Server (Round 0404)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    404.0000
+  Training:          loss: 5.2968/0.0024      | acc1: 0.0060/0.0060      | acc5: 0.0258/0.0158
+  Local Pre-val.:    loss: 5.2991/0.0022      | acc1: 0.0038/0.0075      | acc5: 0.0306/0.0118
+  Local Post-val.:   loss: 5.2950/0.0046      | acc1: 0.0082/0.0101      | acc5: 0.0541/0.0311
+  Local Pre-test.:   loss: 5.2983/0.0034      | acc1: 0.0000/0.0000      | acc5: 0.0238/0.0301
+  Local Post-test.:  loss: 5.2930/0.0065      | acc1: 0.0095/0.0190      | acc5: 0.0333/0.0415
+  Local Gen. Error:  err.: 0.0007/0.0016
+  Global Gen. Error: err.: 0.0006
+  Gen. Reward:       round: 0.0258            | cumulative: -0.0045
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:12,839 | Server (Round 0405)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    405.0000
+  Training:          loss: 5.2975/0.0041      | acc1: 0.0069/0.0061      | acc5: 0.0350/0.0139
+  Local Pre-val.:    loss: 5.2989/0.0048      | acc1: 0.0000/0.0000      | acc5: 0.0273/0.0359
+  Local Post-val.:   loss: 5.2958/0.0046      | acc1: 0.0048/0.0095      | acc5: 0.0365/0.0464
+  Local Pre-test.:   loss: 5.2965/0.0065      | acc1: 0.0000/0.0000      | acc5: 0.0250/0.0500
+  Local Post-test.:  loss: 5.2920/0.0057      | acc1: 0.0125/0.0250      | acc5: 0.0708/0.0692
+  Local Gen. Error:  err.: 0.0000/0.0021
+  Global Gen. Error: err.: -0.0000
+  Gen. Reward:       round: 0.0018            | cumulative: -0.0026
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:14,238 | Server (Round 0406)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    406.0000
+  Training:          loss: 5.2985/0.0019      | acc1: 0.0014/0.0027      | acc5: 0.0095/0.0092
+  Local Pre-val.:    loss: 5.2998/0.0029      | acc1: 0.0000/0.0000      | acc5: 0.0080/0.0160
+  Local Post-val.:   loss: 5.2970/0.0029      | acc1: 0.0000/0.0000      | acc5: 0.0080/0.0160
+  Local Pre-test.:   loss: 5.2983/0.0027      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2945/0.0029      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Gen. Error:  err.: 0.0002/0.0017
+  Global Gen. Error: err.: 0.0002
+  Gen. Reward:       round: -0.0102           | cumulative: -0.0128
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:15,676 | Server (Round 0407)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    407.0000
+  Training:          loss: 5.2975/0.0025      | acc1: 0.0073/0.0114      | acc5: 0.0323/0.0168
+  Local Pre-val.:    loss: 5.2983/0.0024      | acc1: 0.0038/0.0075      | acc5: 0.0353/0.0227
+  Local Post-val.:   loss: 5.2935/0.0037      | acc1: 0.0283/0.0347      | acc5: 0.1094/0.0780
+  Local Pre-test.:   loss: 5.2992/0.0034      | acc1: 0.0000/0.0000      | acc5: 0.0292/0.0363
+  Local Post-test.:  loss: 5.2928/0.0030      | acc1: 0.0000/0.0000      | acc5: 0.0861/0.0835
+  Local Gen. Error:  err.: -0.0008/0.0014
+  Global Gen. Error: err.: -0.0008
+  Gen. Reward:       round: 0.0156            | cumulative: 0.0028
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:17,219 | Server (Round 0408)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    408.0000
+  Training:          loss: 5.2989/0.0021      | acc1: 0.0042/0.0055      | acc5: 0.0151/0.0091
+  Local Pre-val.:    loss: 5.3008/0.0026      | acc1: 0.0000/0.0000      | acc5: 0.0229/0.0144
+  Local Post-val.:   loss: 5.2981/0.0026      | acc1: 0.0049/0.0098      | acc5: 0.0363/0.0268
+  Local Pre-test.:   loss: 5.2990/0.0039      | acc1: 0.0111/0.0222      | acc5: 0.0411/0.0347
+  Local Post-test.:  loss: 5.2953/0.0040      | acc1: 0.0111/0.0222      | acc5: 0.0578/0.0610
+  Local Gen. Error:  err.: 0.0012/0.0014
+  Global Gen. Error: err.: 0.0012
+  Gen. Reward:       round: -0.0253           | cumulative: -0.0225
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:18,621 | Server (Round 0409)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    409.0000
+  Training:          loss: 5.2985/0.0037      | acc1: 0.0121/0.0177      | acc5: 0.0309/0.0301
+  Local Pre-val.:    loss: 5.2992/0.0028      | acc1: 0.0043/0.0087      | acc5: 0.0323/0.0271
+  Local Post-val.:   loss: 5.2962/0.0029      | acc1: 0.0178/0.0254      | acc5: 0.0557/0.0545
+  Local Pre-test.:   loss: 5.2997/0.0057      | acc1: 0.0143/0.0286      | acc5: 0.0286/0.0571
+  Local Post-test.:  loss: 5.2954/0.0058      | acc1: 0.0143/0.0286      | acc5: 0.0546/0.0830
+  Local Gen. Error:  err.: 0.0002/0.0014
+  Global Gen. Error: err.: 0.0002
+  Gen. Reward:       round: 0.0160            | cumulative: -0.0065
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:20,000 | Server (Round 0410)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    410.0000
+  Training:          loss: 5.2985/0.0028      | acc1: 0.0014/0.0027      | acc5: 0.0314/0.0217
+  Local Pre-val.:    loss: 5.3002/0.0039      | acc1: 0.0095/0.0190      | acc5: 0.0339/0.0322
+  Local Post-val.:   loss: 5.2968/0.0051      | acc1: 0.0095/0.0190      | acc5: 0.0574/0.0681
+  Local Pre-test.:   loss: 5.3003/0.0081      | acc1: 0.0125/0.0250      | acc5: 0.0493/0.0728
+  Local Post-test.:  loss: 5.2958/0.0091      | acc1: 0.0375/0.0750      | acc5: 0.0743/0.1213
+  Local Gen. Error:  err.: 0.0006/0.0011
+  Global Gen. Error: err.: 0.0006
+  Gen. Reward:       round: -0.0098           | cumulative: -0.0163
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:21,336 | Server (Round 0411)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    411.0000
+  Training:          loss: 5.2988/0.0020      | acc1: 0.0033/0.0042      | acc5: 0.0156/0.0075
+  Local Pre-val.:    loss: 5.3008/0.0029      | acc1: 0.0044/0.0089      | acc5: 0.0096/0.0118
+  Local Post-val.:   loss: 5.2983/0.0030      | acc1: 0.0044/0.0089      | acc5: 0.0096/0.0118
+  Local Pre-test.:   loss: 5.3006/0.0027      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2971/0.0031      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Gen. Error:  err.: 0.0016/0.0009
+  Global Gen. Error: err.: 0.0016
+  Gen. Reward:       round: -0.0085           | cumulative: -0.0249
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:22,637 | Server (Round 0412)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    412.0000
+  Training:          loss: 5.2975/0.0010      | acc1: 0.0034/0.0068      | acc5: 0.0213/0.0093
+  Local Pre-val.:    loss: 5.2985/0.0023      | acc1: 0.0000/0.0000      | acc5: 0.0088/0.0108
+  Local Post-val.:   loss: 5.2956/0.0025      | acc1: 0.0000/0.0000      | acc5: 0.0242/0.0150
+  Local Pre-test.:   loss: 5.2992/0.0032      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2951/0.0026      | acc1: 0.0000/0.0000      | acc5: 0.0143/0.0286
+  Local Gen. Error:  err.: 0.0005/0.0021
+  Global Gen. Error: err.: 0.0004
+  Gen. Reward:       round: 0.0266            | cumulative: 0.0018
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:24,089 | Server (Round 0413)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    413.0000
+  Training:          loss: 5.2977/0.0022      | acc1: 0.0025/0.0031      | acc5: 0.0247/0.0162
+  Local Pre-val.:    loss: 5.2978/0.0027      | acc1: 0.0000/0.0000      | acc5: 0.0302/0.0327
+  Local Post-val.:   loss: 5.2947/0.0015      | acc1: 0.0000/0.0000      | acc5: 0.0301/0.0404
+  Local Pre-test.:   loss: 5.2974/0.0049      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2933/0.0039      | acc1: 0.0000/0.0000      | acc5: 0.0105/0.0211
+  Local Gen. Error:  err.: -0.0007/0.0013
+  Global Gen. Error: err.: -0.0007
+  Gen. Reward:       round: 0.0036            | cumulative: 0.0054
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:25,395 | Server (Round 0414)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    414.0000
+  Training:          loss: 5.2972/0.0012      | acc1: 0.0052/0.0026      | acc5: 0.0283/0.0135
+  Local Pre-val.:    loss: 5.2990/0.0014      | acc1: 0.0086/0.0106      | acc5: 0.0187/0.0097
+  Local Post-val.:   loss: 5.2962/0.0020      | acc1: 0.0086/0.0106      | acc5: 0.0367/0.0134
+  Local Pre-test.:   loss: 5.2981/0.0013      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2942/0.0025      | acc1: 0.0000/0.0000      | acc5: 0.0111/0.0222
+  Local Gen. Error:  err.: 0.0010/0.0008
+  Global Gen. Error: err.: 0.0010
+  Gen. Reward:       round: -0.0094           | cumulative: -0.0040
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:26,645 | Server (Round 0415)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    415.0000
+  Training:          loss: 5.2971/0.0015      | acc1: 0.0074/0.0092      | acc5: 0.0309/0.0068
+  Local Pre-val.:    loss: 5.2987/0.0027      | acc1: 0.0043/0.0087      | acc5: 0.0238/0.0140
+  Local Post-val.:   loss: 5.2961/0.0022      | acc1: 0.0087/0.0174      | acc5: 0.0331/0.0226
+  Local Pre-test.:   loss: 5.2979/0.0030      | acc1: 0.0000/0.0000      | acc5: 0.0182/0.0364
+  Local Post-test.:  loss: 5.2939/0.0022      | acc1: 0.0000/0.0000      | acc5: 0.0336/0.0413
+  Local Gen. Error:  err.: 0.0009/0.0015
+  Global Gen. Error: err.: 0.0009
+  Gen. Reward:       round: 0.0012            | cumulative: -0.0028
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:27,953 | Server (Round 0416)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    416.0000
+  Training:          loss: 5.2974/0.0027      | acc1: 0.0055/0.0053      | acc5: 0.0205/0.0133
+  Local Pre-val.:    loss: 5.2989/0.0028      | acc1: 0.0000/0.0000      | acc5: 0.0174/0.0165
+  Local Post-val.:   loss: 5.2952/0.0020      | acc1: 0.0000/0.0000      | acc5: 0.0171/0.0165
+  Local Pre-test.:   loss: 5.2983/0.0014      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2932/0.0008      | acc1: 0.0000/0.0000      | acc5: 0.0143/0.0286
+  Local Gen. Error:  err.: 0.0004/0.0015
+  Global Gen. Error: err.: 0.0005
+  Gen. Reward:       round: -0.0014           | cumulative: -0.0041
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:29,224 | Server (Round 0417)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    417.0000
+  Training:          loss: 5.2964/0.0041      | acc1: 0.0126/0.0093      | acc5: 0.0445/0.0280
+  Local Pre-val.:    loss: 5.2983/0.0043      | acc1: 0.0042/0.0083      | acc5: 0.0316/0.0265
+  Local Post-val.:   loss: 5.2953/0.0047      | acc1: 0.0086/0.0106      | acc5: 0.0725/0.0536
+  Local Pre-test.:   loss: 5.2971/0.0037      | acc1: 0.0143/0.0286      | acc5: 0.0552/0.0504
+  Local Post-test.:  loss: 5.2928/0.0043      | acc1: 0.0543/0.0779      | acc5: 0.1127/0.0911
+  Local Gen. Error:  err.: 0.0008/0.0010
+  Global Gen. Error: err.: 0.0008
+  Gen. Reward:       round: 0.0066            | cumulative: 0.0025
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:30,560 | Server (Round 0418)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    418.0000
+  Training:          loss: 5.2957/0.0021      | acc1: 0.0054/0.0050      | acc5: 0.0258/0.0181
+  Local Pre-val.:    loss: 5.2952/0.0036      | acc1: 0.0000/0.0000      | acc5: 0.0374/0.0189
+  Local Post-val.:   loss: 5.2920/0.0044      | acc1: 0.0095/0.0190      | acc5: 0.0697/0.0591
+  Local Pre-test.:   loss: 5.2951/0.0021      | acc1: 0.0000/0.0000      | acc5: 0.0300/0.0371
+  Local Post-test.:  loss: 5.2907/0.0030      | acc1: 0.0000/0.0000      | acc5: 0.0567/0.0786
+  Local Gen. Error:  err.: -0.0017/0.0014
+  Global Gen. Error: err.: -0.0017
+  Gen. Reward:       round: 0.0314            | cumulative: 0.0339
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:32,082 | Server (Round 0419)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    419.0000
+  Training:          loss: 5.2968/0.0036      | acc1: 0.0125/0.0080      | acc5: 0.0303/0.0188
+  Local Pre-val.:    loss: 5.2973/0.0033      | acc1: 0.0056/0.0111      | acc5: 0.0306/0.0091
+  Local Post-val.:   loss: 5.2947/0.0033      | acc1: 0.0056/0.0111      | acc5: 0.0477/0.0196
+  Local Pre-test.:   loss: 5.2959/0.0043      | acc1: 0.0133/0.0267      | acc5: 0.0267/0.0327
+  Local Post-test.:  loss: 5.2923/0.0047      | acc1: 0.0133/0.0267      | acc5: 0.0267/0.0327
+  Local Gen. Error:  err.: -0.0004/0.0004
+  Global Gen. Error: err.: -0.0004
+  Gen. Reward:       round: -0.0212           | cumulative: 0.0127
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:33,457 | Server (Round 0420)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    420.0000
+  Training:          loss: 5.2973/0.0041      | acc1: 0.0029/0.0058      | acc5: 0.0303/0.0241
+  Local Pre-val.:    loss: 5.2987/0.0046      | acc1: 0.0047/0.0093      | acc5: 0.0273/0.0343
+  Local Post-val.:   loss: 5.2944/0.0043      | acc1: 0.0089/0.0109      | acc5: 0.0583/0.0533
+  Local Pre-test.:   loss: 5.2981/0.0048      | acc1: 0.0000/0.0000      | acc5: 0.0111/0.0222
+  Local Post-test.:  loss: 5.2930/0.0043      | acc1: 0.0000/0.0000      | acc5: 0.0211/0.0259
+  Local Gen. Error:  err.: 0.0001/0.0006
+  Global Gen. Error: err.: 0.0001
+  Gen. Reward:       round: -0.0142           | cumulative: -0.0014
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:34,833 | Server (Round 0421)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    421.0000
+  Training:          loss: 5.2981/0.0012      | acc1: 0.0000/0.0000      | acc5: 0.0126/0.0051
+  Local Pre-val.:    loss: 5.2994/0.0027      | acc1: 0.0000/0.0000      | acc5: 0.0232/0.0261
+  Local Post-val.:   loss: 5.2960/0.0035      | acc1: 0.0095/0.0117      | acc5: 0.0232/0.0261
+  Local Pre-test.:   loss: 5.3003/0.0044      | acc1: 0.0105/0.0211      | acc5: 0.0405/0.0345
+  Local Post-test.:  loss: 5.2952/0.0040      | acc1: 0.0105/0.0211      | acc5: 0.0511/0.0434
+  Local Gen. Error:  err.: 0.0003/0.0022
+  Global Gen. Error: err.: 0.0003
+  Gen. Reward:       round: -0.0066           | cumulative: -0.0080
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:36,187 | Server (Round 0422)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    422.0000
+  Training:          loss: 5.2970/0.0028      | acc1: 0.0070/0.0075      | acc5: 0.0301/0.0206
+  Local Pre-val.:    loss: 5.2989/0.0037      | acc1: 0.0095/0.0190      | acc5: 0.0238/0.0369
+  Local Post-val.:   loss: 5.2954/0.0051      | acc1: 0.0095/0.0190      | acc5: 0.0474/0.0723
+  Local Pre-test.:   loss: 5.2958/0.0047      | acc1: 0.0125/0.0250      | acc5: 0.0493/0.0728
+  Local Post-test.:  loss: 5.2912/0.0062      | acc1: 0.0250/0.0500      | acc5: 0.0743/0.1213
+  Local Gen. Error:  err.: 0.0006/0.0018
+  Global Gen. Error: err.: 0.0005
+  Gen. Reward:       round: 0.0057            | cumulative: -0.0023
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:37,580 | Server (Round 0423)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    423.0000
+  Training:          loss: 5.2969/0.0027      | acc1: 0.0122/0.0214      | acc5: 0.0345/0.0480
+  Local Pre-val.:    loss: 5.2970/0.0034      | acc1: 0.0193/0.0291      | acc5: 0.0538/0.0624
+  Local Post-val.:   loss: 5.2939/0.0040      | acc1: 0.0340/0.0466      | acc5: 0.0631/0.0704
+  Local Pre-test.:   loss: 5.2968/0.0040      | acc1: 0.0286/0.0571      | acc5: 0.0429/0.0857
+  Local Post-test.:  loss: 5.2929/0.0046      | acc1: 0.0429/0.0857      | acc5: 0.0562/0.0832
+  Local Gen. Error:  err.: -0.0008/0.0010
+  Global Gen. Error: err.: -0.0008
+  Gen. Reward:       round: 0.0183            | cumulative: 0.0160
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:38,954 | Server (Round 0424)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    424.0000
+  Training:          loss: 5.2965/0.0020      | acc1: 0.0097/0.0078      | acc5: 0.0373/0.0107
+  Local Pre-val.:    loss: 5.2982/0.0023      | acc1: 0.0101/0.0124      | acc5: 0.0254/0.0226
+  Local Post-val.:   loss: 5.2942/0.0028      | acc1: 0.0194/0.0273      | acc5: 0.0419/0.0185
+  Local Pre-test.:   loss: 5.2996/0.0020      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2936/0.0027      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Gen. Error:  err.: 0.0003/0.0017
+  Global Gen. Error: err.: 0.0003
+  Gen. Reward:       round: -0.0124           | cumulative: 0.0036
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:40,472 | Server (Round 0425)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    425.0000
+  Training:          loss: 5.2953/0.0029      | acc1: 0.0036/0.0045      | acc5: 0.0278/0.0213
+  Local Pre-val.:    loss: 5.2970/0.0031      | acc1: 0.0038/0.0075      | acc5: 0.0220/0.0145
+  Local Post-val.:   loss: 5.2920/0.0039      | acc1: 0.0075/0.0151      | acc5: 0.0717/0.0518
+  Local Pre-test.:   loss: 5.2962/0.0045      | acc1: 0.0000/0.0000      | acc5: 0.0381/0.0323
+  Local Post-test.:  loss: 5.2898/0.0055      | acc1: 0.0000/0.0000      | acc5: 0.0619/0.0555
+  Local Gen. Error:  err.: 0.0003/0.0019
+  Global Gen. Error: err.: 0.0002
+  Gen. Reward:       round: 0.0118            | cumulative: 0.0154
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:41,905 | Server (Round 0426)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    426.0000
+  Training:          loss: 5.2980/0.0044      | acc1: 0.0049/0.0061      | acc5: 0.0251/0.0191
+  Local Pre-val.:    loss: 5.2981/0.0041      | acc1: 0.0000/0.0000      | acc5: 0.0233/0.0154
+  Local Post-val.:   loss: 5.2942/0.0058      | acc1: 0.0125/0.0159      | acc5: 0.0422/0.0496
+  Local Pre-test.:   loss: 5.2970/0.0046      | acc1: 0.0000/0.0000      | acc5: 0.0267/0.0343
+  Local Post-test.:  loss: 5.2917/0.0069      | acc1: 0.0200/0.0400      | acc5: 0.0621/0.0568
+  Local Gen. Error:  err.: -0.0007/0.0020
+  Global Gen. Error: err.: -0.0007
+  Gen. Reward:       round: -0.0092           | cumulative: 0.0061
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:43,300 | Server (Round 0427)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    427.0000
+  Training:          loss: 5.2970/0.0030      | acc1: 0.0281/0.0390      | acc5: 0.0589/0.0591
+  Local Pre-val.:    loss: 5.2986/0.0039      | acc1: 0.0283/0.0271      | acc5: 0.0515/0.0695
+  Local Post-val.:   loss: 5.2949/0.0046      | acc1: 0.0515/0.0695      | acc5: 0.0608/0.0713
+  Local Pre-test.:   loss: 5.2962/0.0025      | acc1: 0.0125/0.0250      | acc5: 0.0625/0.0968
+  Local Post-test.:  loss: 5.2914/0.0033      | acc1: 0.0625/0.0968      | acc5: 0.1000/0.1016
+  Local Gen. Error:  err.: 0.0005/0.0019
+  Global Gen. Error: err.: 0.0005
+  Gen. Reward:       round: -0.0062           | cumulative: -0.0001
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:44,696 | Server (Round 0428)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    428.0000
+  Training:          loss: 5.2972/0.0017      | acc1: 0.0041/0.0055      | acc5: 0.0224/0.0196
+  Local Pre-val.:    loss: 5.2974/0.0019      | acc1: 0.0043/0.0085      | acc5: 0.0252/0.0242
+  Local Post-val.:   loss: 5.2942/0.0021      | acc1: 0.0081/0.0099      | acc5: 0.0368/0.0378
+  Local Pre-test.:   loss: 5.2953/0.0022      | acc1: 0.0000/0.0000      | acc5: 0.0000/0.0000
+  Local Post-test.:  loss: 5.2905/0.0031      | acc1: 0.0000/0.0000      | acc5: 0.0542/0.0741
+  Local Gen. Error:  err.: -0.0007/0.0013
+  Global Gen. Error: err.: -0.0007
+  Gen. Reward:       round: 0.0109            | cumulative: 0.0109
+[34m[1mappfl-sim: ✅[0m[2026-04-21 23:36:46,111 | Server (Round 0429)]: --- Round Summary ---
+  Clients:           selected=5/500 (1.00%)
+  Policy:            tau_t=1
+  Cumulative Tau:    429.0000
+  Training:          loss: 5.2981/0.0032      | acc1: 0.0012/0.0025      | acc5: 0.0221/0.0111
+  Local Pre-val.:    loss: 5.2995/0.0033      | acc1: 0.0000/0.0000      | acc5: 0.0139/0.0113
+  Local Post-val.:   loss: 5.2957/0.0022      | acc1: 0.0000/0.0000      | acc5: 0.0228/0.0244
+  Local Pre-test.:   loss: 5.2984/0.0037      | acc1: 0.0000/0.0000      | acc5: 0.0154/0.0308
+  Local Post-test.:  loss: 5.2926/0.0039      | acc1: 0.0000/0.0000      | acc5: 0.0154/0.0308
+  Local Gen. Error:  err.: 0.0004/0.0005
+  Global Gen. Error: err.: 0.0004
+  Gen. Reward:       round: -0.0221           | cumulative: -0.0112
