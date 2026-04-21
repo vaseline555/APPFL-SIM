@@ -4,7 +4,7 @@
 mapfile -t SEEDS < <(
 python3 - <<'PY'
 from numpy.random import SeedSequence
-MASTER_SEED = 555
+MASTER_SEED = 52525959
 NUM_RUNS = 3
 
 children = SeedSequence(MASTER_SEED).spawn(NUM_RUNS)
