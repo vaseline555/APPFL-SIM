@@ -3,7 +3,7 @@ experiment:
   seed: 42
   device: cuda
   server_device: cuda
-  backend: nccl
+  backend: serial
   stateful: false
 dataset:
   path: ./data
