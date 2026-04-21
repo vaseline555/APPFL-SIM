@@ -1,17 +1,35 @@
 #!/bin/bash
 
-# Run
-for lr_decay in 0.95 0.96 0.97 0.98 0.99; do
-  for ridge_alpha in 0.1 1.0 10.0; do
-    python -m appfl_sim.runner \
-      --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml \
-        logging.configs.wandb_entity=vaseline555 \
-          optimizer.lr=0.001 optimizer.lr_decay.gamma=$lr_decay \
-            algorithm.scheduler_kwargs.discount_gamma=0.80 \
-              algorithm.scheduler_kwargs.exploration_beta=0.01 \
-                algorithm.scheduler_kwargs.ridge_alpha=$ridge_alpha algorithm.scheduler_kwargs.reward_scale=10 \
-                  algorithm.scheduler_kwargs.contexts="[l,d]" \
-                    experiment.name=GALE_CIFAR100_SWEEP logging.name="sweep_fedprox_galc_cc_${lr_decay}_${ridge_alpha}" &
-  done
-  wait
-done
+# Original loop/template
+# # Run
+# for lr_decay in 0.95 0.96 0.97 0.98 0.99; do
+#   for ridge_alpha in 0.1 1.0 10.0; do
+#     python -m appfl_sim.runner \
+#       --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml \
+#         logging.configs.wandb_entity=vaseline555 \
+#           optimizer.lr=0.001 optimizer.lr_decay.gamma=$lr_decay \
+#             algorithm.scheduler_kwargs.discount_gamma=0.80 \
+#               algorithm.scheduler_kwargs.exploration_beta=0.01 \
+#                 algorithm.scheduler_kwargs.ridge_alpha=$ridge_alpha algorithm.scheduler_kwargs.reward_scale=10 \
+#                   algorithm.scheduler_kwargs.contexts="[l,d]" \
+#                     experiment.name=GALE_CIFAR100_SWEEP logging.name="sweep_fedprox_galc_cc_${lr_decay}_${ridge_alpha}" &
+#   done
+#   wait
+# done
+
+# Flattened commands
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.95 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=0.1 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.95_0.1
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.95 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=1.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.95_1.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.95 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=10.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.95_10.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.96 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=0.1 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.96_0.1
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.96 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=1.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.96_1.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.96 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=10.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.96_10.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.97 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=0.1 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.97_0.1
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.97 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=1.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.97_1.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.97 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=10.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.97_10.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=0.1 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.98_0.1
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=1.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.98_1.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.98 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=10.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.98_10.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=0.1 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.99_0.1
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=1.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.99_1.0
+CUDA_VISIBLE_DEVICES= python -m appfl_sim.runner --config appfl_sim/config/cross-silo/cifar100/gale_prox_c.yaml logging.configs.wandb_entity=vaseline555 optimizer.lr=0.001 optimizer.lr_decay.gamma=0.99 algorithm.scheduler_kwargs.discount_gamma=0.80 algorithm.scheduler_kwargs.exploration_beta=0.01 algorithm.scheduler_kwargs.ridge_alpha=10.0 algorithm.scheduler_kwargs.reward_scale=10 algorithm.scheduler_kwargs.contexts=[l,d] experiment.name=GALE_CIFAR100_SWEEP logging.name=sweep_fedprox_galc_cc_0.99_10.0

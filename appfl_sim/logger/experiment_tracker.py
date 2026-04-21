@@ -79,6 +79,86 @@ def _extract_tracker_config(config: DictConfig | dict) -> TrackerConfig:
     )
 
 
+def _resolve_config_payload(config: DictConfig | dict) -> dict[str, Any]:
+    if isinstance(config, DictConfig):
+        payload = OmegaConf.to_container(config, resolve=True)
+        return payload if isinstance(payload, dict) else {}
+    return dict(config) if isinstance(config, dict) else {}
+
+
+def _json_compatible_config_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(k): _json_compatible_config_value(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible_config_value(v) for v in value]
+    if isinstance(value, (str, bool)) or value is None:
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return float(value)
+    if hasattr(value, "item"):
+        try:
+            scalar = value.item()
+            if isinstance(scalar, (str, bool)) or scalar is None:
+                return scalar
+            if isinstance(scalar, int):
+                return int(scalar)
+            if isinstance(scalar, float):
+                return float(scalar)
+        except Exception:
+            pass
+    return str(value)
+
+
+def _flatten_config_for_wandb(
+    payload: dict[str, Any],
+    prefix: str = "",
+) -> dict[str, Any]:
+    flat: dict[str, Any] = {}
+    for raw_key, raw_value in payload.items():
+        key = str(raw_key).strip()
+        if key == "":
+            continue
+        full_key = f"{prefix}.{key}" if prefix else key
+        if isinstance(raw_value, dict):
+            nested = _flatten_config_for_wandb(raw_value, prefix=full_key)
+            if nested:
+                flat.update(nested)
+            else:
+                flat[full_key] = {}
+            continue
+        flat[full_key] = _json_compatible_config_value(raw_value)
+    return flat
+
+
+def _build_wandb_config_payload(
+    source_cfg: dict[str, Any],
+    tracker_cfg: TrackerConfig,
+) -> dict[str, Any]:
+    payload = _flatten_config_for_wandb(source_cfg)
+    payload["logging_name"] = tracker_cfg.run_name
+    payload["experiment_name"] = tracker_cfg.project_name
+    payload["wandb_run_name"] = tracker_cfg.run_name
+    payload["wandb_project_name"] = tracker_cfg.project_name
+    if tracker_cfg.wandb_group:
+        payload["wandb_group"] = tracker_cfg.wandb_group
+
+    dataset_name = _cfg_get(source_cfg, "dataset.name", "")
+    algorithm_name = _cfg_get(source_cfg, "algorithm.name", "")
+    model_name = _cfg_get(source_cfg, "model.name", "")
+    if str(dataset_name).strip():
+        payload["dataset_name"] = str(dataset_name).strip()
+    if str(algorithm_name).strip():
+        payload["algorithm_name"] = str(algorithm_name).strip()
+    if str(model_name).strip():
+        payload["model_name"] = str(model_name).strip()
+    return payload
+
+
 def _has_wandb_api_credential() -> bool:
     if os.getenv("WANDB_API_KEY"):
         return True
@@ -96,6 +176,7 @@ class ExperimentTracker:
     """Track experiment metrics for file-only, TensorBoard, or Weights & Biases backends."""
 
     def __init__(self, config: DictConfig | dict, run_id: str):
+        source_cfg = _resolve_config_payload(config)
         cfg = _extract_tracker_config(config)
         run_id_text = str(run_id).strip()
         if run_id_text == "":
@@ -150,12 +231,14 @@ class ExperimentTracker:
                     "Run `wandb login` (or set WANDB_API_KEY) before starting simulation."
                 )
 
+            wandb_config = _build_wandb_config_payload(source_cfg, cfg)
             init_kwargs = {
                 "project": cfg.project_name,
                 "name": cfg.run_name,
                 "dir": cfg.log_dir,
                 "mode": cfg.wandb_mode,
                 "reinit": "finish_previous",
+                "config": wandb_config,
             }
             tags = list(dict.fromkeys(cfg.wandb_tags or []))
             if tags:
@@ -173,6 +256,8 @@ class ExperimentTracker:
 
             self._wandb = wandb
             self._run = wandb.init(**init_kwargs)
+            if self._run is not None and wandb_config:
+                self._run.config.update(wandb_config, allow_val_change=True)
             return
 
         raise ValueError(
