@@ -399,6 +399,7 @@ def _resolve_client_logging_policy(
     num_sampled_clients: int,
 ) -> Dict[str, object]:
     scheme = str(_cfg_get(config, "logging.type", "auto")).strip().lower()
+    logging_backend = str(_cfg_get(config, "logging.backend", "file")).strip().lower()
 
     if scheme not in {"auto", "both", "server_only"}:
         raise ValueError(
@@ -415,6 +416,8 @@ def _resolve_client_logging_policy(
     forced_server_only = int(num_sampled_clients) < int(num_clients)
     if forced_server_only:
         effective = "server_only"
+    if logging_backend == "none":
+        effective = "server_only"
 
     return {
         "requested_scheme": scheme,
@@ -423,6 +426,7 @@ def _resolve_client_logging_policy(
         "basis_clients": basis_clients,
         "total_clients": int(num_clients),
         "forced_server_only": bool(forced_server_only),
+        "backend": logging_backend,
     }
 
 def _to_pascal_case(name: str) -> str:

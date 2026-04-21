@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypedDict
 import numpy as np
 from omegaconf import DictConfig
-from appfl_sim.logger.server_logger import ServerAgentFileLogger
+from appfl_sim.logger.server_logger import NullServerLogger, ServerAgentFileLogger
 from appfl_sim.metrics import parse_metric_names
 from appfl_sim.misc.config_utils import _cfg_bool, _cfg_get
 
@@ -807,6 +807,9 @@ def _log_round(
         tracker.log_metrics(step=round_idx, metrics=round_metrics)
 
 def _new_server_logger(config: DictConfig, mode: str, run_id: str) -> ServerAgentFileLogger:
+    backend = str(_cfg_get(config, "logging.backend", "file")).strip().lower()
+    if backend == "none":
+        return NullServerLogger()
     run_dir = _resolve_run_dir_path(config, run_id)
     mode_text = str(mode).strip().lower()
     file_name = "server.log"

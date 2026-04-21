@@ -137,7 +137,12 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 ## Logging (`logging`)
 - `path` (default: `./logs`): output log path.
 - `name` (default: `experiment.name`): logging run name. Local log directory is `logging.path/experiment.name/logging.name/<run_id>` where `run_id` defaults to `YYMMDDHHMMSS_<pid>`; for WandB this maps to run name.
-- `backend` (default: `file`): logging scheme (`none`, `file`, `console`, `tensorboard`, `wandb`).
+- `backend` (default: `file`): logging backend (`none`, `file`, `console`, `tensorboard`, `wandb`).
+  - `none`: write only `metrics.jsonl`; suppress server console/file logging and disable client log files.
+  - `file`: backward-compatible alias of `console`.
+  - `console`: write `metrics.jsonl` and `server.log`, while keeping current server console output.
+  - `tensorboard`: write `metrics.jsonl` and current TensorBoard logging.
+  - `wandb`: write `metrics.jsonl` and current WandB logging.
 - `type` (default: `auto`): logging policy (`auto`, `both`, `server_only`).  
   (`auto`: when `num_sampled_clients < num_clients`, per-cleint logging is forced off for performance, i.e., server-only logging)
 - `configs` (default: `{}`): backend-agnostic keyword arguments.

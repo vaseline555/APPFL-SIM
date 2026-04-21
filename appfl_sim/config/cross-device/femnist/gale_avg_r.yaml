@@ -63,7 +63,7 @@ optimizer:
     weight_decay: 0.0
     momentum: 0.0
 eval:
-  every: 10
+  every: 200
   metrics:
   - acc1
   - acc5
@@ -72,6 +72,12 @@ eval:
   show_eval_progress: true
   enable_global_eval: false
   enable_federated_eval: true
+  configs:
+    scheme: dataset
+    dataset_ratio:
+    - 70
+    - 20
+    - 10
 logging:
   path: ./log
   name: femnist_gale_avg_r

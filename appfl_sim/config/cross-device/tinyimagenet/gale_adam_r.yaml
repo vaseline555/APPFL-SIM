@@ -73,7 +73,7 @@ optimizer:
     weight_decay: 0.0
     momentum: 0.0
 eval:
-  every: 10
+  every: 200
   metrics:
   - acc1
   - acc5
@@ -86,8 +86,8 @@ eval:
     scheme: dataset
     dataset_ratio:
     - 70
-    - 15
-    - 15
+    - 20
+    - 10
 logging:
   path: ./log
   name: tinyimagenet_gale_adam_r

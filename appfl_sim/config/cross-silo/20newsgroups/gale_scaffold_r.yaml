@@ -34,7 +34,7 @@ train:
   num_sampled_clients: 20
   update_base: epoch
   local_epochs: 1
-  batch_size: 8
+  batch_size: 16
   shuffle: true
   eval_batch_size: 16
 algorithm:
@@ -67,7 +67,7 @@ optimizer:
   configs:
     weight_decay: 0.01
 eval:
-  every: 10
+  every: 20
   metrics:
   - acc1
   - acc5
@@ -80,8 +80,8 @@ eval:
     scheme: dataset
     dataset_ratio:
     - 70
-    - 15
-    - 15
+    - 20
+    - 10
 logging:
   path: ./log
   name: 20newsgroups_diri_gale_scaffold_r

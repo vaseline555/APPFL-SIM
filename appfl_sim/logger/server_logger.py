@@ -135,3 +135,22 @@ class ServerAgentFileLogger:
     def get_log_filepath(self) -> Optional[str]:
         if hasattr(self, "log_filepath"):
             return self.log_filepath
+
+
+class NullServerLogger:
+    """No-op server logger used for silent logging modes."""
+
+    def info(self, info: str, round_label: str = "") -> None:
+        del info, round_label
+
+    def debug(self, debug: str, round_label: str = "") -> None:
+        del debug, round_label
+
+    def error(self, error: str, round_label: str = "") -> None:
+        del error, round_label
+
+    def warning(self, warning: str, round_label: str = "") -> None:
+        del warning, round_label
+
+    def get_log_filepath(self) -> Optional[str]:
+        return None

@@ -1,16 +1,9 @@
 #!/bin/bash -l
-#PBS -N c100_avg_nc
-#PBS -j oe
-#PBS -l walltime=12:00:00
-
-set -euo pipefail
-
-cd "${PBS_O_WORKDIR:-/home/vaseline555/workspace/GALE_NEW}"
 
 WANDB_ENTITY="${WANDB_ENTITY:-vaseline555}"
 WANDB_MODE="${WANDB_MODE:-online}"
-WANDB_PROJECT="${WANDB_PROJECT:-GALE_CIFAR100_SWEEP}"
-SWEEP_NAME="${SWEEP_NAME:-sweep_fedavg_gale_nc_bayes}"
+WANDB_PROJECT="${WANDB_PROJECT:-GALE_SWEEP}"
+SWEEP_NAME="${SWEEP_NAME:-sweep_fedavg_gale_nc}"
 RUN_CAP="${RUN_CAP:-60}"
 GPU_IDS=(0 1 2 3)
 
@@ -38,7 +31,7 @@ args = parser.parse_args()
 
 wandb_entity = os.environ.get("WANDB_ENTITY", "vaseline555")
 wandb_mode = os.environ.get("WANDB_MODE", "online")
-wandb_project = os.environ.get("WANDB_PROJECT", "GALE_CIFAR100_SWEEP")
+wandb_project = os.environ.get("WANDB_PROJECT", "GALE_SWEEP")
 
 cmd = [
     sys.executable,
@@ -46,6 +39,7 @@ cmd = [
     "appfl_sim.runner",
     "--config",
     "appfl_sim/config/cross-silo/cifar100/gale_avg.yaml",
+    "logging.backend=file",
     f"logging.configs.wandb_entity={wandb_entity}",
     f"logging.configs.wandb_mode={wandb_mode}",
     "logging.configs.wandb_group=gale_avg",
@@ -73,9 +67,9 @@ metric:
 run_cap: ${RUN_CAP}
 parameters:
   exploration_alpha:
-    values: [0.0001, 0.001, 0.01, 0.1, 1.0]
+    values: [0.0001, 0.0003, 0.0005, 0.001]
   discount_gamma:
-    values: [0.10, 0.50, 0.66, 0.80, 0.90, 0.95, 0.98, 0.99]
+    values: [0.80, 0.90, 0.95, 0.98, 0.99]
   lr_decay_gamma:
     values: [0.97, 0.98, 0.99]
 command:

@@ -186,20 +186,16 @@ class ExperimentTracker:
         self._wandb = None
         self._run = None
         self._metrics_json_path = None
-        self._metrics_records: list[dict[str, Any]] = []
+        self._metrics_jsonl_path = None
+        self._metrics_jsonl_handle = None
 
         run_dir = Path(cfg.log_dir) / cfg.project_name / cfg.run_name / run_id_text
         run_dir.mkdir(parents=True, exist_ok=True)
         self._metrics_json_path = run_dir / "metrics.json"
-        if self._metrics_json_path.exists():
-            try:
-                content = json.loads(
-                    self._metrics_json_path.read_text(encoding="utf-8")
-                )
-                if isinstance(content, list):
-                    self._metrics_records = content
-            except Exception:
-                self._metrics_records = []
+        self._metrics_jsonl_path = run_dir / "metrics.jsonl"
+        self._metrics_jsonl_handle = self._metrics_jsonl_path.open(
+            "a", encoding="utf-8", buffering=1
+        )
 
         if self.backend in {"none", "file", "console"}:
             return
@@ -316,15 +312,13 @@ class ExperimentTracker:
     def log_metrics(self, step: int, metrics: Dict[str, Any]) -> None:
         if not metrics:
             return
-        if self._metrics_json_path is not None:
+        if self._metrics_jsonl_handle is not None:
             payload = {
                 "round": int(step),
                 "metrics": self._to_json_compatible(metrics),
             }
-            self._metrics_records.append(payload)
-            self._metrics_json_path.write_text(
-                json.dumps(self._metrics_records, indent=4, ensure_ascii=False),
-                encoding="utf-8",
+            self._metrics_jsonl_handle.write(
+                json.dumps(payload, ensure_ascii=False) + "\n"
             )
         if self.backend in {"none", "file", "console"}:
             return
@@ -339,6 +333,9 @@ class ExperimentTracker:
             self._wandb.log(_remap_server_wandb_payload(payload), step=int(step))
 
     def close(self) -> None:
+        if self._metrics_jsonl_handle is not None:
+            self._metrics_jsonl_handle.close()
+            self._metrics_jsonl_handle = None
         if self.backend == "tensorboard" and self._writer is not None:
             self._writer.close()
             self._writer = None

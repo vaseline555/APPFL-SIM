@@ -13,8 +13,8 @@ dataset:
   configs:
     train_split: train
     test_split: ""
-    feature_key: KWH/hh (per half hour)
-    label_key: KWH/hh (per half hour)
+    feature_key: __last_column__
+    label_key: __last_column__
     regression_target: true
     time_series_window: 24
     time_series_horizon: 2
@@ -39,7 +39,7 @@ train:
   num_sampled_clients: 10
   update_base: epoch
   local_epochs: 1
-  batch_size: 64
+  batch_size: 16
   shuffle: true
   eval_batch_size: 256
 algorithm:
@@ -67,7 +67,7 @@ optimizer:
   configs:
     weight_decay: 0.0
 eval:
-  every: 10
+  every: 200
   metrics:
   - rmse
   - mae
@@ -81,8 +81,8 @@ eval:
     scheme: dataset
     dataset_ratio:
     - 70
-    - 15
-    - 15
+    - 20
+    - 10
 logging:
   path: ./log
   name: londonsmartmeter_fedavg

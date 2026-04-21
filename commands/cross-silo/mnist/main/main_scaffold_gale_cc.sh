@@ -1,11 +1,9 @@
 #!/bin/bash -l
 
-set -euo pipefail
 WANDB_ENTITY="${WANDB_ENTITY:-}"
 WANDB_MODE="${WANDB_MODE:-online}"
 
-# Original loop/template
-# # Generate uncorrelated 32-bit seeds for each run
+# Generate uncorrelated 32-bit seeds for each run
 # mapfile -t SEEDS < <(
 # python3 - <<'PY'
 # from numpy.random import SeedSequence

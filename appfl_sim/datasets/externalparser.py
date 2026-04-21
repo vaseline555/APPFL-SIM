@@ -136,11 +136,15 @@ def _resolve_column_selector(
     *,
     allow_empty: bool = False,
 ) -> str:
-    text = str(selector).strip()
+    raw_text = "" if selector is None else str(selector)
+    text = raw_text.strip()
     if text == "":
         if allow_empty:
             return ""
         raise ValueError(f"{field_name} cannot be empty.")
+
+    if raw_text in columns:
+        return raw_text
 
     special_indices = {
         "__first_column__": 0,
@@ -156,14 +160,25 @@ def _resolve_column_selector(
             )
         return columns[index]
 
-    if text not in columns:
-        raise ValueError(f"{field_name}='{text}' not found in dataset columns: {columns}")
-    return text
+    if text in columns:
+        return text
+
+    normalized_matches = [col for col in columns if str(col).strip() == text]
+    if len(normalized_matches) == 1:
+        return normalized_matches[0]
+    if len(normalized_matches) > 1:
+        raise ValueError(
+            f"{field_name}='{raw_text}' matched multiple dataset columns after "
+            f"whitespace normalization: {normalized_matches}"
+        )
+    raise ValueError(
+        f"{field_name}='{text}' not found in dataset columns: {columns}"
+    )
 
 
 def _pick_label_key(columns: List[str], args) -> str:
-    user_key = str(getattr(args, "ext_label_key", "")).strip()
-    if user_key:
+    user_key = str(getattr(args, "ext_label_key", ""))
+    if user_key.strip():
         return _resolve_column_selector(columns, user_key, "dataset.configs.label_key")
 
     for cand in ["label", "labels", "target", "y", "class"]:
@@ -176,8 +191,8 @@ def _pick_label_key(columns: List[str], args) -> str:
 
 
 def _pick_feature_key(columns: List[str], label_key: str, args) -> str:
-    user_key = str(getattr(args, "ext_feature_key", "")).strip()
-    if user_key:
+    user_key = str(getattr(args, "ext_feature_key", ""))
+    if user_key.strip():
         return _resolve_column_selector(columns, user_key, "dataset.configs.feature_key")
 
     preferred = [
@@ -303,8 +318,8 @@ def _to_audio_tensor(value: Any, num_frames: int) -> torch.Tensor:
 
 
 def _resolve_pre_source(columns: List[str], args) -> str:
-    source = str(getattr(args, "pre_source", "")).strip()
-    if source:
+    source = str(getattr(args, "pre_source", ""))
+    if source.strip():
         resolved = _resolve_column_selector(columns, source, "split.configs.pre_source")
         args.pre_source = resolved
         return resolved

@@ -1,17 +1,10 @@
 #!/bin/bash -l
-#PBS -N c100_scf_nc
-#PBS -j oe
-#PBS -l walltime=12:00:00
-
-set -euo pipefail
-
-cd "${PBS_O_WORKDIR:-/home/vaseline555/workspace/GALE_NEW}"
 
 WANDB_ENTITY="${WANDB_ENTITY:-vaseline555}"
 WANDB_MODE="${WANDB_MODE:-online}"
-WANDB_PROJECT="${WANDB_PROJECT:-GALE_CIFAR100_SWEEP}"
-SWEEP_NAME="${SWEEP_NAME:-sweep_scaffold_gale_nc_bayes}"
-RUN_CAP="${RUN_CAP:-5}"
+WANDB_PROJECT="${WANDB_PROJECT:-GALE_SWEEP}"
+SWEEP_NAME="${SWEEP_NAME:-sweep_scaffold_gale_nc}"
+RUN_CAP="${RUN_CAP:-60}"
 GPU_IDS=(0 1 2 3)
 
 if [[ "${WANDB_MODE}" != "online" ]]; then
@@ -31,12 +24,14 @@ import subprocess
 import sys
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--exploration_alpha", required=True, type=float)
+parser.add_argument("--discount_gamma", required=True, type=float)
 parser.add_argument("--lr_decay_gamma", required=True, type=float)
 args = parser.parse_args()
 
 wandb_entity = os.environ.get("WANDB_ENTITY", "vaseline555")
 wandb_mode = os.environ.get("WANDB_MODE", "online")
-wandb_project = os.environ.get("WANDB_PROJECT", "GALE_CIFAR100_SWEEP")
+wandb_project = os.environ.get("WANDB_PROJECT", "GALE_SWEEP")
 
 cmd = [
     sys.executable,
@@ -44,17 +39,18 @@ cmd = [
     "appfl_sim.runner",
     "--config",
     "appfl_sim/config/cross-silo/cifar100/gale_scaffold.yaml",
+    "logging.backend=file",
     f"logging.configs.wandb_entity={wandb_entity}",
     f"logging.configs.wandb_mode={wandb_mode}",
     "logging.configs.wandb_group=gale_scaffold",
     "logging.configs.wandb_tags=cross-silo,cifar100,gale_scaffold,sweep,bayes",
     "optimizer.lr=0.001",
-    "algorithm.scheduler_kwargs.discount_gamma=0.80",
-    "algorithm.scheduler_kwargs.exploration_alpha=0.0005",
-    "algorithm.scheduler_kwargs.reward_scale=1",
+    "algorithm.scheduler_kwargs.reward_scale=10",
+    f"algorithm.scheduler_kwargs.exploration_alpha={args.exploration_alpha}",
+    f"algorithm.scheduler_kwargs.discount_gamma={args.discount_gamma}",
     f"optimizer.lr_decay.gamma={args.lr_decay_gamma}",
     f"experiment.name={wandb_project}",
-    "logging.name=" + f"sweep_scaffold_gale_nc_{args.lr_decay_gamma:.2f}",
+    "logging.name=" + f"sweep_scaffold_gale_nc_{args.discount_gamma:.2f}_{args.exploration_alpha:g}_{args.lr_decay_gamma:.2f}",
 ]
 
 raise SystemExit(subprocess.call(cmd))
@@ -70,8 +66,12 @@ metric:
   name: test/global_eval_loss
 run_cap: ${RUN_CAP}
 parameters:
+  exploration_alpha:
+    values: [0.0001, 0.0003, 0.0005, 0.001]
+  discount_gamma:
+    values: [0.80, 0.90, 0.95, 0.98, 0.99]
   lr_decay_gamma:
-    values: [0.95, 0.96, 0.97, 0.98, 0.99]
+    values: [0.97, 0.98, 0.99]
 command:
   - ${DOLLAR}{env}
   - ${DOLLAR}{interpreter}
