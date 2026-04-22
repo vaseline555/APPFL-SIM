@@ -34,6 +34,7 @@ train:
   update_base: epoch
   local_epochs: 1
   batch_size: 16
+  num_workers: 2
   shuffle: true
   eval_batch_size: 256
 algorithm:
@@ -78,10 +79,10 @@ eval:
   - acc1
   - acc5
   do_pre_evaluation: true
-  do_post_evaluation: true
+  do_post_evaluation: false
   show_eval_progress: true
   enable_global_eval: true
-  enable_federated_eval: true
+  enable_federated_eval: false
   configs:
     scheme: dataset
     dataset_ratio:
