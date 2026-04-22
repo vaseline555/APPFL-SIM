@@ -33,12 +33,12 @@ train:
   num_sampled_clients: 5
   update_base: epoch
   local_epochs: 1
-  batch_size: 16
+  batch_size: 32
   num_workers: 2
   train_pin_memory: false
   eval_pin_memory: false
   shuffle: true
-  eval_batch_size: 256
+  eval_batch_size: 32
 algorithm:
   name: gale_avg_r
   mix_coefs: sample_ratio
