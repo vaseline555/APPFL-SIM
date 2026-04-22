@@ -140,7 +140,7 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         self.action_space: List[int] = sorted(
             {
                 int(x)
-                for x in scheduler_configs.get("action_space", [1, 2, 4, 8])
+                for x in scheduler_configs.get("action_space", [1, 2, 4])
                 if int(x) >= 0
             }
         )

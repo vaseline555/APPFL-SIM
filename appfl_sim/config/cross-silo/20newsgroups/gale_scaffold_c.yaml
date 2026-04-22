@@ -36,6 +36,8 @@ train:
   local_epochs: 1
   batch_size: 64
   num_workers: 2
+  train_pin_memory: true
+  eval_pin_memory: false
   shuffle: true
   eval_batch_size: 16
 algorithm:
@@ -49,7 +51,7 @@ algorithm:
     client_weights_mode: sample_ratio
   scheduler_kwargs:
     reward_scale: 10.0
-    action_space: [1, 2, 4, 8]
+    action_space: [1, 2, 4]
     discount_gamma: 0.99
     ridge_alpha: 1.0
     exploration_beta: 1.0

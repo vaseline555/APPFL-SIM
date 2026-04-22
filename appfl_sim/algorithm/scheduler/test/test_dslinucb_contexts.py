@@ -92,7 +92,7 @@ def test_dslinucb_c_phi_uses_descending_action_one_hot_encoding():
         scheduler_configs=OmegaConf.create(
             {
                 "num_clients": 4,
-                "action_space": [1, 2, 4, 8],
+                "action_space": [1, 2, 4],
                 "contexts": "d",
                 "base_lr": 0.25,
                 "lr_decay": {"enable": False, "type": "none"},
@@ -113,7 +113,7 @@ def test_dslinucb_r_phi_uses_descending_action_one_hot_encoding():
         scheduler_configs=OmegaConf.create(
             {
                 "num_clients": 4,
-                "action_space": [1, 2, 4, 8],
+                "action_space": [1, 2, 4],
                 "contexts": ["l", "d"],
                 "base_lr": 0.25,
                 "lr_decay": {"enable": False, "type": "none"},

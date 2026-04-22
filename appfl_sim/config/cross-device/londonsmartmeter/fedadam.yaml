@@ -42,6 +42,8 @@ train:
   local_epochs: 1
   batch_size: 16
   num_workers: 2
+  train_pin_memory: false
+  eval_pin_memory: false
   shuffle: true
   eval_batch_size: 256
 algorithm:
