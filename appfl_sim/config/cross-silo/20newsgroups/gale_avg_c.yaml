@@ -19,7 +19,7 @@ split:
   type: dirichlet
   configs:
     dirichlet_alpha: 0.1
-    dirichlet_min_size: 10
+    dirichlet_min_size: 100
 model:
   name: distilbert-base-uncased
   backend: hf

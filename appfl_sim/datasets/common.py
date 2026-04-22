@@ -93,6 +93,7 @@ class DatasetArgs:
     min_classes: int = 2
     unbalanced_keep_min: float = 0.5
     pre_infer_num_clients: bool = False
+    pre_min_samples_per_client: int = 0
     pre_source: str = ""
     pre_index: int = -1
     seq_len: int = 128
@@ -212,10 +213,19 @@ def to_namespace(args: Any) -> DatasetArgs:
         test_size=float(test_size),
         split_type=str(_get_path(payload, "split.type", "iid")),
         dirichlet_alpha=float(_get_path(split_cfg, "dirichlet_alpha", 0.3)),
-        dirichlet_min_size=int(_get_path(split_cfg, "dirichlet_min_size", 2)),
+        dirichlet_min_size=int(
+            _get_path(
+                split_cfg,
+                "dirichlet_min_size",
+                _get_path(split_cfg, "min_samples_per_client", 2),
+            )
+        ),
         min_classes=int(_get_path(split_cfg, "min_classes", 2)),
         unbalanced_keep_min=float(_get_path(split_cfg, "unbalanced_keep_min", 0.5)),
         pre_infer_num_clients=bool(_get_path(split_cfg, "pre_infer_num_clients", False)),
+        pre_min_samples_per_client=int(
+            _get_path(split_cfg, "min_samples_per_client", 0)
+        ),
         pre_source=str(_get_path(split_cfg, "pre_source", "")),
         pre_index=int(_get_path(split_cfg, "pre_index", -1)),
         seq_len=int(_get_path(model_cfg, "seq_len", 128)),
@@ -726,8 +736,18 @@ def _predefined_client_split_indices(
         if key in selected_set:
             index_bins[key].append(int(idx))
 
-    non_empty_keys = [k for k, arr in index_bins.items() if len(arr) > 0]
+    min_samples = max(
+        0, _safe_int(getattr(args, "pre_min_samples_per_client", 0), 0)
+    )
+    non_empty_keys = [
+        k for k, arr in index_bins.items() if len(arr) >= max(1, min_samples or 1)
+    ]
     if not non_empty_keys:
+        if min_samples > 0:
+            raise ValueError(
+                "Pre split produced no client subsets meeting "
+                f"split.configs.min_samples_per_client={min_samples}."
+            )
         raise ValueError("Pre split produced no non-empty client subsets.")
 
     result: dict[int, np.ndarray] = {}

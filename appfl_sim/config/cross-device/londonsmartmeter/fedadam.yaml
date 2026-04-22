@@ -25,6 +25,7 @@ split:
   configs:
     pre_source: LCLid
     pre_infer_num_clients: true
+    min_samples_per_client: 10
 model:
   name: SmartMeterLSTM
   backend: custom
