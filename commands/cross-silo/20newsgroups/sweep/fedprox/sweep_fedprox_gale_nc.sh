@@ -76,7 +76,7 @@ cmd = [
     "appfl_sim.runner",
     "--config",
     "appfl_sim/config/cross-silo/20newsgroups/gale_prox.yaml",
-    "logging.backend=file",
+    "logging.backend=wandb",
 f"logging.configs.wandb_entity={wandb_entity}",
     f"logging.configs.wandb_mode={wandb_mode}",
     "logging.configs.wandb_group=gale_prox",
