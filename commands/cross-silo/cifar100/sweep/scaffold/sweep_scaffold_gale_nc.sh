@@ -5,12 +5,47 @@ WANDB_MODE="${WANDB_MODE:-online}"
 WANDB_PROJECT="${WANDB_PROJECT:-GALE_SWEEP}"
 SWEEP_NAME="${SWEEP_NAME:-sweep_scaffold_gale_nc}"
 RUN_CAP="${RUN_CAP:-60}"
-GPU_IDS=(0 1 2 3)
+GPU_IDS_CONFIG="${GPU_IDS:-}"
+AGENT_COUNT="${AGENT_COUNT:-}"
 
 if [[ "${WANDB_MODE}" != "online" ]]; then
   echo "W&B sweeps require WANDB_MODE=online." >&2
   exit 1
 fi
+
+if [[ -n "${GPU_IDS_CONFIG}" ]]; then
+  read -r -a GPU_IDS_ARRAY <<< "${GPU_IDS_CONFIG}"
+elif [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+  IFS=',' read -r -a GPU_IDS_ARRAY <<< "${CUDA_VISIBLE_DEVICES}"
+elif command -v nvidia-smi >/dev/null 2>&1; then
+  mapfile -t GPU_IDS_ARRAY < <(nvidia-smi --query-gpu=index --format=csv,noheader)
+else
+  GPU_IDS_ARRAY=(0 1 2 3)
+fi
+
+if [[ ${#GPU_IDS_ARRAY[@]} -eq 0 ]]; then
+  echo "No GPU IDs available for launching sweep agents." >&2
+  exit 1
+fi
+
+if [[ -n "${AGENT_COUNT}" && ! "${AGENT_COUNT}" =~ ^[0-9]+$ ]]; then
+  echo "AGENT_COUNT must be a positive integer." >&2
+  exit 1
+fi
+
+if [[ -z "${AGENT_COUNT}" ]]; then
+  AGENT_COUNT="${#GPU_IDS_ARRAY[@]}"
+fi
+
+if (( AGENT_COUNT < 1 )); then
+  echo "AGENT_COUNT must be at least 1." >&2
+  exit 1
+fi
+
+SWEEP_GPU_IDS=()
+for ((i = 0; i < AGENT_COUNT; i++)); do
+  SWEEP_GPU_IDS+=("${GPU_IDS_ARRAY[$((i % ${#GPU_IDS_ARRAY[@]}))]}")
+done
 
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "${tmpdir}"' EXIT
@@ -93,8 +128,8 @@ if [[ -z "${sweep_id}" ]]; then
   exit 1
 fi
 
-echo "Starting sweep agents for: ${sweep_id}"
-for gpu_id in "${GPU_IDS[@]}"; do
+echo "Starting ${AGENT_COUNT} sweep agents for: ${sweep_id}"
+for gpu_id in "${SWEEP_GPU_IDS[@]}"; do
   echo "Launching agent on CUDA_VISIBLE_DEVICES=${gpu_id}"
   CUDA_VISIBLE_DEVICES="${gpu_id}" wandb agent --forward-signals "${sweep_id}" &
 done

@@ -1,15 +1,5 @@
 #!/bin/bash -l
 
-#PBS -N GALE
-#PBS -A PPFL_FM
-#PBS -q preemptable
-#PBS -l select=1:system=polaris
-#PBS -l place=scatter
-#PBS -l walltime=1:00:00
-#PBS -l filesystems=home:eagle
-#PBS -r y
-#PBS -k doe
-#PBS -j oe
 
 set -euo pipefail
 

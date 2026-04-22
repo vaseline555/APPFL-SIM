@@ -18,7 +18,7 @@ PY
 
 # Run - E = 8
 for i in "${!SEEDS[@]}"; do
-  python -m appfl_sim.runner \
+  CUDA_VISIBLE_DEVICES=$i python -m appfl_sim.runner \
     --config appfl_sim/config/cross-silo/mnist/scaffold.yaml \
       "logging.configs.wandb_entity=${WANDB_ENTITY}" \
       "logging.configs.wandb_mode=${WANDB_MODE}" \
