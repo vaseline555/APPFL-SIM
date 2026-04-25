@@ -100,10 +100,14 @@ class _AdaptiveLocalStepSupport:
             client_train_stats=client_train_stats,
             sample_sizes=sample_sizes,
         )
-        pre_val_error = round_metrics.get("pre_val_loss", None)
+        current_gen_error = self._resolve_global_gen_error(
+            round_metrics=round_metrics,
+            client_train_stats=client_train_stats,
+            sample_sizes=sample_sizes,
+        )
         round_reward = None
-        if isinstance(pre_val_error, (int, float)) and hasattr(self, "adapt"):
-            round_reward = self.adapt(pre_val_error=float(pre_val_error))
+        if isinstance(current_gen_error, (int, float)) and hasattr(self, "adapt"):
+            round_reward = self.adapt(gen_error=float(current_gen_error))
 
         track_gen_rewards = bool(
             self.scheduler_configs.get("track_gen_rewards", True)
@@ -157,7 +161,7 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         self.S: Dict[int, float] = {a: 0.0 for a in self.action_space}
         self.C: Optional[int] = None
 
-        self.prev_pre_val_error: Optional[float] = None
+        self.prev_gen_error: Optional[float] = None
         self.current_round: int = 0
         self.last_selected_action: int = int(self.action_space[0])
         self.last_reward: Optional[float] = None
@@ -167,13 +171,14 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
         self.current_round = max(1, int(round_idx))
 
         chosen: Optional[int] = None
+        # Ensure each arm is observed once before switching to UCB scoring.
         for action in self.action_space:
             if float(self.N[action]) == 0.0:
                 chosen = int(action)
-                self.N[chosen] = 1.0
                 break
 
         if chosen is None:
+            chosen = int(self.action_space[0])
             best_score = float("-inf")
             for action in self.action_space:
                 pulls = max(1e-12, float(self.N[action]))
@@ -186,30 +191,31 @@ class DsucbScheduler(_AdaptiveLocalStepSupport, FedavgScheduler):
                     best_score = score
                     chosen = int(action)
 
-        if chosen is None:
-            chosen = int(self.action_space[0])
-
         self.C = int(chosen)
         self.last_selected_action = int(chosen)
         return int(chosen)
 
     def adapt(
         self,
-        pre_val_error: Optional[float] = None,
+        gen_error: Optional[float] = None,
         reward: Optional[float] = None,
+        pre_val_error: Optional[float] = None,
     ) -> Optional[float]:
+        if gen_error is None and pre_val_error is not None:
+            gen_error = float(pre_val_error)
+
         if reward is None:
-            if pre_val_error is None:
+            if gen_error is None:
                 return None
-            current = float(pre_val_error)
-            if self.prev_pre_val_error is None:
-                self.prev_pre_val_error = current
-                reward_value = -1.0
+            current = float(gen_error)
+            if self.prev_gen_error is None:
+                self.prev_gen_error = current
+                reward_value = 0.0
             else:
                 reward_value = float(
-                    self._scale_reward(float(self.prev_pre_val_error - current))
+                    self._scale_reward(float(self.prev_gen_error - current))
                 )
-                self.prev_pre_val_error = current
+                self.prev_gen_error = current
         else:
             reward_value = float(self._scale_reward(float(reward)))
 

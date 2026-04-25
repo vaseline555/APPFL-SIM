@@ -32,7 +32,7 @@ train:
   train_pin_memory: true
   eval_pin_memory: false
   shuffle: true
-  eval_batch_size: 32
+  eval_batch_size: 128
 algorithm:
   name: gale_scaffold_c
   mix_coefs: sample_ratio

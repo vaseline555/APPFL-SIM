@@ -34,9 +34,14 @@ class FedavgAggregator(BaseAggregator):
         self.model = model
         self.logger = logger
         self.aggregator_configs = aggregator_configs
-        raw_mode = str(aggregator_configs.get("client_weights_mode", "sample_ratio")).strip().lower()
-        if raw_mode not in {"uniform", "sample_ratio", "adaptive"}:
-            raw_mode = "sample_ratio"
+        raw_mode = str(
+            aggregator_configs.get("client_weights_mode", "sample_ratio")
+        ).strip().lower()
+        if raw_mode not in {"uniform", "sample_ratio"}:
+            raise ValueError(
+                "Unsupported client_weights_mode="
+                f"{raw_mode!r}. Supported values are: 'uniform', 'sample_ratio'."
+            )
         self.client_weights_mode = raw_mode
 
         self.optimize_memory = bool(aggregator_configs.get("optimize_memory", True))
@@ -110,20 +115,84 @@ class FedavgAggregator(BaseAggregator):
             for name, tensor in list(local_models.values())[0].items()
         }
 
-    def _client_weight(self, client_id, total_clients: int) -> float:
-        mode = str(self.client_weights_mode).strip().lower()
-        if mode == "uniform":
-            return 1.0 / max(1, int(total_clients))
+    @staticmethod
+    def _resolve_round_sample_size(
+        sample_sizes: Optional[Dict[Union[str, int], int]],
+        client_id: Union[str, int],
+    ) -> float:
+        if not isinstance(sample_sizes, dict):
+            return 0.0
 
-        if mode in {"sample_ratio", "adaptive"}:
-            if client_id in self.client_sample_size:
-                total = float(sum(self.client_sample_size.values()))
-                if total > 0.0:
-                    return float(self.client_sample_size[client_id]) / total
-            if mode == "adaptive":
-                return 1.0 / max(1, int(total_clients))
+        value = sample_sizes.get(client_id, None)
+        if value is None:
+            try:
+                normalized = int(client_id)
+            except Exception:
+                normalized = None
+            if normalized is not None:
+                value = sample_sizes.get(normalized, None)
+                if value is None:
+                    value = sample_sizes.get(str(normalized), None)
+        if not isinstance(value, (int, float)):
+            return 0.0
+        return max(0.0, float(value))
 
-        return 1.0 / max(1, int(total_clients))
+    def _round_client_weights(
+        self,
+        local_models: Dict[Union[str, int], Union[Dict, OrderedDict]],
+        sample_sizes: Optional[Dict[Union[str, int], int]] = None,
+    ) -> Dict[Union[str, int], float]:
+        total_clients = len(local_models)
+        if total_clients <= 0:
+            return {}
+
+        if str(self.client_weights_mode).strip().lower() == "uniform":
+            uniform = 1.0 / float(total_clients)
+            return {client_id: float(uniform) for client_id in local_models}
+
+        round_sizes = {
+            client_id: self._resolve_round_sample_size(sample_sizes, client_id)
+            for client_id in local_models
+        }
+        total = float(sum(round_sizes.values()))
+        if total <= 0.0:
+            uniform = 1.0 / float(total_clients)
+            return {client_id: float(uniform) for client_id in local_models}
+        return {
+            client_id: float(round_sizes[client_id]) / float(total)
+            for client_id in local_models
+        }
+
+    @staticmethod
+    def _weighted_tensor_average(
+        *,
+        local_models: Dict[Union[str, int], Union[Dict, OrderedDict]],
+        round_weights: Dict[Union[str, int], float],
+        name: str,
+        reference_tensor: torch.Tensor,
+    ) -> torch.Tensor:
+        if reference_tensor.is_floating_point():
+            averaged = torch.zeros_like(reference_tensor)
+            for client_id, model in local_models.items():
+                averaged.add_(model[name], alpha=float(round_weights.get(client_id, 0.0)))
+            return averaged
+
+        if reference_tensor.dtype == torch.bool:
+            averaged = torch.zeros_like(reference_tensor, dtype=torch.float32)
+            for client_id, model in local_models.items():
+                averaged.add_(
+                    model[name].to(dtype=torch.float32),
+                    alpha=float(round_weights.get(client_id, 0.0)),
+                )
+            return averaged >= 0.5
+
+        averaged = torch.zeros_like(reference_tensor, dtype=torch.float32)
+        for client_id, model in local_models.items():
+            averaged.add_(
+                model[name].to(dtype=torch.float32),
+                alpha=float(round_weights.get(client_id, 0.0)),
+            )
+        return torch.round(averaged).to(dtype=reference_tensor.dtype)
 
     def get_parameters(self, **kwargs) -> Dict:
         """
@@ -161,6 +230,8 @@ class FedavgAggregator(BaseAggregator):
         local_models = self._normalize_local_models(local_models)
         if not local_models:
             return self.get_parameters()
+        sample_sizes = kwargs.get("sample_sizes", {})
+        round_weights = self._round_client_weights(local_models, sample_sizes=sample_sizes)
 
         # detect masked payload format
         def _is_masked_payload(x):
@@ -174,16 +245,11 @@ class FedavgAggregator(BaseAggregator):
             first_payload = payloads[0][1]
             shapes = first_payload["shapes"]
             device = torch.device(self.aggregator_configs.get("device", "cpu"))
-            total_examples = sum(p["num_examples"] for _, p in payloads)
-
-            # compute weighted sum of masked flats (weights = num_examples / total_examples or uniform)
+            # compute weighted sum of masked flats using current-round mixing weights only
             weighted_sum = None
             for client_id, p in payloads:
                 flat = p["flat"].to(device)
-                if self.client_weights_mode in {"sample_ratio", "adaptive"} and total_examples > 0:
-                    w = float(p["num_examples"]) / float(total_examples)
-                else:
-                    w = 1.0 / len(payloads)
+                w = float(round_weights.get(client_id, 0.0))
                 if weighted_sum is None:
                     weighted_sum = w * flat
                 else:
@@ -226,7 +292,7 @@ class FedavgAggregator(BaseAggregator):
         # Memory optimization: Initialize global state efficiently
         self._initialize_global_state(local_models)
 
-        self.compute_steps(local_models)
+        self.compute_steps(local_models, round_weights)
 
         # Memory optimization: More efficient aggregation with cleanup
         if self.optimize_memory:
@@ -238,18 +304,12 @@ class FedavgAggregator(BaseAggregator):
                             self.global_state[name], "add", self.step[name]
                         )
                     else:
-                        param_sum = torch.zeros_like(self.global_state[name])
-                        # Efficiently sum parameters with dtype checking
-                        for _, model in local_models.items():
-                            param_sum = safe_inplace_operation(
-                                param_sum, "add", model[name]
-                            )
-
-                        # Safe division with dtype handling
-                        self.global_state[name] = safe_inplace_operation(
-                            param_sum, "div", len(local_models)
+                        self.global_state[name] = self._weighted_tensor_average(
+                            local_models=local_models,
+                            round_weights=round_weights,
+                            name=name,
+                            reference_tensor=self.global_state[name],
                         )
-                        del param_sum
 
             self.step.clear()
         else:
@@ -258,13 +318,12 @@ class FedavgAggregator(BaseAggregator):
                 if name in self.step:
                     self.global_state[name] = self.global_state[name] + self.step[name]
                 else:
-                    param_sum = torch.zeros_like(self.global_state[name])
-                    for _, model in local_models.items():
-                        param_sum += model[name]
-                    # make sure global state have the same type as the local model
-                    self.global_state[name] = torch.div(
-                        param_sum, len(local_models)
-                    ).type(param_sum.dtype)
+                    self.global_state[name] = self._weighted_tensor_average(
+                        local_models=local_models,
+                        round_weights=round_weights,
+                        name=name,
+                        reference_tensor=self.global_state[name],
+                    )
 
         if self.model is not None:
             self.model.load_state_dict(self.global_state, strict=False)
@@ -275,7 +334,9 @@ class FedavgAggregator(BaseAggregator):
             return {k: v.clone() for k, v in self.global_state.items()}
 
     def compute_steps(
-        self, local_models: Dict[Union[str, int], Union[Dict, OrderedDict]]
+        self,
+        local_models: Dict[Union[str, int], Union[Dict, OrderedDict]],
+        round_weights: Dict[Union[str, int], float],
     ):
         """
         Compute the changes to the global model after the aggregation.
@@ -296,8 +357,7 @@ class FedavgAggregator(BaseAggregator):
                     self.step[name] = torch.zeros_like(self.global_state[name])
 
                 for client_id, model in local_models.items():
-                    weight = self._client_weight(client_id, len(local_models))
-
+                    weight = float(round_weights.get(client_id, 0.0))
                     for name in model:
                         if name in self.step:
                             # Safe in-place gradient accumulation
@@ -322,8 +382,7 @@ class FedavgAggregator(BaseAggregator):
                 self.step[name] = torch.zeros_like(self.global_state[name])
 
             for client_id, model in local_models.items():
-                weight = self._client_weight(client_id, len(local_models))
-
+                weight = float(round_weights.get(client_id, 0.0))
                 for name in model:
                     if name in self.step:
                         self.step[name] += weight * (

@@ -1,0 +1,11 @@
+.codex
+*.log
+data
+log
+wandb
+uv.lock
+__pycache__/
+*.pyc
+
+# Local Hugging Face model cache artifacts generated under the repo tree.
+appfl_sim/models/models--*/

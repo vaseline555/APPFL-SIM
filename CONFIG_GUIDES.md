@@ -79,7 +79,7 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
     `FedavgAggregator`, `FedavgScheduler`, and `FedavgTrainer`.
   - New algorithms should provide all three classes with the same PascalCase prefix
     (even when inheriting base implementations).
-- `mix_coefs` (default: `sample_ratio`): aggregation coefficients (`uniform`, `sample_ratio`, `adaptive`).
+- `mix_coefs` (default: `sample_ratio`): aggregation coefficients (`uniform`, `sample_ratio`).
 - `optimize_memory` (default: `true`): enable memory-saving cleanup paths in trainer/scheduler/aggregator.
 - `aggregator` (default: `""`): explicit aggregator class name (optional).
 - `scheduler` (default: `""`): explicit scheduler class name (optional).
@@ -89,7 +89,6 @@ Defaults come from `appfl_sim/config/examples/simulation.yaml` and code-side fal
 - `trainer_kwargs` (default: `{}`): configs forwarded to trainer class construction.
   - `fedprox`: `mu` (default: `0.001`) sets the proximal regularization strength.
   - `fedadam` (`aggregator_kwargs`): `server_learning_rate` (default: `1.0`), `beta1` (default: `0.9`), `beta2` (default: `0.99`), `tau` (default: `0.001`).
-  - `fednova`: no extra scalar hyperparameter is required in the plain algorithm; the server-side normalization uses the realized local optimizer-step count from each client update.
   - `scaffold`: no extra scalar hyperparameter is required in the plain algorithm; scheduler/trainer state tracks control variates automatically.
 
 ## Loss (`loss`)

@@ -30,7 +30,7 @@ model:
 train:
   num_rounds: 1000
   num_clients: 500
-  num_sampled_clients: 5
+  num_sampled_clients: 10
   update_base: epoch
   local_epochs: 1
   batch_size: 32
@@ -38,7 +38,7 @@ train:
   train_pin_memory: false
   eval_pin_memory: false
   shuffle: true
-  eval_batch_size: 32
+  eval_batch_size: 128
 algorithm:
   name: fedprox
   mix_coefs: sample_ratio

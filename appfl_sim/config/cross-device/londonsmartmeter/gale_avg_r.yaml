@@ -45,7 +45,7 @@ train:
   train_pin_memory: false
   eval_pin_memory: false
   shuffle: true
-  eval_batch_size: 32
+  eval_batch_size: 128
 algorithm:
   name: gale_avg_r
   mix_coefs: sample_ratio
@@ -75,6 +75,7 @@ optimizer:
   clip_grad_norm: 1.0
   configs:
     weight_decay: 0.0
+    momentum: 0.0
 eval:
   every: 200
   metrics:

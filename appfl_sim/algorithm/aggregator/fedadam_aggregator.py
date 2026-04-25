@@ -34,40 +34,37 @@ class FedadamAggregator(FedavgAggregator):
         local_models: Dict[Union[str, int], Union[Dict, OrderedDict]],
         **kwargs,
     ) -> Dict:
-        del kwargs
         local_models = self._normalize_local_models(local_models)
         if not local_models:
             return self.get_parameters()
 
         self._initialize_global_state(local_models)
-        total_clients = len(local_models)
+        sample_sizes = kwargs.get("sample_sizes", {})
+        round_weights = self._round_client_weights(
+            local_models,
+            sample_sizes=sample_sizes,
+        )
 
         with torch.no_grad():
             for name, global_tensor in self.global_state.items():
-                if (
-                    self.named_parameters is None
-                    or name not in self.named_parameters
-                    or global_tensor.dtype in {torch.int32, torch.int64}
-                ):
-                    if global_tensor.dtype in {torch.int32, torch.int64}:
-                        averaged = torch.zeros_like(global_tensor)
-                        for _, model in local_models.items():
-                            averaged.add_(model[name])
-                        self.global_state[name] = torch.div(
-                            averaged, len(local_models)
-                        ).type(global_tensor.dtype)
-                    else:
-                        averaged = torch.zeros_like(global_tensor)
-                        for client_id, model in local_models.items():
-                            weight = self._client_weight(client_id, total_clients)
-                            averaged.add_(model[name], alpha=float(weight))
-                        self.global_state[name] = averaged
+                is_parameter = (
+                    self.named_parameters is None or name in self.named_parameters
+                )
+                if not is_parameter or not global_tensor.is_floating_point():
+                    self.global_state[name] = self._weighted_tensor_average(
+                        local_models=local_models,
+                        round_weights=round_weights,
+                        name=name,
+                        reference_tensor=global_tensor,
+                    )
                     continue
 
                 pseudo_grad = torch.zeros_like(global_tensor)
                 for client_id, model in local_models.items():
-                    weight = self._client_weight(client_id, total_clients)
-                    pseudo_grad.add_(global_tensor - model[name], alpha=float(weight))
+                    pseudo_grad.add_(
+                        global_tensor - model[name],
+                        alpha=float(round_weights.get(client_id, 0.0)),
+                    )
 
                 if name not in self._first_moment:
                     self._first_moment[name] = torch.zeros_like(global_tensor)

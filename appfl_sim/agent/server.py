@@ -106,11 +106,9 @@ class ServerAgent:
                 for cid in local_states
             }
 
-        for cid, size in sample_sizes.items():
-            self.aggregator.set_client_sample_size(cid, int(size))
-
         aggregated = self.aggregator.aggregate(
             local_states,
+            sample_sizes=sample_sizes,
             client_train_stats=client_train_stats or {},
         )
         if isinstance(aggregated, tuple):

@@ -31,7 +31,7 @@ model:
 train:
   num_rounds: 100
   num_clients: 20
-  num_sampled_clients: 20
+  num_sampled_clients: 10
   update_base: epoch
   local_epochs: 1
   batch_size: 32
@@ -39,7 +39,7 @@ train:
   train_pin_memory: true
   eval_pin_memory: false
   shuffle: true
-  eval_batch_size: 32
+  eval_batch_size: 128
 algorithm:
   name: gale_avg_c
   mix_coefs: sample_ratio
@@ -69,6 +69,7 @@ optimizer:
   clip_grad_norm: 1.0
   configs:
     weight_decay: 0.01
+    momentum: 0.0
 eval:
   every: 20
   metrics:

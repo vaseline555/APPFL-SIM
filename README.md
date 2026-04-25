@@ -22,7 +22,6 @@ Examples:
 
 - `fedavg` -> `FedavgAggregator`, `FedavgScheduler`, `FedavgTrainer`
 - `fedprox` -> `FedproxAggregator`, `FedproxScheduler`, `FedproxTrainer`
-- `fednova` -> `FednovaAggregator`, `FednovaScheduler`, `FednovaTrainer`
 - `scaffold` -> `ScaffoldAggregator`, `FedavgScheduler`, `ScaffoldTrainer` (via explicit scheduler override in configs; `ScaffoldScheduler` remains a compatibility alias)
 - `fedadam` -> `FedadamAggregator`, `FedadamScheduler`, `FedadamTrainer`
 - `dsucb` -> `DsucbAggregator`, `DsucbScheduler`, `DsucbTrainer`

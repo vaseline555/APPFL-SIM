@@ -26,7 +26,7 @@ class FedavgScheduler(BaseScheduler):
         self._access_lock = threading.Lock()
 
         self.optimize_memory = bool(scheduler_configs.get("optimize_memory", True))
-        self._prev_pre_val_error = None
+        self._prev_global_gen_error = None
         self._cumulative_gen_reward = 0.0
         self.reward_scale = self._resolve_reward_scale(default=1.0)
         self._fixed_tau_t = self._resolve_fixed_tau_t()
@@ -359,6 +359,63 @@ class FedavgScheduler(BaseScheduler):
         if weights:
             self._latest_client_context_weights = weights
 
+    @staticmethod
+    def _weighted_client_stat(
+        client_train_stats: Optional[Dict[Union[str, int], Dict[str, Any]]],
+        sample_sizes: Optional[Dict[Union[str, int], int]],
+        stat_key: str,
+    ) -> Optional[float]:
+        if not isinstance(client_train_stats, dict):
+            return None
+
+        total = 0.0
+        accum = 0.0
+        for cid, client_stats in client_train_stats.items():
+            if not isinstance(client_stats, dict):
+                continue
+            value = client_stats.get(stat_key, None)
+            if not isinstance(value, (int, float)):
+                continue
+
+            weight = 1.0
+            if isinstance(sample_sizes, dict):
+                raw_weight = sample_sizes.get(cid, None)
+                if raw_weight is None:
+                    try:
+                        client_id = int(cid)
+                    except Exception:
+                        client_id = None
+                    if client_id is not None:
+                        raw_weight = sample_sizes.get(client_id, None)
+                        if raw_weight is None:
+                            raw_weight = sample_sizes.get(str(client_id), None)
+                if isinstance(raw_weight, (int, float)) and float(raw_weight) > 0.0:
+                    weight = float(raw_weight)
+
+            accum += float(weight) * float(value)
+            total += float(weight)
+
+        if total <= 0.0:
+            return None
+        return float(accum / total)
+
+    def _resolve_global_gen_error(
+        self,
+        *,
+        round_metrics: Optional[Dict[str, Any]] = None,
+        client_train_stats: Optional[Dict[Union[str, int], Dict[str, Any]]] = None,
+        sample_sizes: Optional[Dict[Union[str, int], int]] = None,
+    ) -> Optional[float]:
+        if isinstance(round_metrics, dict):
+            current = round_metrics.get("global_gen_error", None)
+            if isinstance(current, (int, float)):
+                return float(current)
+        return self._weighted_client_stat(
+            client_train_stats=client_train_stats,
+            sample_sizes=sample_sizes,
+            stat_key="local_gen_error",
+        )
+
     def get_pull_kwargs(
         self,
         *,
@@ -390,18 +447,22 @@ class FedavgScheduler(BaseScheduler):
         if not bool(self.scheduler_configs.get("track_gen_rewards", False)):
             return {"logging": {}}
 
-        current = round_metrics.get("pre_val_loss", None)
+        current = self._resolve_global_gen_error(
+            round_metrics=round_metrics,
+            client_train_stats=client_train_stats,
+            sample_sizes=sample_sizes,
+        )
         round_reward = None
         if isinstance(current, (int, float)):
             current_value = float(current)
-            if isinstance(self._prev_pre_val_error, (int, float)):
+            if isinstance(self._prev_global_gen_error, (int, float)):
                 round_reward = self._scale_reward(
-                    float(self._prev_pre_val_error - current_value)
+                    float(self._prev_global_gen_error - current_value)
                 )
                 self._cumulative_gen_reward = float(self._cumulative_gen_reward) + float(
                     round_reward
                 )
-            self._prev_pre_val_error = float(current_value)
+            self._prev_global_gen_error = float(current_value)
 
         return {
             "logging": {

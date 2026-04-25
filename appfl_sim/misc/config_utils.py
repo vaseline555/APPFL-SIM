@@ -254,16 +254,37 @@ def build_optimizer_from_train_cfg(train_cfg: DictConfig | dict, params: Iterabl
             _cfg_get(train_cfg, "optimizer.configs.weight_decay", 0.0)
         )
 
+    def _filter_supported_kwargs(target, raw_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            signature = inspect.signature(target)
+        except (TypeError, ValueError):
+            return dict(raw_kwargs)
+
+        params = signature.parameters
+        if any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in params.values()
+        ):
+            return dict(raw_kwargs)
+
+        allowed = {
+            key
+            for key in params.keys()
+            if key not in {"self", "params"}
+        }
+        return {key: value for key, value in raw_kwargs.items() if key in allowed}
+
     if backend == "torch":
         if not hasattr(torch.optim, name):
             raise ValueError(f"Optimizer {name} not found in torch.optim")
-        return getattr(torch.optim, name)(params, **kwargs)
+        optimizer_cls = getattr(torch.optim, name)
+        return optimizer_cls(params, **_filter_supported_kwargs(optimizer_cls, kwargs))
 
     target = _load_named_symbol(path, name)
     if inspect.isclass(target):
-        return target(params, **kwargs)
+        return target(params, **_filter_supported_kwargs(target, kwargs))
     if callable(target):
-        return target(params, **kwargs)
+        return target(params, **_filter_supported_kwargs(target, kwargs))
     raise TypeError("Custom optimizer target must be a class or callable")
 
 
